@@ -25,7 +25,7 @@ brews:
   - repository:
       owner: kajogo777
       name: bento
-      directory: Formula
+    directory: Formula
     homepage: https://github.com/kajogo777/bento
     description: "Portable agent workspaces. Pack, ship, resume."
 
