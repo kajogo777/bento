@@ -57,6 +57,9 @@ go install github.com/kajogo777/bento@latest
 # https://github.com/kajogo777/bento/releases
 ```
 
+> **macOS note:** If you see "bento Not Opened" from Gatekeeper, run:
+> `xattr -d com.apple.quarantine "$(which bento)"`
+
 ## Quick Start
 
 ```bash
