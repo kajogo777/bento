@@ -8,24 +8,25 @@ func (f Fallback) Name() string { return "default" }
 func (f Fallback) Detect(_ string) bool { return true }
 
 func (f Fallback) Layers() []LayerDef {
+	// Order matters: agent and deps before project (first-match-wins in scanner).
 	return []LayerDef{
 		{
 			Name:      "agent",
 			Patterns:  []string{},
-			MediaType: "application/vnd.bento.layer.agent.v1",
-			Frequency: ChangesOften,
-		},
-		{
-			Name:      "project",
-			Patterns:  commonSourcePatterns(),
-			MediaType: "application/vnd.bento.layer.project.v1",
+			MediaType: "application/vnd.bento.layer.agent.v1.tar+gzip",
 			Frequency: ChangesOften,
 		},
 		{
 			Name:      "deps",
 			Patterns:  []string{"node_modules/**", ".venv/**", "vendor/**", "__pycache__/**"},
-			MediaType: "application/vnd.bento.layer.deps.v1",
+			MediaType: "application/vnd.bento.layer.deps.v1.tar+gzip",
 			Frequency: ChangesRarely,
+		},
+		{
+			Name:      "project",
+			Patterns:  commonSourcePatterns(),
+			MediaType: "application/vnd.bento.layer.project.v1.tar+gzip",
+			Frequency: ChangesOften,
 		},
 	}
 }

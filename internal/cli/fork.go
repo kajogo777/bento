@@ -46,11 +46,29 @@ func newForkCmd() *cobra.Command {
 				return fmt.Errorf("checkpoint '%s' not found. Run `bento list` to see available checkpoints", tag)
 			}
 
+			// Build set of files in the checkpoint for cleanup
+			keepFiles := make(map[string]bool)
+			for _, ld := range layers {
+				files, listErr := workspace.ListLayerFiles(ld.Data)
+				if listErr == nil {
+					for _, f := range files {
+						keepFiles[f] = true
+					}
+				}
+			}
+
 			// Restore to workspace
 			fmt.Printf("Forking from %s...\n", tag)
 			for _, ld := range layers {
 				if err := workspace.UnpackLayer(ld.Data, dir); err != nil {
 					return fmt.Errorf("unpacking layer: %w", err)
+				}
+			}
+
+			// Remove stale files not in the fork point
+			if len(keepFiles) > 0 {
+				if err := workspace.CleanStaleFiles(dir, keepFiles); err != nil {
+					fmt.Printf("Warning: cleaning stale files: %v\n", err)
 				}
 			}
 

@@ -23,7 +23,22 @@ func (c ClaudeCode) Detect(workDir string) bool {
 }
 
 func (c ClaudeCode) Layers() []LayerDef {
+	// Order matters: scanner assigns files to the FIRST matching layer.
+	// Agent and deps patterns must come before the broad project globs,
+	// otherwise **/*.json etc. would capture .claude/ and node_modules/ files.
 	return []LayerDef{
+		{
+			Name:      "agent",
+			Patterns:  []string{"CLAUDE.md", ".claude/**"},
+			MediaType: "application/vnd.bento.layer.agent.v1.tar+gzip",
+			Frequency: ChangesOften,
+		},
+		{
+			Name:      "deps",
+			Patterns:  []string{"node_modules/**", ".venv/**", "vendor/**", ".tool-versions"},
+			MediaType: "application/vnd.bento.layer.deps.v1.tar+gzip",
+			Frequency: ChangesRarely,
+		},
 		{
 			Name: "project",
 			Patterns: []string{
@@ -44,18 +59,6 @@ func (c ClaudeCode) Layers() []LayerDef {
 			},
 			MediaType: "application/vnd.bento.layer.project.v1.tar+gzip",
 			Frequency: ChangesOften,
-		},
-		{
-			Name:      "agent",
-			Patterns:  []string{"CLAUDE.md", ".claude/**"},
-			MediaType: "application/vnd.bento.layer.agent.v1.tar+gzip",
-			Frequency: ChangesOften,
-		},
-		{
-			Name:      "deps",
-			Patterns:  []string{"node_modules/**", ".venv/**", "vendor/**", ".tool-versions"},
-			MediaType: "application/vnd.bento.layer.deps.v1.tar+gzip",
-			Frequency: ChangesRarely,
 		},
 	}
 }

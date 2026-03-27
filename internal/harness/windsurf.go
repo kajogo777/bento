@@ -18,24 +18,25 @@ func (w Windsurf) Detect(workDir string) bool {
 }
 
 func (w Windsurf) Layers() []LayerDef {
+	// Order matters: agent and deps before project (first-match-wins in scanner).
 	return []LayerDef{
 		{
 			Name:      "agent",
 			Patterns:  []string{".windsurf/rules/**", ".windsurf/**"},
-			MediaType: "application/vnd.bento.layer.agent.v1",
-			Frequency: ChangesOften,
-		},
-		{
-			Name:      "project",
-			Patterns:  commonSourcePatterns(),
-			MediaType: "application/vnd.bento.layer.project.v1",
+			MediaType: "application/vnd.bento.layer.agent.v1.tar+gzip",
 			Frequency: ChangesOften,
 		},
 		{
 			Name:      "deps",
 			Patterns:  []string{"node_modules/**", ".venv/**", "vendor/**"},
-			MediaType: "application/vnd.bento.layer.deps.v1",
+			MediaType: "application/vnd.bento.layer.deps.v1.tar+gzip",
 			Frequency: ChangesRarely,
+		},
+		{
+			Name:      "project",
+			Patterns:  commonSourcePatterns(),
+			MediaType: "application/vnd.bento.layer.project.v1.tar+gzip",
+			Frequency: ChangesOften,
 		},
 	}
 }

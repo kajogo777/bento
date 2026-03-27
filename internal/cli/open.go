@@ -87,11 +87,29 @@ func newOpenCmd() *cobra.Command {
 				layersToRestore = filterLayers(layers, manifestBytes, skipped, true)
 			}
 
+			// Build set of files in the checkpoint for cleanup
+			keepFiles := make(map[string]bool)
+			for _, ld := range layersToRestore {
+				files, err := workspace.ListLayerFiles(ld.Data)
+				if err == nil {
+					for _, f := range files {
+						keepFiles[f] = true
+					}
+				}
+			}
+
 			// Unpack layers
 			fmt.Printf("Restoring checkpoint %s (sequence %d)...\n", tag, info.Sequence)
 			for _, ld := range layersToRestore {
 				if err := workspace.UnpackLayer(ld.Data, targetDir); err != nil {
 					return fmt.Errorf("unpacking layer: %w", err)
+				}
+			}
+
+			// Remove files not in the checkpoint (stale files from later saves)
+			if len(keepFiles) > 0 {
+				if err := workspace.CleanStaleFiles(targetDir, keepFiles); err != nil {
+					fmt.Printf("Warning: cleaning stale files: %v\n", err)
 				}
 			}
 
