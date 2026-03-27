@@ -17,7 +17,6 @@ type LayerInfo struct {
 	MediaType   string
 	Data        []byte
 	FileCount   int
-	Frequency   string
 	Annotations map[string]string // extra annotations merged into the layer descriptor
 }
 
@@ -104,9 +103,6 @@ func BuildManifest(cfg *BentoConfigObj, layers []LayerInfo) (manifestBytes []byt
 		}
 		if l.FileCount > 0 {
 			annotations[AnnotationLayerFileCount] = strconv.Itoa(l.FileCount)
-		}
-		if l.Frequency != "" {
-			annotations[AnnotationLayerChangeFreq] = l.Frequency
 		}
 		for k, v := range l.Annotations {
 			annotations[k] = v

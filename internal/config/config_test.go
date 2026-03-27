@@ -11,8 +11,7 @@ func TestLoad(t *testing.T) {
 	dir := t.TempDir()
 	yaml := `store: /tmp/bento-test-store
 remote: s3://my-bucket
-sync: auto
-harness: cursor
+agent: cursor
 task: my-task
 env:
   FOO: bar
@@ -38,11 +37,8 @@ retention:
 	if cfg.Remote != "s3://my-bucket" {
 		t.Errorf("Remote = %q, want %q", cfg.Remote, "s3://my-bucket")
 	}
-	if cfg.Sync != "auto" {
-		t.Errorf("Sync = %q, want %q", cfg.Sync, "auto")
-	}
-	if cfg.Harness != "cursor" {
-		t.Errorf("Harness = %q, want %q", cfg.Harness, "cursor")
+	if cfg.Agent != "cursor" {
+		t.Errorf("Agent = %q, want %q", cfg.Agent, "cursor")
 	}
 	if cfg.Task != "my-task" {
 		t.Errorf("Task = %q, want %q", cfg.Task, "my-task")
@@ -66,8 +62,8 @@ retention:
 
 func TestLoadDefaults(t *testing.T) {
 	dir := t.TempDir()
-	// Minimal yaml with no store or sync specified.
-	yaml := "harness: cursor\n"
+	// Minimal yaml with no store specified.
+	yaml := "agent: cursor\n"
 	if err := os.WriteFile(filepath.Join(dir, "bento.yaml"), []byte(yaml), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -85,11 +81,6 @@ func TestLoadDefaults(t *testing.T) {
 		t.Errorf("Store = %q, want default %q", cfg.Store, DefaultStorePath())
 	}
 
-	// Sync should default to "manual".
-	if cfg.Sync != "manual" {
-		t.Errorf("Sync = %q, want %q", cfg.Sync, "manual")
-	}
-
 	// Hooks timeout should be 0 (unset); the runner applies the 300s default.
 	if cfg.Hooks.Timeout != 0 {
 		t.Errorf("Hooks.Timeout = %d, want 0", cfg.Hooks.Timeout)
@@ -100,12 +91,11 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 
 	original := &BentoConfig{
-		Store:   "/tmp/roundtrip-store",
-		Remote:  "s3://roundtrip",
-		Sync:    "auto",
-		Harness: "cursor",
-		Task:    "roundtrip-task",
-		Env:     map[string]string{"KEY": "value"},
+		Store:  "/tmp/roundtrip-store",
+		Remote: "s3://roundtrip",
+		Agent:  "cursor",
+		Task:   "roundtrip-task",
+		Env:    map[string]string{"KEY": "value"},
 		Hooks: HooksConfig{
 			PreSave: "echo hello",
 			Timeout: 120,
@@ -131,11 +121,8 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	if loaded.Remote != original.Remote {
 		t.Errorf("Remote = %q, want %q", loaded.Remote, original.Remote)
 	}
-	if loaded.Sync != original.Sync {
-		t.Errorf("Sync = %q, want %q", loaded.Sync, original.Sync)
-	}
-	if loaded.Harness != original.Harness {
-		t.Errorf("Harness = %q, want %q", loaded.Harness, original.Harness)
+	if loaded.Agent != original.Agent {
+		t.Errorf("Agent = %q, want %q", loaded.Agent, original.Agent)
 	}
 	if loaded.Task != original.Task {
 		t.Errorf("Task = %q, want %q", loaded.Task, original.Task)

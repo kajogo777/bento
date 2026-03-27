@@ -22,14 +22,17 @@ func (o OpenCode) Detect(workDir string) bool {
 	return false
 }
 
-func (o OpenCode) Layers() []LayerDef {
+func (o OpenCode) Layers(workDir string) []LayerDef {
+	agentPatterns := []string{"AGENTS.md", ".opencode/**", "opencode.json"}
+
+	// Add external session/project/snapshot dirs scoped by git root commit hash
+	for _, dir := range openCodeExternalDirs(workDir) {
+		agentPatterns = append(agentPatterns, dir+"/")
+	}
+
 	return []LayerDef{
 		DepsLayer(CommonDepsPatterns),
-		AgentLayer([]string{
-			"AGENTS.md",
-			".opencode/**",
-			"opencode.json",
-		}),
+		AgentLayer(agentPatterns),
 		ProjectLayer(CommonSourcePatterns),
 	}
 }
@@ -49,22 +52,7 @@ func (o OpenCode) Ignore() []string {
 func (o OpenCode) SecretPatterns() []string  { return CommonSecretPatterns }
 func (o OpenCode) DefaultHooks() map[string]string { return nil }
 
-// openCodeProjectHash returns the git root commit hash used by OpenCode
-// to scope sessions per-project: git rev-list --max-parents=0 HEAD
-func openCodeProjectHash(workDir string) string {
-	out, err := execGit(workDir, "rev-list", "--max-parents=0", "HEAD")
-	if err != nil {
-		return ""
-	}
-	// If multiple root commits, take the first (sorted alphabetically)
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) == 0 {
-		return ""
-	}
-	return lines[0]
-}
-
-func (o OpenCode) ExternalPaths(workDir string) []ExternalPathDef {
+func openCodeExternalDirs(workDir string) []string {
 	dataDir := os.Getenv("XDG_DATA_HOME")
 	if dataDir == "" {
 		dataDir = ExpandHome("~/.local/share")
@@ -79,34 +67,27 @@ func (o OpenCode) ExternalPaths(workDir string) []ExternalPathDef {
 		return nil
 	}
 
-	var defs []ExternalPathDef
-
-	// Project-scoped sessions
-	sessionDir := filepath.Join(base, "storage", "session", hash)
-	if info, err := os.Stat(sessionDir); err == nil && info.IsDir() {
-		defs = append(defs, ExternalPathDef{
-			Source:        sessionDir,
-			ArchivePrefix: "__external__/opencode/sessions/",
-		})
+	var dirs []string
+	for _, sub := range []string{
+		filepath.Join("storage", "session", hash),
+		filepath.Join("snapshot", hash),
+	} {
+		dir := filepath.Join(base, sub)
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			dirs = append(dirs, dir)
+		}
 	}
+	return dirs
+}
 
-	// Project metadata
-	projectFile := filepath.Join(base, "storage", "project", hash+".json")
-	if _, err := os.Stat(projectFile); err == nil {
-		defs = append(defs, ExternalPathDef{
-			Source:        projectFile,
-			ArchivePrefix: "__external__/opencode/",
-		})
+func openCodeProjectHash(workDir string) string {
+	out, err := execGit(workDir, "rev-list", "--max-parents=0", "HEAD")
+	if err != nil {
+		return ""
 	}
-
-	// Project snapshots
-	snapshotDir := filepath.Join(base, "snapshot", hash)
-	if info, err := os.Stat(snapshotDir); err == nil && info.IsDir() {
-		defs = append(defs, ExternalPathDef{
-			Source:        snapshotDir,
-			ArchivePrefix: "__external__/opencode/snapshots/",
-		})
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) == 0 {
+		return ""
 	}
-
-	return defs
+	return lines[0]
 }

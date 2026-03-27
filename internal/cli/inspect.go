@@ -89,7 +89,7 @@ func newInspectCmd() *cobra.Command {
 						fmt.Printf("  Task:      %s\n", cfgObj.Task)
 					}
 					if cfgObj.Harness != "" {
-						fmt.Printf("  Harness:   %s\n", cfgObj.Harness)
+						fmt.Printf("  Agent:     %s\n", cfgObj.Harness)
 					}
 					if cfgObj.GitBranch != "" {
 						fmt.Printf("  Git:       %s (%s)\n", cfgObj.GitBranch, cfgObj.GitSha)

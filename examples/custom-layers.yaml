@@ -1,0 +1,26 @@
+# bento.yaml with custom layer definitions
+# When layers is set, it replaces auto-detection entirely
+agent: auto
+task: "migrate database schema"
+
+layers:
+  - name: deps
+    patterns:
+      - ".venv/**"
+      - "node_modules/**"
+      - "~/.cache/pip/"               # external: pip cache
+  - name: agent
+    patterns:
+      - ".my-agent/**"
+      - "AGENT.md"
+      - "~/.my-agent/sessions/"       # external: session history
+  - name: project
+    patterns:
+      - "**"                          # catch-all
+
+ignore:
+  - "*.log"
+  - "__pycache__/**"
+
+hooks:
+  post_restore: "pip install -e ."

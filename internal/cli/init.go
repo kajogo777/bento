@@ -12,8 +12,8 @@ import (
 
 func newInitCmd() *cobra.Command {
 	var (
-		flagTask    string
-		flagHarness string
+		flagTask  string
+		flagAgent string
 	)
 
 	cmd := &cobra.Command{
@@ -30,27 +30,24 @@ func newInitCmd() *cobra.Command {
 				return fmt.Errorf("bento.yaml already exists in %s", dir)
 			}
 
-			// Detect harness
+			// Detect agent
 			var h harness.Harness
-			harnessConfig := "auto"
-			if flagHarness != "" && flagHarness != "auto" {
-				h = harness.DetectSingle(dir, flagHarness)
-				harnessConfig = flagHarness
+			agentConfig := "auto"
+			if flagAgent != "" && flagAgent != "auto" {
+				h = harness.DetectSingle(dir, flagAgent)
+				agentConfig = flagAgent
 				fmt.Printf("Using agent: %s\n", h.Name())
 			} else {
 				h = harness.Detect(dir)
 				fmt.Printf("Detected agent: %s\n", h.Name())
 			}
 
-			// Build config
 			cfg := &config.BentoConfig{
-				Store:   config.DefaultStorePath(),
-				Harness: harnessConfig,
-				Task:    flagTask,
-				Ignore:  []string{"*.log", "tmp/", ".DS_Store"},
+				Store: config.DefaultStorePath(),
+				Agent: agentConfig,
+				Task:  flagTask,
 			}
 
-			// Write bento.yaml
 			if err := config.Save(dir, cfg); err != nil {
 				return fmt.Errorf("writing bento.yaml: %w", err)
 			}
@@ -76,7 +73,7 @@ func newInitCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&flagTask, "task", "", "task description")
-	cmd.Flags().StringVar(&flagHarness, "harness", "auto", "harness name (auto-detect if not set)")
+	cmd.Flags().StringVar(&flagAgent, "agent", "auto", "agent name (auto-detect if not set)")
 
 	return cmd
 }

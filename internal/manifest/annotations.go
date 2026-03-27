@@ -17,9 +17,8 @@ const (
 	AnnotationTask              = "dev.bento.task"
 	AnnotationHarness           = "dev.bento.harness"
 	AnnotationFormatVersion     = "dev.bento.format.version"
-	AnnotationLayerFileCount    = "dev.bento.layer.file-count"
-	AnnotationLayerChangeFreq   = "dev.bento.layer.change-frequency"
-	AnnotationExternalPaths     = "dev.bento.external.paths"
+	AnnotationLayerFileCount = "dev.bento.layer.file-count"
+	AnnotationExternalPaths  = "dev.bento.external.paths"
 )
 
 // Media types: we use standard OCI types for Docker/containerd compatibility.

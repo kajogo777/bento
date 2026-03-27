@@ -1,7 +1,6 @@
 package harness
 
 // allAgentHarnesses returns the list of agent-specific harnesses to probe.
-// Fallback is not included since it always matches.
 func allAgentHarnesses() []Harness {
 	return []Harness{
 		ClaudeCode{},
@@ -45,14 +44,13 @@ func DetectSingle(workDir, name string) Harness {
 	return Fallback{}
 }
 
-// ResolveHarness returns the appropriate harness based on config.
-// If harnessName is empty, "auto", or "default" (backward compat), auto-detect.
-// Otherwise, detect the specific named harness.
-func ResolveHarness(workDir, harnessName string) Harness {
-	switch harnessName {
-	case "", "auto", "default":
+// ResolveAgent returns the appropriate harness based on the agent config value.
+// If agentName is empty or "auto", auto-detect. Otherwise, force the named agent.
+func ResolveAgent(workDir, agentName string) Harness {
+	switch agentName {
+	case "", "auto":
 		return Detect(workDir)
 	default:
-		return DetectSingle(workDir, harnessName)
+		return DetectSingle(workDir, agentName)
 	}
 }

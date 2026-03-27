@@ -112,13 +112,11 @@ Three core layers, ordered bottom to top:
 
 The project layer is a catch-all. Any workspace file not matched by agent or deps patterns is captured here.
 
-Harnesses can define additional custom layers. Unchanged layers are deduplicated automatically.
+Unchanged layers are deduplicated automatically. Custom layers can be defined in `bento.yaml`.
 
-### Harnesses
+### Agent Detection
 
-A harness maps an agent framework's file layout to bento's layers.
-
-By default, `harness` is set to `auto`. In auto mode, bento scans the workspace on every `save` and `diff` to detect which agents are active. If you add a new agent mid-project, bento picks it up automatically.
+By default, `agent` is set to `auto`. Bento scans the workspace on every `save` and `diff` to detect which agents are active. If you add a new agent mid-project, bento picks it up automatically.
 
 ```bash
 bento init
@@ -131,7 +129,7 @@ bento save -m "multi-agent"
 
 When multiple agents are detected, their layers are merged. Each agent gets its own agent layer (`agent-claude-code`, `agent-codex`), while deps and project layers are shared.
 
-Use `--harness <name>` to force a single agent. This overrides auto-detection and uses that harness's layer definitions regardless of which markers are present.
+Use `--agent <name>` to force a single agent. This overrides auto-detection regardless of which markers are present.
 
 #### Support Matrix
 
@@ -144,24 +142,16 @@ Use `--harness <name>` to force a single agent. This overrides auto-detection an
 | Version detection | `claude --version` | - | `opencode --version` | - | - |
 | Post-restore hook | - | `.codex/setup.sh` | - | - | - |
 
-Define a custom harness in `bento.yaml` for unsupported agents:
+Define custom layers in `bento.yaml` for unsupported agents. Patterns starting with `~/` or `/` capture files from outside the workspace:
 
 ```yaml
-harness_config:
-  name: my-agent
-  detect: ".my-agent/config.json"
-  layers:
-    - name: deps
-      patterns: [".venv/**"]
-      frequency: rarely
-    - name: agent
-      patterns: [".my-agent/**"]
-    - name: project
-      patterns: ["src/**", "*.py"]
-  ignore:
-    - "*.log"
-  hooks:
-    post_restore: "make setup"
+layers:
+  - name: deps
+    patterns: [".venv/**", "~/.cache/pip/"]
+  - name: agent
+    patterns: [".my-agent/**", "~/.my-agent/sessions/"]
+  - name: project
+    patterns: ["**"]
 ```
 
 ### Hooks
@@ -204,7 +194,7 @@ On `bento open`, env vars and resolved secrets are written to `.env` (0600 permi
 ## CLI Reference
 
 ```
-bento init [--task <desc>] [--harness <n>]    Initialize workspace tracking
+bento init [--task <desc>] [--agent <name>]   Initialize workspace tracking
 bento save [-m <message>] [--tag <tag>]       Save a checkpoint
 bento open <ref> [<target-dir>]               Restore a checkpoint
 bento list                                    List checkpoints
@@ -223,19 +213,28 @@ bento env set <key> <value>                   Set an env var
 `bento.yaml` at your workspace root:
 
 ```yaml
+agent: auto
+task: "refactor auth module"
+
 store: ~/.bento/store
 remote: ghcr.io/myorg/workspaces
-harness: auto
-task: "refactor auth module"
+
+# Optional: override auto-detected layers
+# layers:
+#   - name: deps
+#     patterns: ["node_modules/**", ".venv/**"]
+#   - name: agent
+#     patterns: [".claude/**", "CLAUDE.md", "~/.claude/projects/*/"]
+#   - name: project
+#     patterns: ["**"]
 
 env:
   NODE_ENV: development
 
 secrets:
   DATABASE_URL:
-    source: vault
-    path: secret/data/myapp/db
-    key: url
+    source: env
+    var: DATABASE_URL
 
 env_files:
   ".env":
@@ -324,7 +323,7 @@ Yes. Checkpoints are portable across macOS, Linux, and Windows.
 - [x] Core CLI (init, save, open, list, diff, fork, tag, inspect, gc)
 - [x] Local OCI store
 - [x] Secret scanning and hydration
-- [x] Harnesses:
+- [x] Agent support:
   - [x] Claude Code (with session capture)
   - [x] Codex (with session capture)
   - [x] OpenCode (with session capture)

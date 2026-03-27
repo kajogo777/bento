@@ -25,7 +25,6 @@ func TestBuildManifest(t *testing.T) {
 			MediaType: MediaTypeProject,
 			Data:      []byte("project-data"),
 			FileCount: 42,
-			Frequency: "high",
 		},
 		{
 			Name:      "deps",
@@ -157,7 +156,6 @@ func TestBuildManifest_LayerAnnotations(t *testing.T) {
 			MediaType: MediaTypeProject,
 			Data:      []byte("data"),
 			FileCount: 10,
-			Frequency: "high",
 		},
 	}
 
@@ -188,8 +186,5 @@ func TestBuildManifest_LayerAnnotations(t *testing.T) {
 	}
 	if layer.Annotations[AnnotationLayerFileCount] != "10" {
 		t.Errorf("layer file count: got %q, want %q", layer.Annotations[AnnotationLayerFileCount], "10")
-	}
-	if layer.Annotations[AnnotationLayerChangeFreq] != "high" {
-		t.Errorf("layer change freq: got %q, want %q", layer.Annotations[AnnotationLayerChangeFreq], "high")
 	}
 }

@@ -13,17 +13,23 @@ type Codex struct{}
 func (c Codex) Name() string { return "codex" }
 
 func (c Codex) Detect(workDir string) bool {
-	// Only detect on .codex/ dir. AGENTS.md alone is ambiguous (OpenCode also uses it).
 	if info, err := os.Stat(filepath.Join(workDir, ".codex")); err == nil && info.IsDir() {
 		return true
 	}
 	return false
 }
 
-func (c Codex) Layers() []LayerDef {
+func (c Codex) Layers(workDir string) []LayerDef {
+	agentPatterns := []string{"AGENTS.md", ".codex/**"}
+
+	// Add external session rollout directories matching this workspace
+	for _, dir := range codexSessionDirs(workDir) {
+		agentPatterns = append(agentPatterns, dir+"/")
+	}
+
 	return []LayerDef{
 		DepsLayer(CommonDepsPatterns),
-		AgentLayer([]string{"AGENTS.md", ".codex/**"}),
+		AgentLayer(agentPatterns),
 		ProjectLayer(CommonSourcePatterns),
 	}
 }
@@ -35,6 +41,7 @@ func (c Codex) SessionConfig(workDir string) (*SessionConfig, error) {
 func (c Codex) Ignore() []string {
 	return append(CommonIgnorePatterns, CommonCredentialFiles...)
 }
+
 func (c Codex) SecretPatterns() []string { return CommonSecretPatterns }
 func (c Codex) DefaultHooks() map[string]string {
 	return map[string]string{
@@ -42,10 +49,16 @@ func (c Codex) DefaultHooks() map[string]string {
 	}
 }
 
-// codexSessionRollouts finds rollout JSONL files whose cwd matches workDir.
-// Codex stores sessions flat in ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
-// with a session_meta first line containing "cwd".
-func codexSessionRollouts(codexHome, workDir string) []string {
+// codexSessionDirs finds rollout directories containing sessions for this workspace.
+func codexSessionDirs(workDir string) []string {
+	codexHome := os.Getenv("CODEX_HOME")
+	if codexHome == "" {
+		codexHome = ExpandHome("~/.codex")
+	}
+	if info, err := os.Stat(codexHome); err != nil || !info.IsDir() {
+		return nil
+	}
+
 	absWork, err := filepath.Abs(workDir)
 	if err != nil {
 		return nil
@@ -59,20 +72,15 @@ func codexSessionRollouts(codexHome, workDir string) []string {
 		return nil
 	}
 
-	var matches []string
+	seen := make(map[string]bool)
 	_ = filepath.WalkDir(sessionsDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
 			return nil
 		}
-		if !strings.HasSuffix(path, ".jsonl") {
-			return nil
-		}
-		// Read first line to check cwd
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
-		// Find end of first line
 		idx := strings.IndexByte(string(data), '\n')
 		var firstLine string
 		if idx >= 0 {
@@ -89,46 +97,18 @@ func codexSessionRollouts(codexHome, workDir string) []string {
 				cwdResolved = r
 			}
 			if cwdResolved == absWork || strings.HasPrefix(cwdResolved, absWork+string(filepath.Separator)) {
-				matches = append(matches, path)
+				dir := filepath.Dir(path)
+				if !seen[dir] {
+					seen[dir] = true
+				}
 			}
 		}
 		return nil
 	})
-	return matches
-}
 
-func (c Codex) ExternalPaths(workDir string) []ExternalPathDef {
-	codexHome := os.Getenv("CODEX_HOME")
-	if codexHome == "" {
-		codexHome = ExpandHome("~/.codex")
+	var dirs []string
+	for dir := range seen {
+		dirs = append(dirs, dir)
 	}
-	if info, err := os.Stat(codexHome); err != nil || !info.IsDir() {
-		return nil
-	}
-
-	// Find project-specific rollout files
-	rollouts := codexSessionRollouts(codexHome, workDir)
-	if len(rollouts) == 0 {
-		return nil
-	}
-
-	// Capture the sessions directory (contains the matching rollouts)
-	// We capture the whole sessions dir and rely on the scanner to include
-	// only the matching date subdirectories.
-	// For simplicity, capture the parent dirs of matching rollouts.
-	seen := make(map[string]bool)
-	var defs []ExternalPathDef
-	for _, r := range rollouts {
-		dir := filepath.Dir(r)
-		if !seen[dir] {
-			seen[dir] = true
-			// Use relative path from codexHome for archive prefix
-			rel, _ := filepath.Rel(codexHome, dir)
-			defs = append(defs, ExternalPathDef{
-				Source:        dir,
-				ArchivePrefix: "__external__/codex/" + rel + "/",
-			})
-		}
-	}
-	return defs
+	return dirs
 }

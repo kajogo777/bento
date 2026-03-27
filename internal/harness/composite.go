@@ -7,8 +7,6 @@ import (
 )
 
 // CompositeHarness combines multiple detected agent harnesses into one.
-// Agent layers from all detected harnesses are merged, deps are deduplicated,
-// and a single project catch-all layer covers everything else.
 type CompositeHarness struct {
 	harnesses []Harness
 }
@@ -29,22 +27,20 @@ func (c *CompositeHarness) Detect(workDir string) bool {
 	return len(c.harnesses) > 0
 }
 
-func (c *CompositeHarness) Layers() []LayerDef {
-	// OCI convention: deps (bottom) -> agent(s) -> project (top).
+func (c *CompositeHarness) Layers(workDir string) []LayerDef {
 	seenDepsPatterns := make(map[string]bool)
 	var depsPatterns []string
 	var agentLayers []LayerDef
 	var projectLayer LayerDef
 
 	for _, h := range c.harnesses {
-		for _, ld := range h.Layers() {
+		for _, ld := range h.Layers(workDir) {
 			switch {
 			case ld.Name == "agent":
 				agentLayers = append(agentLayers, LayerDef{
 					Name:      "agent-" + h.Name(),
 					Patterns:  ld.Patterns,
 					MediaType: ld.MediaType,
-					Frequency: ld.Frequency,
 				})
 			case ld.Name == "deps":
 				for _, p := range ld.Patterns {
@@ -62,21 +58,14 @@ func (c *CompositeHarness) Layers() []LayerDef {
 	}
 
 	var layers []LayerDef
-
-	// Deps layer first (bottom - changes rarely)
 	if len(depsPatterns) > 0 {
 		layers = append(layers, LayerDef{
 			Name:      "deps",
 			Patterns:  depsPatterns,
 			MediaType: manifest.MediaTypeDeps,
-			Frequency: ChangesRarely,
 		})
 	}
-
-	// Agent layers in the middle
 	layers = append(layers, agentLayers...)
-
-	// Project catch-all layer last (top - changes most)
 	if projectLayer.Name != "" {
 		layers = append(layers, projectLayer)
 	} else {
@@ -87,7 +76,6 @@ func (c *CompositeHarness) Layers() []LayerDef {
 }
 
 func (c *CompositeHarness) SessionConfig(workDir string) (*SessionConfig, error) {
-	// Use the first harness's session config as base
 	if len(c.harnesses) > 0 {
 		cfg, err := c.harnesses[0].SessionConfig(workDir)
 		if err == nil {
@@ -136,18 +124,4 @@ func (c *CompositeHarness) DefaultHooks() map[string]string {
 		}
 	}
 	return merged
-}
-
-func (c *CompositeHarness) ExternalPaths(workDir string) []ExternalPathDef {
-	seen := make(map[string]bool)
-	var defs []ExternalPathDef
-	for _, h := range c.harnesses {
-		for _, d := range h.ExternalPaths(workDir) {
-			if !seen[d.Source] {
-				seen[d.Source] = true
-				defs = append(defs, d)
-			}
-		}
-	}
-	return defs
 }

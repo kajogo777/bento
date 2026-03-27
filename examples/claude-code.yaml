@@ -1,0 +1,28 @@
+# bento.yaml for a Claude Code project
+agent: auto
+task: "refactor auth module"
+
+store: ~/.bento/store
+remote: ghcr.io/myorg/workspaces
+
+env:
+  NODE_ENV: development
+
+secrets:
+  DATABASE_URL:
+    source: env
+    var: DATABASE_URL
+  API_KEY:
+    source: file
+    path: /run/secrets/api-key
+
+env_files:
+  ".env":
+    secrets: ["DATABASE_URL", "API_KEY"]
+
+hooks:
+  post_restore: "npm install"
+
+retention:
+  keep_last: 10
+  keep_tagged: true

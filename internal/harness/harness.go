@@ -10,20 +10,11 @@ import (
 	"github.com/kajogo777/bento/internal/secrets"
 )
 
-// ChangeFrequency indicates how often a layer changes.
-type ChangeFrequency string
-
-const (
-	ChangesOften  ChangeFrequency = "often"
-	ChangesRarely ChangeFrequency = "rarely"
-)
-
 // LayerDef defines a layer for file assignment.
 type LayerDef struct {
-	Name      string
-	Patterns  []string
+	Name     string
+	Patterns []string // workspace-relative globs; ~/... or /... = external paths
 	MediaType string
-	Frequency ChangeFrequency
 	CatchAll  bool // if true, unmatched files fall into this layer
 }
 
@@ -36,39 +27,15 @@ type SessionConfig struct {
 	GitBranch    string `json:"gitBranch,omitempty"`
 }
 
-// ExternalPathDef maps an external directory to an archive prefix.
-// Source is the absolute path on disk (supports ~). ArchivePrefix is the
-// path prefix used inside the tar archive (e.g. "__external__/claude-sessions/").
-type ExternalPathDef struct {
-	Source        string
-	ArchivePrefix string
-}
-
 // Harness maps an agent framework's file layout to bento's layer taxonomy.
 type Harness interface {
-	// Name returns the harness identifier.
 	Name() string
-
-	// Detect returns true if this harness is active in the workspace.
 	Detect(workDir string) bool
-
-	// Layers returns the layer definitions for this harness.
-	Layers() []LayerDef
-
-	// SessionConfig extracts session metadata from the workspace.
+	Layers(workDir string) []LayerDef
 	SessionConfig(workDir string) (*SessionConfig, error)
-
-	// Ignore returns additional exclude patterns.
 	Ignore() []string
-
-	// SecretPatterns returns regex patterns for secret detection.
 	SecretPatterns() []string
-
-	// DefaultHooks returns suggested hooks for this agent framework.
 	DefaultHooks() map[string]string
-
-	// ExternalPaths returns paths outside the workspace to include in the agent layer.
-	ExternalPaths(workDir string) []ExternalPathDef
 }
 
 // execGit runs a git command in the given directory and returns trimmed output.
@@ -83,7 +50,6 @@ func execGit(workDir string, args ...string) (string, error) {
 }
 
 // BaseSessionConfig returns a SessionConfig populated with git metadata.
-// Individual harnesses can extend this with agent-specific fields.
 func BaseSessionConfig(agentName, workDir string) *SessionConfig {
 	cfg := &SessionConfig{Agent: agentName, Status: "paused"}
 	if out, err := execGit(workDir, "rev-parse", "HEAD"); err == nil {
@@ -96,48 +62,40 @@ func BaseSessionConfig(agentName, workDir string) *SessionConfig {
 }
 
 // --- Common layer builders ---
-// These construct standard LayerDefs so harnesses don't repeat media types,
-// patterns, and frequency values.
 
-// AgentLayer returns a standard agent layer definition.
 func AgentLayer(patterns []string) LayerDef {
 	return LayerDef{
 		Name:      "agent",
 		Patterns:  patterns,
 		MediaType: manifest.MediaTypeAgent,
-		Frequency: ChangesOften,
 	}
 }
 
-// DepsLayer returns a standard deps layer definition.
 func DepsLayer(patterns []string) LayerDef {
 	return LayerDef{
 		Name:      "deps",
 		Patterns:  patterns,
 		MediaType: manifest.MediaTypeDeps,
-		Frequency: ChangesRarely,
 	}
 }
 
-// ProjectLayer returns a standard project catch-all layer definition.
 func ProjectLayer(patterns []string) LayerDef {
 	return LayerDef{
 		Name:      "project",
 		Patterns:  patterns,
 		MediaType: manifest.MediaTypeProject,
-		Frequency: ChangesOften,
 		CatchAll:  true,
 	}
 }
 
-// CommonDepsPatterns returns dependency directory patterns shared across harnesses.
+// CommonDepsPatterns are dependency directory patterns shared across harnesses.
 var CommonDepsPatterns = []string{
 	"node_modules/**",
 	".venv/**",
 	"vendor/**",
 }
 
-// CommonSourcePatterns returns source file glob patterns shared across harnesses.
+// CommonSourcePatterns are source file glob patterns shared across harnesses.
 var CommonSourcePatterns = []string{
 	"**/*.go", "**/*.py", "**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx",
 	"**/*.rs", "**/*.java", "**/*.c", "**/*.cpp", "**/*.h",
@@ -153,10 +111,10 @@ var CommonSourcePatterns = []string{
 	".gitignore", ".gitattributes",
 	".env.example", ".env.template",
 	".mcp.json",
-	"**", // catch-all: capture any remaining files not matched by other patterns
+	"**", // catch-all
 }
 
-// CommonIgnorePatterns returns file patterns that should be excluded from all layers.
+// CommonIgnorePatterns are file patterns excluded from all layers.
 var CommonIgnorePatterns = []string{
 	".env", ".env.local", ".env.*.local",
 	"*.pem", "*.key", "*.p12", "token.json", "credentials",
@@ -166,15 +124,13 @@ var CommonIgnorePatterns = []string{
 	"dist/**", "build/**",
 }
 
-// CommonCredentialFiles are filenames that should be excluded from all layers
-// to prevent accidental credential leakage (especially in external paths).
+// CommonCredentialFiles are filenames excluded to prevent credential leakage.
 var CommonCredentialFiles = []string{
 	"auth.json", "oauth_tokens", "credentials.json",
 	"*.sqlite", "*.db", "*.sqlite-shm", "*.sqlite-wal",
 }
 
-// CommonSecretPatterns returns regex patterns for detecting secrets in file content.
-// CommonSecretPatterns are the default secret detection patterns shared by all harnesses.
+// CommonSecretPatterns are the default secret detection patterns.
 var CommonSecretPatterns = secrets.DefaultPatterns
 
 // ExpandHome expands ~ prefix to the user's home directory.
@@ -185,4 +141,9 @@ func ExpandHome(path string) string {
 		}
 	}
 	return path
+}
+
+// IsExternalPattern returns true if the pattern refers to a path outside the workspace.
+func IsExternalPattern(pattern string) bool {
+	return strings.HasPrefix(pattern, "~/") || strings.HasPrefix(pattern, "/")
 }

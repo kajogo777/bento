@@ -112,7 +112,7 @@ func TestDetect_MultipleAgents_Composite(t *testing.T) {
 	if h.Name() != "claude-code+codex" {
 		t.Fatalf("expected composite claude-code+codex, got %s", h.Name())
 	}
-	layers := h.Layers()
+	layers := h.Layers(dir)
 	if len(layers) < 4 {
 		t.Fatalf("expected at least 4 layers (2 agent + deps + project), got %d", len(layers))
 	}
@@ -164,7 +164,7 @@ func TestHarness_LayersNonEmpty(t *testing.T) {
 	}
 
 	for _, h := range harnesses {
-		layers := h.Layers()
+		layers := h.Layers("")
 		if len(layers) == 0 {
 			t.Errorf("%s: Layers() returned empty slice", h.Name())
 		}

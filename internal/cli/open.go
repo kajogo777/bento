@@ -142,24 +142,21 @@ func newOpenCmd() *cobra.Command {
 			// Unpack layers
 			fmt.Printf("Restoring checkpoint %s (sequence %d)...\n", tag, info.Sequence)
 			for i, ld := range layersToRestore {
-				// Check if this is an external layer
+				// Check if this layer has external paths embedded
+				var externalPathMap map[string]string
 				if i < len(ociManifest.Layers) {
 					if pathMapJSON, ok := ociManifest.Layers[i].Annotations[manifest.AnnotationExternalPaths]; ok {
-						var pathMap map[string]string
-						if err := json.Unmarshal([]byte(pathMapJSON), &pathMap); err == nil {
-							// Expand ~ in target paths
-							expandedMap := make(map[string]string)
-							for prefix, target := range pathMap {
+						expandedMap := make(map[string]string)
+						if err := json.Unmarshal([]byte(pathMapJSON), &expandedMap); err == nil {
+							for prefix, target := range expandedMap {
 								expandedMap[prefix] = harness.ExpandHome(target)
 							}
-							if err := workspace.UnpackExternalLayer(ld.Data, expandedMap); err != nil {
-								fmt.Printf("Warning: restoring external data: %v\n", err)
-							}
-							continue
+							externalPathMap = expandedMap
 						}
 					}
 				}
-				if err := workspace.UnpackLayer(ld.Data, targetDir); err != nil {
+
+				if err := workspace.UnpackLayerWithExternal(ld.Data, targetDir, externalPathMap); err != nil {
 					return fmt.Errorf("unpacking layer: %w", err)
 				}
 			}

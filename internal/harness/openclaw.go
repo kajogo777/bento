@@ -12,7 +12,6 @@ type OpenClaw struct{}
 func (o OpenClaw) Name() string { return "openclaw" }
 
 func (o OpenClaw) Detect(workDir string) bool {
-	// SOUL.md is the most distinctive OpenClaw marker
 	if _, err := os.Stat(filepath.Join(workDir, "SOUL.md")); err == nil {
 		return true
 	}
@@ -22,16 +21,21 @@ func (o OpenClaw) Detect(workDir string) bool {
 	return false
 }
 
-func (o OpenClaw) Layers() []LayerDef {
+func (o OpenClaw) Layers(workDir string) []LayerDef {
+	agentPatterns := []string{
+		"SOUL.md", "AGENTS.md", "USER.md", "IDENTITY.md",
+		"TOOLS.md", "HEARTBEAT.md", "BOOTSTRAP.md", "MEMORY.md",
+		"memory/**", "skills/**", "canvas/**",
+	}
+
+	// Add external sessions if we can find the agent scoped to this workspace
+	if sessDir := openClawSessionDir(workDir); sessDir != "" {
+		agentPatterns = append(agentPatterns, sessDir+"/")
+	}
+
 	return []LayerDef{
 		DepsLayer(CommonDepsPatterns),
-		AgentLayer([]string{
-			"SOUL.md", "AGENTS.md", "USER.md", "IDENTITY.md",
-			"TOOLS.md", "HEARTBEAT.md", "BOOTSTRAP.md", "MEMORY.md",
-			"memory/**",
-			"skills/**",
-			"canvas/**",
-		}),
+		AgentLayer(agentPatterns),
 		ProjectLayer(CommonSourcePatterns),
 	}
 }
@@ -47,8 +51,27 @@ func (o OpenClaw) Ignore() []string {
 func (o OpenClaw) SecretPatterns() []string  { return CommonSecretPatterns }
 func (o OpenClaw) DefaultHooks() map[string]string { return nil }
 
-// openClawAgentForWorkspace tries to find the OpenClaw agent whose workspace
-// matches the given workDir by parsing ~/.openclaw/openclaw.json.
+func openClawSessionDir(workDir string) string {
+	openclawHome := os.Getenv("OPENCLAW_STATE_DIR")
+	if openclawHome == "" {
+		openclawHome = ExpandHome("~/.openclaw")
+	}
+	if info, err := os.Stat(openclawHome); err != nil || !info.IsDir() {
+		return ""
+	}
+
+	agentID := openClawAgentForWorkspace(openclawHome, workDir)
+	if agentID == "" {
+		return ""
+	}
+
+	sessionsDir := filepath.Join(openclawHome, "agents", agentID, "sessions")
+	if info, err := os.Stat(sessionsDir); err != nil || !info.IsDir() {
+		return ""
+	}
+	return sessionsDir
+}
+
 func openClawAgentForWorkspace(openclawHome, workDir string) string {
 	absWork, err := filepath.Abs(workDir)
 	if err != nil {
@@ -58,13 +81,11 @@ func openClawAgentForWorkspace(openclawHome, workDir string) string {
 		absWork = resolved
 	}
 
-	configFile := filepath.Join(openclawHome, "openclaw.json")
-	data, err := os.ReadFile(configFile)
+	data, err := os.ReadFile(filepath.Join(openclawHome, "openclaw.json"))
 	if err != nil {
 		return ""
 	}
 
-	// OpenClaw config has agents with workspace paths
 	var config struct {
 		Agents map[string]struct {
 			Workspace string `json:"workspace"`
@@ -88,32 +109,4 @@ func openClawAgentForWorkspace(openclawHome, workDir string) string {
 		}
 	}
 	return ""
-}
-
-func (o OpenClaw) ExternalPaths(workDir string) []ExternalPathDef {
-	openclawHome := os.Getenv("OPENCLAW_STATE_DIR")
-	if openclawHome == "" {
-		openclawHome = ExpandHome("~/.openclaw")
-	}
-	if info, err := os.Stat(openclawHome); err != nil || !info.IsDir() {
-		return nil
-	}
-
-	// Try to find the agent scoped to this workspace
-	agentID := openClawAgentForWorkspace(openclawHome, workDir)
-	if agentID == "" {
-		// Can't determine project scope; don't capture everything blindly.
-		// Users can use external_paths in bento.yaml as escape hatch.
-		return nil
-	}
-
-	sessionsDir := filepath.Join(openclawHome, "agents", agentID, "sessions")
-	if info, err := os.Stat(sessionsDir); err != nil || !info.IsDir() {
-		return nil
-	}
-
-	return []ExternalPathDef{{
-		Source:        sessionsDir,
-		ArchivePrefix: "__external__/openclaw/sessions/",
-	}}
 }

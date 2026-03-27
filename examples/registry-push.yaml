@@ -1,0 +1,14 @@
+# bento.yaml configured for remote registry sharing
+agent: auto
+task: "shared API project"
+
+store: ~/.bento/store
+remote: ghcr.io/myorg/workspaces
+
+hooks:
+  pre_push: "go test ./..."
+  post_restore: "go mod download"
+
+retention:
+  keep_last: 10
+  keep_tagged: true

@@ -8,7 +8,6 @@ import (
 	"github.com/kajogo777/bento/internal/harness"
 )
 
-// helper to create a file with content in a temp directory.
 func createFile(t *testing.T, dir, relPath, content string) {
 	t.Helper()
 	abs := filepath.Join(dir, filepath.FromSlash(relPath))
@@ -41,14 +40,14 @@ func TestScanAssignsFilesToLayers(t *testing.T) {
 		t.Fatalf("Scan returned error: %v", err)
 	}
 
-	if len(result["source"]) != 2 {
-		t.Errorf("source layer has %d files, want 2", len(result["source"]))
+	if len(result["source"].WorkspaceFiles) != 2 {
+		t.Errorf("source layer has %d files, want 2", len(result["source"].WorkspaceFiles))
 	}
-	if len(result["deps"]) != 2 {
-		t.Errorf("deps layer has %d files, want 2", len(result["deps"]))
+	if len(result["deps"].WorkspaceFiles) != 2 {
+		t.Errorf("deps layer has %d files, want 2", len(result["deps"].WorkspaceFiles))
 	}
-	if len(result["docs"]) != 1 {
-		t.Errorf("docs layer has %d files, want 1", len(result["docs"]))
+	if len(result["docs"].WorkspaceFiles) != 1 {
+		t.Errorf("docs layer has %d files, want 1", len(result["docs"].WorkspaceFiles))
 	}
 }
 
@@ -70,14 +69,11 @@ func TestScanIgnoredFilesExcluded(t *testing.T) {
 		t.Fatalf("Scan returned error: %v", err)
 	}
 
-	// debug.log should be ignored even though it matches src/**
-	if len(result["source"]) != 1 {
-		t.Errorf("source layer has %d files, want 1 (debug.log should be ignored)", len(result["source"]))
+	if len(result["source"].WorkspaceFiles) != 1 {
+		t.Errorf("source layer has %d files, want 1 (debug.log should be ignored)", len(result["source"].WorkspaceFiles))
 	}
-
-	// .DS_Store should be ignored
-	if len(result["meta"]) != 0 {
-		t.Errorf("meta layer has %d files, want 0 (.DS_Store should be ignored)", len(result["meta"]))
+	if len(result["meta"].WorkspaceFiles) != 0 {
+		t.Errorf("meta layer has %d files, want 0 (.DS_Store should be ignored)", len(result["meta"].WorkspaceFiles))
 	}
 }
 
@@ -97,16 +93,12 @@ func TestScanUnmatchedFilesExcluded(t *testing.T) {
 		t.Fatalf("Scan returned error: %v", err)
 	}
 
-	if _, ok := result["source"]; !ok {
-		t.Fatal("expected source layer in result")
-	}
-	if len(result["source"]) != 1 {
-		t.Errorf("source layer has %d files, want 1", len(result["source"]))
+	if len(result["source"].WorkspaceFiles) != 1 {
+		t.Errorf("source layer has %d files, want 1", len(result["source"].WorkspaceFiles))
 	}
 
-	// random.xyz matches no layer, should not appear anywhere.
-	for layer, files := range result {
-		for _, f := range files {
+	for layer, sr := range result {
+		for _, f := range sr.WorkspaceFiles {
 			if f == "random.xyz" {
 				t.Errorf("random.xyz should not appear in any layer, found in %q", layer)
 			}
@@ -130,10 +122,65 @@ func TestScanFirstLayerWins(t *testing.T) {
 		t.Fatalf("Scan returned error: %v", err)
 	}
 
-	if len(result["first"]) != 1 {
-		t.Errorf("first layer has %d files, want 1", len(result["first"]))
+	if len(result["first"].WorkspaceFiles) != 1 {
+		t.Errorf("first layer has %d files, want 1", len(result["first"].WorkspaceFiles))
 	}
-	if len(result["second"]) != 0 {
-		t.Errorf("second layer has %d files, want 0 (first layer should win)", len(result["second"]))
+	if len(result["second"].WorkspaceFiles) != 0 {
+		t.Errorf("second layer has %d files, want 0 (first layer should win)", len(result["second"].WorkspaceFiles))
+	}
+}
+
+func TestScanExternalPatterns(t *testing.T) {
+	dir := t.TempDir()
+	extDir := t.TempDir()
+
+	createFile(t, dir, "main.go", "package main")
+	createFile(t, extDir, "session.jsonl", "data")
+	createFile(t, extDir, "sub/notes.txt", "notes")
+
+	layers := []harness.LayerDef{
+		{Name: "agent", Patterns: []string{extDir + "/"}},
+		{Name: "project", Patterns: []string{"**"}, CatchAll: true},
+	}
+
+	s := NewScanner(dir, layers, nil)
+	result, err := s.Scan()
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+
+	if len(result["agent"].ExternalFiles) != 2 {
+		t.Errorf("agent layer has %d external files, want 2", len(result["agent"].ExternalFiles))
+	}
+	if len(result["project"].WorkspaceFiles) != 1 {
+		t.Errorf("project layer has %d workspace files, want 1", len(result["project"].WorkspaceFiles))
+	}
+
+	// Verify external files have __external__ prefix in archive path
+	for _, ef := range result["agent"].ExternalFiles {
+		if ef.AbsPath == "" {
+			t.Error("external file has empty AbsPath")
+		}
+		if len(ef.ArchivePath) < 13 || ef.ArchivePath[:13] != "__external__/" {
+			t.Errorf("external file archive path missing __external__ prefix: %s", ef.ArchivePath)
+		}
+	}
+}
+
+func TestScanRejectsPathTraversalInExternalPatterns(t *testing.T) {
+	dir := t.TempDir()
+
+	layers := []harness.LayerDef{
+		{Name: "agent", Patterns: []string{"~/../../etc/passwd"}},
+	}
+
+	s := NewScanner(dir, layers, nil)
+	result, err := s.Scan()
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+
+	if len(result["agent"].ExternalFiles) != 0 {
+		t.Errorf("agent layer should have 0 external files (.. rejected), got %d", len(result["agent"].ExternalFiles))
 	}
 }

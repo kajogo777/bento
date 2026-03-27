@@ -3,8 +3,10 @@ package cli
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 
 	"github.com/kajogo777/bento/internal/config"
+	"github.com/kajogo777/bento/internal/harness"
 	"github.com/kajogo777/bento/internal/registry"
 	"github.com/spf13/cobra"
 )
@@ -29,6 +31,56 @@ func loadConfigAndStore(dir string) (*config.BentoConfig, registry.Store, error)
 		return nil, nil, fmt.Errorf("opening store: %w", err)
 	}
 	return cfg, store, nil
+}
+
+// resolveHarness returns the harness based on config.
+// If layers are defined in config, use them directly.
+// Otherwise, resolve by agent name (auto-detect or named).
+func resolveHarness(dir string, cfg *config.BentoConfig) harness.Harness {
+	if len(cfg.Layers) > 0 {
+		return harness.NewConfigLayerHarness(cfg.Layers)
+	}
+	return harness.ResolveAgent(dir, cfg.Agent)
+}
+
+// diffFileMaps compares two maps of filename->hash, returning added, removed, and modified files.
+func diffFileMaps(old, new map[string]string) (added, removed, modified []string) {
+	for f, hash := range new {
+		if _, ok := old[f]; !ok {
+			added = append(added, f)
+		} else if old[f] != hash {
+			modified = append(modified, f)
+		}
+	}
+	for f := range old {
+		if _, ok := new[f]; !ok {
+			removed = append(removed, f)
+		}
+	}
+	sort.Strings(added)
+	sort.Strings(removed)
+	sort.Strings(modified)
+	return
+}
+
+// printLayerDiff prints the diff for a single layer.
+func printLayerDiff(name string, added, removed, modified []string, hasChanges *bool) {
+	if len(added) == 0 && len(removed) == 0 && len(modified) == 0 {
+		fmt.Printf("  %s%s: unchanged%s\n", colorDim, name, colorReset)
+		return
+	}
+	*hasChanges = true
+	total := len(added) + len(removed) + len(modified)
+	fmt.Printf("  %s: %d change(s)\n", name, total)
+	for _, f := range added {
+		fmt.Printf("    %s+ %s%s\n", colorGreen, f, colorReset)
+	}
+	for _, f := range removed {
+		fmt.Printf("    %s- %s%s\n", colorRed, f, colorReset)
+	}
+	for _, f := range modified {
+		fmt.Printf("    %s~ %s%s\n", colorYellow, f, colorReset)
+	}
 }
 
 // NewRootCmd creates the root bento command.

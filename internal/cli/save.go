@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/kajogo777/bento/internal/config"
-	"github.com/kajogo777/bento/internal/harness"
 	"github.com/kajogo777/bento/internal/hooks"
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/kajogo777/bento/internal/registry"
@@ -36,14 +35,14 @@ func newSaveCmd() *cobra.Command {
 				return err
 			}
 
-			// Load config
 			cfg, err := config.Load(dir)
 			if err != nil {
 				return fmt.Errorf("no bento.yaml found. Run `bento init` first")
 			}
 
-			// Detect harness
-			h := harness.ResolveHarness(dir, cfg.Harness)
+			// Resolve agent harness (uses config layers if defined, otherwise auto-detect)
+			h := resolveHarness(dir, cfg)
+			layers := h.Layers(dir)
 
 			// Run pre_save hook
 			hookCmd := cfg.Hooks.PreSave
@@ -66,14 +65,14 @@ func newSaveCmd() *cobra.Command {
 				ignorePatterns = append(ignorePatterns, bentoIgnore...)
 			}
 
-			// Scan workspace
-			scanner := workspace.NewScanner(dir, h.Layers(), ignorePatterns)
-			layerFiles, err := scanner.Scan()
+			// Scan workspace (scanner handles both workspace and external patterns)
+			scanner := workspace.NewScanner(dir, layers, ignorePatterns)
+			scanResults, err := scanner.Scan()
 			if err != nil {
 				return fmt.Errorf("scanning workspace: %w", err)
 			}
 
-			// Secret scan
+			// Secret scan (only workspace files, not external)
 			if !flagSkipSecretScan {
 				secretPatterns := h.SecretPatterns()
 				if len(secretPatterns) > 0 {
@@ -82,8 +81,8 @@ func newSaveCmd() *cobra.Command {
 						return fmt.Errorf("initializing secret scanner: %w", err)
 					}
 					var allFiles []string
-					for _, files := range layerFiles {
-						for _, f := range files {
+					for _, sr := range scanResults {
+						for _, f := range sr.WorkspaceFiles {
 							allFiles = append(allFiles, filepath.Join(dir, f))
 						}
 					}
@@ -101,7 +100,6 @@ func newSaveCmd() *cobra.Command {
 				}
 			}
 
-			// Get session config from harness
 			sc, _ := h.SessionConfig(dir)
 
 			// Open store
@@ -112,7 +110,7 @@ func newSaveCmd() *cobra.Command {
 				return fmt.Errorf("opening store: %w", err)
 			}
 
-			// Determine checkpoint sequence (count unique digests)
+			// Determine checkpoint sequence
 			existing, _ := store.ListCheckpoints()
 			seen := make(map[string]bool)
 			for _, e := range existing {
@@ -129,7 +127,7 @@ func newSaveCmd() *cobra.Command {
 			}
 
 			// Build map of previous layer digests for change detection
-			prevLayerDigests := make(map[string]string) // layer name -> digest
+			prevLayerDigests := make(map[string]string)
 			if parentDigest != "" {
 				if prevManifestBytes, _, _, loadErr := store.LoadCheckpoint(parentDigest); loadErr == nil {
 					var prevManifest ocispec.Manifest
@@ -146,9 +144,12 @@ func newSaveCmd() *cobra.Command {
 			// Pack layers
 			fmt.Println("Scanning workspace...")
 			var layerInfos []manifest.LayerInfo
-			for _, ld := range h.Layers() {
-				files := layerFiles[ld.Name]
-				data, err := workspace.PackLayer(dir, files)
+			for _, ld := range layers {
+				sr := scanResults[ld.Name]
+				wsFiles := sr.WorkspaceFiles
+				extFiles := sr.ExternalFiles
+
+				data, err := workspace.PackLayerWithExternal(dir, wsFiles, extFiles)
 				if err != nil {
 					return fmt.Errorf("packing layer %s: %w", ld.Name, err)
 				}
@@ -158,8 +159,9 @@ func newSaveCmd() *cobra.Command {
 					mediaType = manifest.MediaTypeForLayer(ld.Name)
 				}
 
+				totalFiles := len(wsFiles) + len(extFiles)
 				status := "changed"
-				if len(files) == 0 {
+				if totalFiles == 0 {
 					status = "empty"
 				} else if parentDigest != "" {
 					newDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(data))
@@ -168,61 +170,30 @@ func newSaveCmd() *cobra.Command {
 					}
 				}
 
+				// Build external path map annotation for restore
+				var annotations map[string]string
+				if len(extFiles) > 0 {
+					pathMap := workspace.BuildExternalPathMap(extFiles)
+					if len(pathMap) > 0 {
+						pathMapJSON, _ := json.Marshal(pathMap)
+						annotations = map[string]string{manifest.AnnotationExternalPaths: string(pathMapJSON)}
+					}
+				}
+
 				layerInfos = append(layerInfos, manifest.LayerInfo{
-					Name:      ld.Name,
-					MediaType: mediaType,
-					Data:      data,
-					FileCount: len(files),
-					Frequency: string(ld.Frequency),
+					Name:        ld.Name,
+					MediaType:   mediaType,
+					Data:        data,
+					FileCount:   totalFiles,
+					Annotations: annotations,
 				})
 
-				sizeStr := formatSize(len(data))
-				fmt.Printf("  %-10s %d files, %s (%s)\n", ld.Name+":", len(files), sizeStr, status)
-			}
-
-			// Pack external paths (agent session data outside workspace)
-			externalDefs := collectExternalDefs(h, cfg, dir)
-			if len(externalDefs) > 0 {
-				wsDefs := make([]workspace.ExternalPathDef, len(externalDefs))
-				for i, d := range externalDefs {
-					wsDefs[i] = workspace.ExternalPathDef{Source: d.Source, ArchivePrefix: d.ArchivePrefix}
-				}
-				extFiles, err := workspace.ScanExternalPaths(wsDefs, ignorePatterns)
-				if err != nil {
-					fmt.Printf("Warning: scanning external paths: %v\n", err)
-				}
+				extInfo := ""
 				if len(extFiles) > 0 {
-					extData, err := workspace.PackExternalFiles(extFiles)
-					if err != nil {
-						return fmt.Errorf("packing external files: %w", err)
-					}
-
-					// Build path map annotation (archive prefix -> source with ~ for portability)
-					pathMap := make(map[string]string)
-					for _, d := range externalDefs {
-						pathMap[d.ArchivePrefix] = d.Source
-					}
-					pathMapJSON, _ := json.Marshal(pathMap)
-
-					status := "changed"
-					if parentDigest != "" {
-						newDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(extData))
-						if prevDigest, ok := prevLayerDigests["external"]; ok && prevDigest == newDigest {
-							status = "unchanged, reusing"
-						}
-					}
-
-					layerInfos = append(layerInfos, manifest.LayerInfo{
-						Name:        "external",
-						MediaType:   manifest.LayerMediaType,
-						Data:        extData,
-						FileCount:   len(extFiles),
-						Frequency:   string(harness.ChangesOften),
-						Annotations: map[string]string{manifest.AnnotationExternalPaths: string(pathMapJSON)},
-					})
-
-					fmt.Printf("  %-10s %d files, %s (%s)\n", "external:", len(extFiles), formatSize(len(extData)), status)
+					extInfo = fmt.Sprintf(" (+%d external)", len(extFiles))
 				}
+				sizeStr := formatSize(len(data))
+				fmt.Printf("  %-10s %d files%s, %s (%s)\n", ld.Name+":", totalFiles, extInfo, sizeStr, status)
 			}
 
 			// Build config object
@@ -246,14 +217,12 @@ func newSaveCmd() *cobra.Command {
 				cfgObj.GitBranch = sc.GitBranch
 			}
 
-			// Build manifest
 			cfgObj.Message = flagMessage
 			manifestBytes, configBytes, err := manifest.BuildManifest(cfgObj, layerInfos)
 			if err != nil {
 				return fmt.Errorf("building manifest: %w", err)
 			}
 
-			// Prepare layer data for store
 			var storeLayerData []registry.LayerData
 			for _, li := range layerInfos {
 				digest := fmt.Sprintf("sha256:%x", sha256.Sum256(li.Data))
@@ -264,7 +233,6 @@ func newSaveCmd() *cobra.Command {
 				})
 			}
 
-			// Save to store
 			tag := fmt.Sprintf("cp-%d", seq)
 			if flagTag != "" {
 				tag = flagTag
@@ -274,7 +242,6 @@ func newSaveCmd() *cobra.Command {
 				return fmt.Errorf("saving checkpoint: %w", err)
 			}
 
-			// Also tag as latest
 			if err := store.Tag(manifestDigest, "latest"); err != nil {
 				return fmt.Errorf("tagging latest: %w", err)
 			}
@@ -312,19 +279,6 @@ func newSaveCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&flagSkipSecretScan, "skip-secret-scan", false, "skip secret scanning")
 
 	return cmd
-}
-
-// collectExternalDefs merges harness and config external path definitions.
-func collectExternalDefs(h harness.Harness, cfg *config.BentoConfig, workDir string) []harness.ExternalPathDef {
-	var defs []harness.ExternalPathDef
-	defs = append(defs, h.ExternalPaths(workDir)...)
-	for _, ep := range cfg.ExternalPaths {
-		defs = append(defs, harness.ExternalPathDef{
-			Source:        ep.Path,
-			ArchivePrefix: "__external__/" + ep.Prefix + "/",
-		})
-	}
-	return defs
 }
 
 func formatSize(bytes int) string {

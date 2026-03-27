@@ -1,0 +1,10 @@
+# bento.yaml for a Codex project
+agent: auto
+task: "implement search API"
+
+hooks:
+  post_restore: "pip install -r requirements.txt"
+
+retention:
+  keep_last: 5
+  keep_tagged: true

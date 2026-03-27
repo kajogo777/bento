@@ -268,17 +268,17 @@ Scanning workspace...
   project:           12 files, 45KB (changed)
 ```
 
-Each agent's state is tracked independently. Use `--harness <name>` to force a single agent.
+Each agent's state is tracked independently. Use `--agent <name>` to force a single agent.
 
 ## Supported Agents
 
 | Agent | Detection |
 |-------|-----------|
 | Claude Code | `.claude/` or `CLAUDE.md` |
-| Codex | `.codex/` or `AGENTS.md` |
-| Aider | `.aider.conf.yml` or `.aider.chat.history.md` |
-| Cursor | `.cursor/` directory |
-| Windsurf | `.windsurf/` directory |
+| Codex | `.codex/` |
+| OpenCode | `.opencode/` or `opencode.json` |
+| OpenClaw | `SOUL.md` or `IDENTITY.md` |
+| Cursor | `.cursor/` or `.cursorrules` |
 
 ## Quick Reference
 

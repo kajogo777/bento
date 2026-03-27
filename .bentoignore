@@ -1,0 +1,20 @@
+# Bento ignore patterns
+# Files matching these patterns are excluded from all layers.
+
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+*.pfx
+token.json
+credentials
+.git/credentials
+.aws/credentials
+.ssh/*
+.git/**
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~

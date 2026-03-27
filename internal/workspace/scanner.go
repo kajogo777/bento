@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,6 +9,18 @@ import (
 
 	"github.com/kajogo777/bento/internal/harness"
 )
+
+// ExternalFile represents a file from outside the workspace.
+type ExternalFile struct {
+	AbsPath     string
+	ArchivePath string
+}
+
+// ScanResult holds the scan output for a single layer.
+type ScanResult struct {
+	WorkspaceFiles []string       // relative to workDir
+	ExternalFiles  []ExternalFile // absolute paths with archive mappings
+}
 
 // Scanner walks a workspace directory tree and assigns files to layers.
 type Scanner struct {
@@ -27,18 +38,38 @@ func NewScanner(workDir string, layers []harness.LayerDef, ignorePatterns []stri
 	}
 }
 
-// Scan walks the workspace directory tree and assigns each file to the first
-// matching layer. It returns a map of layer name to relative file paths.
-// Files that match no layer or match an ignore pattern are excluded.
-func (s *Scanner) Scan() (map[string][]string, error) {
-	result := make(map[string][]string)
+// Scan walks the workspace directory and external paths, assigning files to layers.
+func (s *Scanner) Scan() (map[string]*ScanResult, error) {
+	result := make(map[string]*ScanResult)
+	for _, layer := range s.layers {
+		result[layer.Name] = &ScanResult{}
+	}
 
-	err := filepath.WalkDir(s.workDir, func(absPath string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	// Split layer patterns into workspace and external
+	type layerPatterns struct {
+		workspace []string
+		external  []string
+	}
+	lp := make(map[string]*layerPatterns)
+	for _, layer := range s.layers {
+		lp[layer.Name] = &layerPatterns{}
+		for _, p := range layer.Patterns {
+			if harness.IsExternalPattern(p) {
+				// Reject path traversal
+				if strings.Contains(p, "..") {
+					continue
+				}
+				lp[layer.Name].external = append(lp[layer.Name].external, p)
+			} else {
+				lp[layer.Name].workspace = append(lp[layer.Name].workspace, p)
+			}
 		}
-		if d.IsDir() {
-			return nil
+	}
+
+	// Scan workspace files
+	err := filepath.WalkDir(s.workDir, func(absPath string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
 		}
 
 		rel, err := filepath.Rel(s.workDir, absPath)
@@ -53,9 +84,9 @@ func (s *Scanner) Scan() (map[string][]string, error) {
 
 		matched := false
 		for _, layer := range s.layers {
-			for _, pattern := range layer.Patterns {
+			for _, pattern := range lp[layer.Name].workspace {
 				if matchesPattern(pattern, rel) {
-					result[layer.Name] = append(result[layer.Name], rel)
+					result[layer.Name].WorkspaceFiles = append(result[layer.Name].WorkspaceFiles, rel)
 					matched = true
 					break
 				}
@@ -65,11 +96,10 @@ func (s *Scanner) Scan() (map[string][]string, error) {
 			}
 		}
 
-		// Assign unmatched files to the catch-all layer (typically project).
 		if !matched {
 			for _, layer := range s.layers {
 				if layer.CatchAll {
-					result[layer.Name] = append(result[layer.Name], rel)
+					result[layer.Name].WorkspaceFiles = append(result[layer.Name].WorkspaceFiles, rel)
 					break
 				}
 			}
@@ -81,73 +111,98 @@ func (s *Scanner) Scan() (map[string][]string, error) {
 		return nil, err
 	}
 
-	// Sort file lists for deterministic output.
-	for name := range result {
-		sort.Strings(result[name])
+	// Scan external paths for each layer
+	for _, layer := range s.layers {
+		for _, extPattern := range lp[layer.Name].external {
+			source := harness.ExpandHome(extPattern)
+			source = strings.TrimSuffix(source, "/")
+
+			info, err := os.Stat(source)
+			if err != nil {
+				continue
+			}
+
+			prefix := sanitizePrefix(extPattern)
+
+			if !info.IsDir() {
+				rel := filepath.Base(source)
+				if !s.ignore.Match(rel) {
+					result[layer.Name].ExternalFiles = append(result[layer.Name].ExternalFiles, ExternalFile{
+						AbsPath:     source,
+						ArchivePath: "__external__/" + prefix + "/" + rel,
+					})
+				}
+				continue
+			}
+
+			_ = filepath.WalkDir(source, func(path string, d fs.DirEntry, walkErr error) error {
+				if walkErr != nil || d.IsDir() {
+					return nil
+				}
+				rel, err := filepath.Rel(source, path)
+				if err != nil {
+					return nil
+				}
+				rel = filepath.ToSlash(rel)
+				if s.ignore.Match(rel) {
+					return nil
+				}
+				result[layer.Name].ExternalFiles = append(result[layer.Name].ExternalFiles, ExternalFile{
+					AbsPath:     path,
+					ArchivePath: "__external__/" + prefix + "/" + rel,
+				})
+				return nil
+			})
+		}
+	}
+
+	// Sort for deterministic output
+	for _, sr := range result {
+		sort.Strings(sr.WorkspaceFiles)
+		sort.Slice(sr.ExternalFiles, func(i, j int) bool {
+			return sr.ExternalFiles[i].ArchivePath < sr.ExternalFiles[j].ArchivePath
+		})
 	}
 
 	return result, nil
 }
 
-// ExternalPathDef maps an external directory to an archive prefix.
-type ExternalPathDef struct {
-	Source        string
-	ArchivePrefix string
-}
-
-// ExternalFile represents a file from outside the workspace to be included in an archive.
-type ExternalFile struct {
-	AbsPath     string // real path on disk
-	ArchivePath string // path to store in the tar archive
-}
-
-// ScanExternalPaths walks external directories and returns files ready for packing.
-// Each file's ArchivePath is prefixed with the ExternalPathDef's ArchivePrefix.
-// ignorePatterns are applied to the relative path within each external source.
-func ScanExternalPaths(defs []ExternalPathDef, ignorePatterns []string) ([]ExternalFile, error) {
-	ignore := NewIgnoreMatcher(ignorePatterns)
-	var files []ExternalFile
-
-	for _, def := range defs {
-		source := def.Source
-		// Expand ~ prefix
-		if strings.HasPrefix(source, "~/") {
-			if home, err := os.UserHomeDir(); err == nil {
-				source = filepath.Join(home, source[2:])
-			}
+// BuildExternalPathMap creates the archive-prefix -> source-path mapping
+// needed to restore external files to their original locations.
+// Paths are stored with ~/ prefix for portability when possible.
+func BuildExternalPathMap(extFiles []ExternalFile) map[string]string {
+	home, _ := os.UserHomeDir()
+	pathMap := make(map[string]string)
+	for _, ef := range extFiles {
+		parts := strings.SplitN(ef.ArchivePath, "/", 3)
+		if len(parts) < 3 {
+			continue
 		}
-
-		info, err := os.Stat(source)
-		if err != nil || !info.IsDir() {
-			continue // skip non-existent directories
+		archivePrefix := parts[0] + "/" + parts[1] + "/"
+		if _, ok := pathMap[archivePrefix]; ok {
+			continue
 		}
-
-		err = filepath.WalkDir(source, func(path string, d fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return nil // skip unreadable entries
-			}
-			if d.IsDir() {
-				return nil
-			}
-			rel, err := filepath.Rel(source, path)
-			if err != nil {
-				return nil
-			}
-			rel = filepath.ToSlash(rel)
-			if ignore.Match(rel) {
-				return nil
-			}
-			archivePath := def.ArchivePrefix + rel
-			files = append(files, ExternalFile{
-				AbsPath:     path,
-				ArchivePath: archivePath,
-			})
-			return nil
-		})
-		if err != nil {
-			return files, fmt.Errorf("scanning external path %s: %w", source, err)
+		// Reconstruct source dir
+		relPortion := parts[2]
+		sourceDir := strings.TrimSuffix(ef.AbsPath, string(filepath.Separator)+filepath.FromSlash(relPortion))
+		// Store as ~/... for portability
+		if home != "" && strings.HasPrefix(sourceDir, home) {
+			sourceDir = "~" + sourceDir[len(home):]
 		}
+		pathMap[archivePrefix] = sourceDir
 	}
+	return pathMap
+}
 
-	return files, nil
+// sanitizePrefix creates a safe archive prefix from an external pattern path.
+func sanitizePrefix(pattern string) string {
+	p := strings.TrimPrefix(pattern, "~/")
+	p = strings.TrimPrefix(p, "/")
+	p = strings.TrimSuffix(p, "/")
+	p = strings.ReplaceAll(p, "/", "-")
+	p = strings.ReplaceAll(p, ".", "-")
+	if p == "" {
+		p = "external"
+	}
+	return p
 }

@@ -22,10 +22,16 @@ func (c Cursor) Detect(workDir string) bool {
 	return false
 }
 
-func (c Cursor) Layers() []LayerDef {
+func (c Cursor) Layers(workDir string) []LayerDef {
+	agentPatterns := []string{".cursor/rules/**", ".cursor/mcp.json", ".cursorrules"}
+
+	if wsDir := cursorWorkspaceDir(workDir); wsDir != "" {
+		agentPatterns = append(agentPatterns, wsDir+"/")
+	}
+
 	return []LayerDef{
 		DepsLayer(CommonDepsPatterns),
-		AgentLayer([]string{".cursor/rules/**", ".cursor/mcp.json", ".cursorrules"}),
+		AgentLayer(agentPatterns),
 		ProjectLayer(CommonSourcePatterns),
 	}
 }
@@ -37,17 +43,32 @@ func (c Cursor) SessionConfig(workDir string) (*SessionConfig, error) {
 func (c Cursor) Ignore() []string {
 	return append(CommonIgnorePatterns, CommonCredentialFiles...)
 }
+
 func (c Cursor) SecretPatterns() []string  { return CommonSecretPatterns }
 func (c Cursor) DefaultHooks() map[string]string { return nil }
 
-// cursorWorkspaceStoragePath returns the platform-specific Cursor data directory.
+func cursorWorkspaceDir(workDir string) string {
+	storagePath := cursorWorkspaceStoragePath()
+	if storagePath == "" {
+		return ""
+	}
+	if info, err := os.Stat(storagePath); err != nil || !info.IsDir() {
+		return ""
+	}
+	hash := cursorFindWorkspaceHash(storagePath, workDir)
+	if hash == "" {
+		return ""
+	}
+	return filepath.Join(storagePath, hash)
+}
+
 func cursorWorkspaceStoragePath() string {
 	switch runtime.GOOS {
 	case "darwin":
 		return ExpandHome("~/Library/Application Support/Cursor/User/workspaceStorage")
 	case "linux":
 		return ExpandHome("~/.config/Cursor/User/workspaceStorage")
-	default: // windows
+	default:
 		appData := os.Getenv("APPDATA")
 		if appData != "" {
 			return filepath.Join(appData, "Cursor", "User", "workspaceStorage")
@@ -56,8 +77,6 @@ func cursorWorkspaceStoragePath() string {
 	}
 }
 
-// cursorFindWorkspaceHash scans Cursor's workspaceStorage to find the hash
-// directory whose workspace.json maps to the given workDir.
 func cursorFindWorkspaceHash(storagePath, workDir string) string {
 	absWork, err := filepath.Abs(workDir)
 	if err != nil {
@@ -76,8 +95,7 @@ func cursorFindWorkspaceHash(storagePath, workDir string) string {
 		if !e.IsDir() {
 			continue
 		}
-		wsFile := filepath.Join(storagePath, e.Name(), "workspace.json")
-		data, err := os.ReadFile(wsFile)
+		data, err := os.ReadFile(filepath.Join(storagePath, e.Name(), "workspace.json"))
 		if err != nil {
 			continue
 		}
@@ -87,7 +105,6 @@ func cursorFindWorkspaceHash(storagePath, workDir string) string {
 		if json.Unmarshal(data, &ws) != nil || ws.Folder == "" {
 			continue
 		}
-		// Cursor stores as file:// URI, strip prefix
 		folder := ws.Folder
 		if len(folder) > 7 && folder[:7] == "file://" {
 			folder = folder[7:]
@@ -100,25 +117,4 @@ func cursorFindWorkspaceHash(storagePath, workDir string) string {
 		}
 	}
 	return ""
-}
-
-func (c Cursor) ExternalPaths(workDir string) []ExternalPathDef {
-	storagePath := cursorWorkspaceStoragePath()
-	if storagePath == "" {
-		return nil
-	}
-	if info, err := os.Stat(storagePath); err != nil || !info.IsDir() {
-		return nil
-	}
-
-	hash := cursorFindWorkspaceHash(storagePath, workDir)
-	if hash == "" {
-		return nil
-	}
-
-	source := filepath.Join(storagePath, hash)
-	return []ExternalPathDef{{
-		Source:        source,
-		ArchivePrefix: "__external__/cursor/",
-	}}
 }

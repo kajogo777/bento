@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -67,9 +68,84 @@ func PackLayer(workDir string, files []string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// ListLayerFilesWithHashes returns file paths and their content sizes from a tar.gz archive.
-// The returned map keys are normalized file paths, values are file sizes (used as a cheap
-// change indicator since identical files have identical sizes in the deterministic tar).
+// PackLayerWithExternal creates a tar.gz archive combining workspace files and external files.
+// Workspace files are relative to workDir, external files use their ArchivePath.
+func PackLayerWithExternal(workDir string, files []string, extFiles []ExternalFile) ([]byte, error) {
+	var buf bytes.Buffer
+	gw, _ := gzip.NewWriterLevel(&buf, gzip.DefaultCompression)
+	gw.OS = 0xFF
+	tw := tar.NewWriter(gw)
+
+	// Pack workspace files
+	for _, file := range files {
+		normalized := NormalizePath(file)
+		absPath := filepath.Join(workDir, filepath.FromSlash(normalized))
+
+		info, err := os.Stat(absPath)
+		if err != nil {
+			return nil, fmt.Errorf("stat %s: %w", normalized, err)
+		}
+
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return nil, fmt.Errorf("header %s: %w", normalized, err)
+		}
+		header.Name = normalized
+		header.ModTime = time.Time{}
+		header.AccessTime = time.Time{}
+		header.ChangeTime = time.Time{}
+
+		if err := tw.WriteHeader(header); err != nil {
+			return nil, fmt.Errorf("write header %s: %w", normalized, err)
+		}
+
+		f, err := os.Open(absPath)
+		if err != nil {
+			return nil, fmt.Errorf("open %s: %w", normalized, err)
+		}
+		if _, err := io.Copy(tw, f); err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("copy %s: %w", normalized, err)
+		}
+		_ = f.Close()
+	}
+
+	// Pack external files
+	for _, ef := range extFiles {
+		info, err := os.Stat(ef.AbsPath)
+		if err != nil || info.IsDir() {
+			continue
+		}
+
+		data, err := os.ReadFile(ef.AbsPath)
+		if err != nil {
+			continue
+		}
+
+		hdr := &tar.Header{
+			Name:    ef.ArchivePath,
+			Size:    info.Size(),
+			Mode:    int64(DefaultFileMode(ef.ArchivePath)),
+			ModTime: time.Time{},
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return nil, fmt.Errorf("writing header for %s: %w", ef.ArchivePath, err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			return nil, fmt.Errorf("writing data for %s: %w", ef.ArchivePath, err)
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	if err := gw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// ListLayerFilesWithSizes returns file paths and their content sizes from a tar.gz archive.
 func ListLayerFilesWithSizes(data []byte) (map[string]int64, error) {
 	gr, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -89,6 +165,35 @@ func ListLayerFilesWithSizes(data []byte) (map[string]int64, error) {
 		}
 		if header.Typeflag == tar.TypeReg {
 			files[NormalizePath(header.Name)] = header.Size
+		}
+	}
+	return files, nil
+}
+
+// ListLayerFilesWithHashes returns file paths and their content SHA256 hashes.
+// This detects modifications even when file size is unchanged.
+func ListLayerFilesWithHashes(data []byte) (map[string]string, error) {
+	gr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("gzip reader: %w", err)
+	}
+	defer func() { _ = gr.Close() }()
+
+	files := make(map[string]string)
+	tr := tar.NewReader(gr)
+	h := sha256.New()
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("tar next: %w", err)
+		}
+		if header.Typeflag == tar.TypeReg {
+			h.Reset()
+			io.Copy(h, tr)
+			files[NormalizePath(header.Name)] = fmt.Sprintf("%x", h.Sum(nil))
 		}
 	}
 	return files, nil
@@ -201,119 +306,10 @@ func CleanStaleFiles(targetDir string, keepFiles map[string]bool) error {
 	return nil
 }
 
-// PackExternalFiles creates a tar.gz archive from files outside the workspace.
-// Each ExternalFile specifies an absolute source path and an archive path.
-func PackExternalFiles(files []ExternalFile) ([]byte, error) {
-	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gw)
-
-	for _, f := range files {
-		info, err := os.Stat(f.AbsPath)
-		if err != nil {
-			continue // skip unreadable files
-		}
-		if info.IsDir() {
-			continue
-		}
-
-		data, err := os.ReadFile(f.AbsPath)
-		if err != nil {
-			continue
-		}
-
-		hdr := &tar.Header{
-			Name:    f.ArchivePath,
-			Size:    info.Size(),
-			Mode:    int64(DefaultFileMode(f.ArchivePath)),
-			ModTime: time.Time{},
-		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			return nil, fmt.Errorf("writing header for %s: %w", f.ArchivePath, err)
-		}
-		if _, err := tw.Write(data); err != nil {
-			return nil, fmt.Errorf("writing data for %s: %w", f.ArchivePath, err)
-		}
-	}
-
-	if err := tw.Close(); err != nil {
-		return nil, err
-	}
-	if err := gw.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// UnpackExternalLayer extracts an external layer, mapping archive prefixes to target directories.
-// pathMap maps archive prefix (e.g. "__external__/claude-sessions/") to absolute target directory.
-func UnpackExternalLayer(data []byte, pathMap map[string]string) error {
-	gr, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("opening gzip: %w", err)
-	}
-	defer gr.Close()
-
-	tr := tar.NewReader(gr)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("reading tar: %w", err)
-		}
-
-		name := filepath.ToSlash(hdr.Name)
-
-		// Find matching prefix
-		var targetDir, relPath string
-		for prefix, dir := range pathMap {
-			if strings.HasPrefix(name, prefix) {
-				targetDir = dir
-				relPath = name[len(prefix):]
-				break
-			}
-		}
-		if targetDir == "" {
-			continue // no matching prefix, skip
-		}
-
-		// Safety checks on relPath
-		if filepath.IsAbs(relPath) || strings.Contains(relPath, "..") {
-			continue
-		}
-
-		targetPath := filepath.Join(targetDir, filepath.FromSlash(relPath))
-
-		switch hdr.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(targetPath, 0o755); err != nil {
-				return fmt.Errorf("creating dir %s: %w", targetPath, err)
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-				return fmt.Errorf("creating parent dir for %s: %w", targetPath, err)
-			}
-			content, err := io.ReadAll(tr)
-			if err != nil {
-				return fmt.Errorf("reading %s: %w", name, err)
-			}
-			mode := os.FileMode(hdr.Mode)
-			if mode == 0 {
-				mode = DefaultFileMode(relPath)
-			}
-			if err := os.WriteFile(targetPath, content, mode); err != nil {
-				return fmt.Errorf("writing %s: %w", targetPath, err)
-			}
-		}
-	}
-	return nil
-}
-
-// UnpackLayer extracts a tar.gz archive to targetDir. It handles cross-platform
-// path conversion and rejects absolute paths or paths containing ".." for safety.
-func UnpackLayer(data []byte, targetDir string) error {
+// UnpackLayerWithExternal extracts a tar.gz archive to targetDir. Files with
+// __external__/ prefixes are routed to their original locations using the pathMap.
+// If pathMap is nil, external-prefixed files are skipped.
+func UnpackLayerWithExternal(data []byte, targetDir string, pathMap map[string]string) error {
 	gr, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("gzip reader: %w", err)
@@ -332,12 +328,47 @@ func UnpackLayer(data []byte, targetDir string) error {
 
 		name := NormalizePath(header.Name)
 
-		// Reject absolute paths.
+		// Route __external__/ prefixed files to original locations
+		if strings.HasPrefix(name, "__external__/") {
+			if pathMap == nil {
+				continue // skip if no path map
+			}
+			var targetPath string
+			for prefix, dir := range pathMap {
+				if strings.HasPrefix(name, prefix) {
+					relPath := name[len(prefix):]
+					if filepath.IsAbs(relPath) || strings.Contains(relPath, "..") {
+						continue
+					}
+					targetPath = filepath.Join(dir, filepath.FromSlash(relPath))
+					break
+				}
+			}
+			if targetPath == "" {
+				continue
+			}
+			switch header.Typeflag {
+			case tar.TypeDir:
+				_ = os.MkdirAll(targetPath, 0o755)
+			case tar.TypeReg:
+				_ = os.MkdirAll(filepath.Dir(targetPath), 0o755)
+				content, err := io.ReadAll(tr)
+				if err != nil {
+					return fmt.Errorf("reading %s: %w", name, err)
+				}
+				mode := os.FileMode(header.Mode)
+				if mode == 0 {
+					mode = DefaultFileMode(name)
+				}
+				_ = os.WriteFile(targetPath, content, mode)
+			}
+			continue
+		}
+
+		// Regular workspace files
 		if filepath.IsAbs(name) || strings.HasPrefix(name, "/") {
 			return fmt.Errorf("rejecting absolute path in archive: %s", name)
 		}
-
-		// Reject paths with "..".
 		for _, part := range strings.Split(name, "/") {
 			if part == ".." {
 				return fmt.Errorf("rejecting path with .. in archive: %s", name)
@@ -369,4 +400,10 @@ func UnpackLayer(data []byte, targetDir string) error {
 		}
 	}
 	return nil
+}
+
+// UnpackLayer extracts a tar.gz archive to targetDir.
+// External-prefixed files are skipped (use UnpackLayerWithExternal for those).
+func UnpackLayer(data []byte, targetDir string) error {
+	return UnpackLayerWithExternal(data, targetDir, nil)
 }

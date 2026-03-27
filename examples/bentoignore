@@ -1,0 +1,34 @@
+# .bentoignore - files excluded from all bento checkpoints
+# Same syntax as .gitignore
+
+# Build artifacts
+dist/**
+build/**
+*.o
+*.a
+
+# IDE files
+.idea/**
+.vscode/**
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/**
+
+# Temp files
+tmp/**
+*.tmp
+*.swp
+
+# Large test fixtures
+fixtures/large/**
+
+# Secrets (also caught by secret scanning)
+.env
+.env.local
+*.pem
+*.key
