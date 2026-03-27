@@ -1,6 +1,11 @@
 package harness
 
-import "github.com/bentoci/bento/internal/manifest"
+import (
+	"os/exec"
+	"strings"
+
+	"github.com/bentoci/bento/internal/manifest"
+)
 
 // ChangeFrequency indicates how often a layer changes.
 type ChangeFrequency string
@@ -50,6 +55,30 @@ type Harness interface {
 
 	// DefaultHooks returns suggested hooks for this agent framework.
 	DefaultHooks() map[string]string
+}
+
+// execGit runs a git command in the given directory and returns trimmed output.
+func execGit(workDir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// BaseSessionConfig returns a SessionConfig populated with git metadata.
+// Individual harnesses can extend this with agent-specific fields.
+func BaseSessionConfig(agentName, workDir string) *SessionConfig {
+	cfg := &SessionConfig{Agent: agentName, Status: "paused"}
+	if out, err := execGit(workDir, "rev-parse", "HEAD"); err == nil {
+		cfg.GitSha = out
+	}
+	if out, err := execGit(workDir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+		cfg.GitBranch = out
+	}
+	return cfg
 }
 
 // --- Common layer builders ---

@@ -54,20 +54,7 @@ func (y *YAMLHarness) Layers() []LayerDef {
 }
 
 func (y *YAMLHarness) SessionConfig(workDir string) (*SessionConfig, error) {
-	cfg := &SessionConfig{
-		Agent:  y.Name(),
-		Status: "paused",
-	}
-
-	if out, err := execGit(workDir, "rev-parse", "HEAD"); err == nil {
-		cfg.GitSha = out
-	}
-
-	if out, err := execGit(workDir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
-		cfg.GitBranch = out
-	}
-
-	return cfg, nil
+	return BaseSessionConfig(y.Name(), workDir), nil
 }
 
 func (y *YAMLHarness) Ignore() []string {

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/bentoci/bento/internal/config"
 	"github.com/bentoci/bento/internal/registry"
 	"github.com/bentoci/bento/internal/workspace"
 	"github.com/spf13/cobra"
@@ -23,21 +22,14 @@ func newForkCmd() *cobra.Command {
 				return err
 			}
 
-			cfg, err := config.Load(dir)
+			_, store, err := loadConfigAndStore(dir)
 			if err != nil {
-				return fmt.Errorf("no bento.yaml found. Run `bento init` first")
+				return err
 			}
 
 			_, tag, err := registry.ParseRef(args[0])
 			if err != nil {
 				return err
-			}
-
-			projectName := filepath.Base(dir)
-			storePath := filepath.Join(cfg.Store, projectName)
-			store, err := registry.NewStore(storePath)
-			if err != nil {
-				return fmt.Errorf("opening store: %w", err)
 			}
 
 			// Load the fork point

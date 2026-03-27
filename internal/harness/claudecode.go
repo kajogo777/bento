@@ -32,23 +32,10 @@ func (c ClaudeCode) Layers() []LayerDef {
 }
 
 func (c ClaudeCode) SessionConfig(workDir string) (*SessionConfig, error) {
-	cfg := &SessionConfig{
-		Agent:  c.Name(),
-		Status: "paused",
-	}
-
+	cfg := BaseSessionConfig(c.Name(), workDir)
 	if out, err := exec.Command("claude", "--version").Output(); err == nil {
 		cfg.AgentVersion = strings.TrimSpace(string(out))
 	}
-
-	if out, err := execGit(workDir, "rev-parse", "HEAD"); err == nil {
-		cfg.GitSha = out
-	}
-
-	if out, err := execGit(workDir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
-		cfg.GitBranch = out
-	}
-
 	return cfg, nil
 }
 
@@ -62,15 +49,4 @@ func (c ClaudeCode) SecretPatterns() []string {
 
 func (c ClaudeCode) DefaultHooks() map[string]string {
 	return nil
-}
-
-// execGit runs a git command in the given directory and returns trimmed output.
-func execGit(workDir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = workDir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
 }

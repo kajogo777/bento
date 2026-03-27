@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/bentoci/bento/internal/config"
-	"github.com/bentoci/bento/internal/registry"
 	"github.com/spf13/cobra"
 )
 
@@ -19,16 +17,9 @@ func newListCmd() *cobra.Command {
 				return err
 			}
 
-			cfg, err := config.Load(dir)
+			_, store, err := loadConfigAndStore(dir)
 			if err != nil {
-				return fmt.Errorf("no bento.yaml found. Run `bento init` first")
-			}
-
-			projectName := filepath.Base(dir)
-			storePath := filepath.Join(cfg.Store, projectName)
-			store, err := registry.NewStore(storePath)
-			if err != nil {
-				return fmt.Errorf("opening store: %w", err)
+				return err
 			}
 
 			entries, err := store.ListCheckpoints()

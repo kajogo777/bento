@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/bentoci/bento/internal/config"
 	"github.com/bentoci/bento/internal/policy"
-	"github.com/bentoci/bento/internal/registry"
 	"github.com/spf13/cobra"
 )
 
@@ -25,9 +23,9 @@ func newGCCmd() *cobra.Command {
 				return err
 			}
 
-			cfg, err := config.Load(dir)
+			cfg, store, err := loadConfigAndStore(dir)
 			if err != nil {
-				return fmt.Errorf("no bento.yaml found. Run `bento init` first")
+				return err
 			}
 
 			keepLast := flagKeepLast
@@ -39,13 +37,6 @@ func newGCCmd() *cobra.Command {
 			}
 
 			keepTagged := flagKeepTagged || cfg.Retention.KeepTagged
-
-			projectName := filepath.Base(dir)
-			storePath := filepath.Join(cfg.Store, projectName)
-			store, err := registry.NewStore(storePath)
-			if err != nil {
-				return fmt.Errorf("opening store: %w", err)
-			}
 
 			opts := policy.GCOptions{
 				KeepLast:   keepLast,

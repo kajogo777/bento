@@ -15,14 +15,7 @@ func (f Fallback) Layers() []LayerDef {
 }
 
 func (f Fallback) SessionConfig(workDir string) (*SessionConfig, error) {
-	cfg := &SessionConfig{Agent: f.Name(), Status: "paused"}
-	if out, err := execGit(workDir, "rev-parse", "HEAD"); err == nil {
-		cfg.GitSha = out
-	}
-	if out, err := execGit(workDir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
-		cfg.GitBranch = out
-	}
-	return cfg, nil
+	return BaseSessionConfig(f.Name(), workDir), nil
 }
 
 func (f Fallback) Ignore() []string         { return CommonIgnorePatterns }

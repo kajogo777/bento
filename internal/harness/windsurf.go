@@ -26,14 +26,7 @@ func (w Windsurf) Layers() []LayerDef {
 }
 
 func (w Windsurf) SessionConfig(workDir string) (*SessionConfig, error) {
-	cfg := &SessionConfig{Agent: w.Name(), Status: "paused"}
-	if out, err := execGit(workDir, "rev-parse", "HEAD"); err == nil {
-		cfg.GitSha = out
-	}
-	if out, err := execGit(workDir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
-		cfg.GitBranch = out
-	}
-	return cfg, nil
+	return BaseSessionConfig(w.Name(), workDir), nil
 }
 
 func (w Windsurf) Ignore() []string         { return CommonIgnorePatterns }

@@ -29,14 +29,7 @@ func (a Aider) Layers() []LayerDef {
 }
 
 func (a Aider) SessionConfig(workDir string) (*SessionConfig, error) {
-	cfg := &SessionConfig{Agent: a.Name(), Status: "paused"}
-	if out, err := execGit(workDir, "rev-parse", "HEAD"); err == nil {
-		cfg.GitSha = out
-	}
-	if out, err := execGit(workDir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
-		cfg.GitBranch = out
-	}
-	return cfg, nil
+	return BaseSessionConfig(a.Name(), workDir), nil
 }
 
 func (a Aider) Ignore() []string         { return CommonIgnorePatterns }

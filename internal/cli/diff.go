@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/bentoci/bento/internal/config"
 	"github.com/bentoci/bento/internal/manifest"
 	"github.com/bentoci/bento/internal/registry"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -23,16 +22,9 @@ func newDiffCmd() *cobra.Command {
 				return err
 			}
 
-			cfg, err := config.Load(dir)
+			_, store, err := loadConfigAndStore(dir)
 			if err != nil {
-				return fmt.Errorf("no bento.yaml found. Run `bento init` first")
-			}
-
-			projectName := filepath.Base(dir)
-			storePath := filepath.Join(cfg.Store, projectName)
-			store, err := registry.NewStore(storePath)
-			if err != nil {
-				return fmt.Errorf("opening store: %w", err)
+				return err
 			}
 
 			_, tag1, _ := registry.ParseRef(args[0])
