@@ -40,9 +40,5 @@ type CheckpointEntry struct {
 
 // NewStore creates a new local OCI-layout store at the given path.
 func NewStore(storePath string) (Store, error) {
-	s := &LocalStore{root: storePath}
-	if err := s.ensureLayout(); err != nil {
-		return nil, err
-	}
-	return s, nil
+	return newLocalStore(storePath)
 }

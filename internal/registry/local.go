@@ -1,238 +1,120 @@
 package registry
 
 import (
-	"crypto/sha256"
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
+	"io"
 
-	godigest "github.com/opencontainers/go-digest"
-	specs "github.com/opencontainers/image-spec/specs-go"
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"oras.land/oras-go/v2/content/oci"
 )
 
-const (
-	ociLayoutFile    = "oci-layout"
-	indexFile        = "index.json"
-	blobsDir         = "blobs"
-	sha256Dir        = "sha256"
-	ociLayoutContent = `{"imageLayoutVersion":"1.0.0"}`
-
-	annotationRefName = "org.opencontainers.image.ref.name"
-)
-
-// LocalStore implements Store using the OCI Image Layout format on the local filesystem.
+// LocalStore implements Store using an oras-go OCI image layout on disk.
 type LocalStore struct {
-	root string
+	oci *oci.Store
+	ctx context.Context
 }
 
-// ensureLayout creates the oci-layout file and an initial index.json if they do not exist.
-func (s *LocalStore) ensureLayout() error {
-	blobPath := filepath.Join(s.root, blobsDir, sha256Dir)
-	if err := os.MkdirAll(blobPath, 0o755); err != nil {
-		return fmt.Errorf("create blob directory: %w", err)
-	}
-
-	layoutPath := filepath.Join(s.root, ociLayoutFile)
-	if _, err := os.Stat(layoutPath); os.IsNotExist(err) {
-		if err := os.WriteFile(layoutPath, []byte(ociLayoutContent), 0o644); err != nil {
-			return fmt.Errorf("write oci-layout: %w", err)
-		}
-	}
-
-	idxPath := filepath.Join(s.root, indexFile)
-	if _, err := os.Stat(idxPath); os.IsNotExist(err) {
-		idx := ocispec.Index{
-			Versioned: specs.Versioned{SchemaVersion: 2},
-			MediaType: ocispec.MediaTypeImageIndex,
-			Manifests: []ocispec.Descriptor{},
-		}
-		data, err := json.MarshalIndent(idx, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshal initial index: %w", err)
-		}
-		if err := os.WriteFile(idxPath, data, 0o644); err != nil {
-			return fmt.Errorf("write initial index: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// writeBlob writes data to blobs/sha256/<hex> and returns the digest string.
-func (s *LocalStore) writeBlob(data []byte) (string, error) {
-	h := sha256.Sum256(data)
-	hex := fmt.Sprintf("%x", h)
-	digest := "sha256:" + hex
-
-	blobPath := filepath.Join(s.root, blobsDir, sha256Dir, hex)
-	if _, err := os.Stat(blobPath); err == nil {
-		// Blob already exists.
-		return digest, nil
-	}
-
-	if err := os.WriteFile(blobPath, data, 0o644); err != nil {
-		return "", fmt.Errorf("write blob %s: %w", hex, err)
-	}
-	return digest, nil
-}
-
-// readBlob reads a blob by its digest.
-func (s *LocalStore) readBlob(digest string) ([]byte, error) {
-	hex := strings.TrimPrefix(digest, "sha256:")
-	blobPath := filepath.Join(s.root, blobsDir, sha256Dir, hex)
-	data, err := os.ReadFile(blobPath)
+// newLocalStore opens or creates an OCI image layout store at the given path.
+func newLocalStore(storePath string) (*LocalStore, error) {
+	ctx := context.Background()
+	store, err := oci.NewWithContext(ctx, storePath)
 	if err != nil {
-		return nil, fmt.Errorf("read blob %s: %w", digest, err)
+		return nil, fmt.Errorf("opening OCI store at %s: %w", storePath, err)
 	}
-	return data, nil
+	store.AutoSaveIndex = true
+	return &LocalStore{oci: store, ctx: ctx}, nil
 }
 
-// readIndex reads and parses the index.json file.
-func (s *LocalStore) readIndex() (*ocispec.Index, error) {
-	idxPath := filepath.Join(s.root, indexFile)
-	data, err := os.ReadFile(idxPath)
-	if err != nil {
-		return nil, fmt.Errorf("read index: %w", err)
-	}
-	var idx ocispec.Index
-	if err := json.Unmarshal(data, &idx); err != nil {
-		return nil, fmt.Errorf("unmarshal index: %w", err)
-	}
-	return &idx, nil
-}
-
-// writeIndex writes the index back to disk.
-func (s *LocalStore) writeIndex(idx *ocispec.Index) error {
-	data, err := json.MarshalIndent(idx, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal index: %w", err)
-	}
-	idxPath := filepath.Join(s.root, indexFile)
-	if err := os.WriteFile(idxPath, data, 0o644); err != nil {
-		return fmt.Errorf("write index: %w", err)
-	}
-	return nil
-}
-
-// SaveCheckpoint writes a checkpoint's blobs and updates the index.
+// SaveCheckpoint writes a checkpoint's blobs (config, layers, manifest) and tags it.
 func (s *LocalStore) SaveCheckpoint(ref string, manifestBytes, configBytes []byte, layers []LayerData) (string, error) {
-	// Write config blob.
-	if _, err := s.writeBlob(configBytes); err != nil {
-		return "", fmt.Errorf("save config blob: %w", err)
-	}
-
-	// Write layer blobs.
-	for _, l := range layers {
-		if _, err := s.writeBlob(l.Data); err != nil {
-			return "", fmt.Errorf("save layer blob: %w", err)
-		}
-	}
-
-	// Write manifest blob.
-	manifestDigest, err := s.writeBlob(manifestBytes)
-	if err != nil {
-		return "", fmt.Errorf("save manifest blob: %w", err)
-	}
-
-	// Parse the tag from the ref.
 	_, tag, err := ParseRef(ref)
 	if err != nil {
 		return "", fmt.Errorf("parse ref: %w", err)
 	}
 
-	// Update index.json.
-	idx, err := s.readIndex()
-	if err != nil {
-		return "", err
+	// Push config blob
+	configDigest := digest.FromBytes(configBytes)
+	configDesc := ocispec.Descriptor{
+		MediaType: "application/vnd.bento.config.v1+json",
+		Digest:    configDigest,
+		Size:      int64(len(configBytes)),
+	}
+	if err := s.pushIfNotExists(configDesc, configBytes); err != nil {
+		return "", fmt.Errorf("pushing config: %w", err)
 	}
 
-	// Remove any existing entry with the same tag.
-	filtered := make([]ocispec.Descriptor, 0, len(idx.Manifests))
-	for _, d := range idx.Manifests {
-		if d.Annotations[annotationRefName] != tag {
-			filtered = append(filtered, d)
+	// Push layer blobs
+	for _, ld := range layers {
+		layerDigest := digest.FromBytes(ld.Data)
+		layerDesc := ocispec.Descriptor{
+			MediaType: ld.MediaType,
+			Digest:    layerDigest,
+			Size:      int64(len(ld.Data)),
+		}
+		if err := s.pushIfNotExists(layerDesc, ld.Data); err != nil {
+			return "", fmt.Errorf("pushing layer: %w", err)
 		}
 	}
 
-	// Parse manifest to get annotations for the index entry.
-	var m ocispec.Manifest
-	if err := json.Unmarshal(manifestBytes, &m); err != nil {
-		return "", fmt.Errorf("parse manifest for index: %w", err)
-	}
-
-	desc := ocispec.Descriptor{
+	// Push manifest
+	manifestDigest := digest.FromBytes(manifestBytes)
+	manifestDesc := ocispec.Descriptor{
 		MediaType: ocispec.MediaTypeImageManifest,
-		Digest:    godigest.Digest(manifestDigest),
+		Digest:    manifestDigest,
 		Size:      int64(len(manifestBytes)),
-		Annotations: map[string]string{
-			annotationRefName: tag,
-		},
 	}
-	// Copy select annotations from the manifest.
-	if created, ok := m.Annotations["org.opencontainers.image.created"]; ok {
-		desc.Annotations["org.opencontainers.image.created"] = created
-	}
-	if msg, ok := m.Annotations["dev.bento.checkpoint.message"]; ok {
-		desc.Annotations["dev.bento.checkpoint.message"] = msg
+	if err := s.pushIfNotExists(manifestDesc, manifestBytes); err != nil {
+		return "", fmt.Errorf("pushing manifest: %w", err)
 	}
 
-	filtered = append(filtered, desc)
-	idx.Manifests = filtered
-
-	if err := s.writeIndex(idx); err != nil {
-		return "", err
+	// Tag
+	if err := s.oci.Tag(s.ctx, manifestDesc, tag); err != nil {
+		return "", fmt.Errorf("tagging %s: %w", tag, err)
 	}
 
-	return manifestDigest, nil
+	return manifestDigest.String(), nil
 }
 
 // LoadCheckpoint reads a checkpoint by tag or digest.
 func (s *LocalStore) LoadCheckpoint(ref string) (manifestBytes, configBytes []byte, layers []LayerData, err error) {
-	// Resolve ref to digest.
-	digest := ref
-	if !strings.HasPrefix(ref, "sha256:") {
-		_, tag, parseErr := ParseRef(ref)
-		if parseErr != nil {
-			return nil, nil, nil, parseErr
-		}
-		resolved, resolveErr := s.ResolveTag(tag)
-		if resolveErr != nil {
-			return nil, nil, nil, resolveErr
-		}
-		digest = resolved
+	// Resolve ref to descriptor
+	desc, err := s.oci.Resolve(s.ctx, ref)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("tag %q not found", ref)
 	}
 
-	// Read manifest.
-	manifestBytes, err = s.readBlob(digest)
+	// Fetch manifest
+	manifestBytes, err = s.fetchBlob(desc)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("read manifest: %w", err)
+		return nil, nil, nil, fmt.Errorf("reading manifest: %w", err)
 	}
 
 	var m ocispec.Manifest
 	if err := json.Unmarshal(manifestBytes, &m); err != nil {
-		return nil, nil, nil, fmt.Errorf("unmarshal manifest: %w", err)
+		return nil, nil, nil, fmt.Errorf("parsing manifest: %w", err)
 	}
 
-	// Read config.
-	configBytes, err = s.readBlob(string(m.Config.Digest))
+	// Fetch config
+	configBytes, err = s.fetchBlob(m.Config)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("read config: %w", err)
+		return nil, nil, nil, fmt.Errorf("reading config: %w", err)
 	}
 
-	// Read layers.
+	// Fetch layers
 	layers = make([]LayerData, 0, len(m.Layers))
 	for _, ld := range m.Layers {
-		data, readErr := s.readBlob(string(ld.Digest))
-		if readErr != nil {
-			return nil, nil, nil, fmt.Errorf("read layer %s: %w", ld.Digest, readErr)
+		data, err := s.fetchBlob(ld)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("reading layer %s: %w", ld.Digest, err)
 		}
 		layers = append(layers, LayerData{
 			MediaType: ld.MediaType,
 			Data:      data,
-			Digest:    string(ld.Digest),
+			Digest:    ld.Digest.String(),
 		})
 	}
 
@@ -241,100 +123,122 @@ func (s *LocalStore) LoadCheckpoint(ref string) (manifestBytes, configBytes []by
 
 // ListCheckpoints returns all tagged entries from the index.
 func (s *LocalStore) ListCheckpoints() ([]CheckpointEntry, error) {
-	idx, err := s.readIndex()
+	var entries []CheckpointEntry
+
+	err := s.oci.Tags(s.ctx, "", func(tags []string) error {
+		for _, tag := range tags {
+			desc, err := s.oci.Resolve(s.ctx, tag)
+			if err != nil {
+				continue
+			}
+			// Fetch manifest to read annotations
+			data, err := s.fetchBlob(desc)
+			if err != nil {
+				continue
+			}
+			var m ocispec.Manifest
+			if err := json.Unmarshal(data, &m); err != nil {
+				continue
+			}
+
+			entries = append(entries, CheckpointEntry{
+				Tag:     tag,
+				Digest:  desc.Digest.String(),
+				Created: m.Annotations["org.opencontainers.image.created"],
+				Message: m.Annotations["dev.bento.checkpoint.message"],
+			})
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	entries := make([]CheckpointEntry, 0, len(idx.Manifests))
-	for _, d := range idx.Manifests {
-		entry := CheckpointEntry{
-			Digest:  string(d.Digest),
-			Tag:     d.Annotations[annotationRefName],
-			Created: d.Annotations["org.opencontainers.image.created"],
-			Message: d.Annotations["dev.bento.checkpoint.message"],
-		}
-		entries = append(entries, entry)
-	}
 	return entries, nil
 }
 
-// ResolveTag finds the digest for a given tag in the index.
+// ResolveTag resolves a tag to its manifest digest.
 func (s *LocalStore) ResolveTag(tag string) (string, error) {
-	idx, err := s.readIndex()
+	desc, err := s.oci.Resolve(s.ctx, tag)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("tag %q not found", tag)
 	}
-
-	for _, d := range idx.Manifests {
-		if d.Annotations[annotationRefName] == tag {
-			return string(d.Digest), nil
-		}
-	}
-	return "", fmt.Errorf("tag %q not found", tag)
+	return desc.Digest.String(), nil
 }
 
 // Tag assigns a tag to an existing manifest digest.
-func (s *LocalStore) Tag(digest, tag string) error {
-	idx, err := s.readIndex()
-	if err != nil {
-		return err
-	}
-
-	// Find the descriptor for the digest.
+func (s *LocalStore) Tag(digestStr, tag string) error {
+	// Find the descriptor for this digest by resolving any existing tag that points to it
+	// We need to iterate tags to find one that matches
 	var found *ocispec.Descriptor
-	for i := range idx.Manifests {
-		if string(idx.Manifests[i].Digest) == digest {
-			found = &idx.Manifests[i]
-			break
+	_ = s.oci.Tags(s.ctx, "", func(tags []string) error {
+		for _, t := range tags {
+			desc, err := s.oci.Resolve(s.ctx, t)
+			if err == nil && desc.Digest.String() == digestStr {
+				found = &desc
+				return fmt.Errorf("found") // break
+			}
 		}
-	}
+		return nil
+	})
+
 	if found == nil {
-		return fmt.Errorf("digest %q not found in index", digest)
+		return fmt.Errorf("digest %q not found", digestStr)
 	}
 
-	// Remove any existing entry with the target tag.
-	filtered := make([]ocispec.Descriptor, 0, len(idx.Manifests))
-	for _, d := range idx.Manifests {
-		if d.Annotations[annotationRefName] != tag {
-			filtered = append(filtered, d)
-		}
-	}
-
-	// Add a new descriptor with the tag (deep copy annotations to avoid aliasing).
-	desc := *found
-	desc.Annotations = make(map[string]string)
-	for k, v := range found.Annotations {
-		desc.Annotations[k] = v
-	}
-	desc.Annotations[annotationRefName] = tag
-	filtered = append(filtered, desc)
-	idx.Manifests = filtered
-
-	return s.writeIndex(idx)
+	return s.oci.Tag(s.ctx, *found, tag)
 }
 
-// DeleteCheckpoint removes a manifest entry from the index by digest.
-// Blobs are not deleted; garbage collection handles that separately.
-func (s *LocalStore) DeleteCheckpoint(digest string) error {
-	idx, err := s.readIndex()
+// DeleteCheckpoint removes a manifest and its tags from the store.
+func (s *LocalStore) DeleteCheckpoint(digestStr string) error {
+	// Find and untag all tags pointing to this digest
+	var tagsToRemove []string
+	_ = s.oci.Tags(s.ctx, "", func(tags []string) error {
+		for _, t := range tags {
+			desc, err := s.oci.Resolve(s.ctx, t)
+			if err == nil && desc.Digest.String() == digestStr {
+				tagsToRemove = append(tagsToRemove, t)
+			}
+		}
+		return nil
+	})
+
+	if len(tagsToRemove) == 0 {
+		return fmt.Errorf("digest %q not found", digestStr)
+	}
+
+	for _, t := range tagsToRemove {
+		if err := s.oci.Untag(s.ctx, t); err != nil {
+			return fmt.Errorf("untagging %s: %w", t, err)
+		}
+	}
+
+	return nil
+}
+
+// OCI returns the underlying oras OCI store for direct use (e.g. oras.Copy).
+func (s *LocalStore) OCI() *oci.Store {
+	return s.oci
+}
+
+// pushIfNotExists pushes a blob only if it doesn't already exist in the store.
+func (s *LocalStore) pushIfNotExists(desc ocispec.Descriptor, data []byte) error {
+	exists, err := s.oci.Exists(s.ctx, desc)
 	if err != nil {
 		return err
 	}
-
-	filtered := make([]ocispec.Descriptor, 0, len(idx.Manifests))
-	found := false
-	for _, d := range idx.Manifests {
-		if string(d.Digest) == digest {
-			found = true
-			continue
-		}
-		filtered = append(filtered, d)
+	if exists {
+		return nil
 	}
-	if !found {
-		return fmt.Errorf("digest %q not found in index", digest)
-	}
+	return s.oci.Push(s.ctx, desc, bytes.NewReader(data))
+}
 
-	idx.Manifests = filtered
-	return s.writeIndex(idx)
+// fetchBlob reads a complete blob by descriptor.
+func (s *LocalStore) fetchBlob(desc ocispec.Descriptor) ([]byte, error) {
+	rc, err := s.oci.Fetch(s.ctx, desc)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
 }
