@@ -27,7 +27,7 @@ brews:
   - repository:
       owner: kajogo777
       name: bento
-      directory: Formula
+    folder: Formula
     homepage: https://github.com/kajogo777/bento
     description: "Portable agent workspaces. Save, ship, restore."
     license: MIT
