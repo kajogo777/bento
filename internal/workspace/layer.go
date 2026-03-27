@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // PackLayer creates a tar.gz archive from the given files. The file paths must
@@ -16,7 +17,8 @@ import (
 // paths relative to the workspace root.
 func PackLayer(workDir string, files []string) ([]byte, error) {
 	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
+	gw, _ := gzip.NewWriterLevel(&buf, gzip.DefaultCompression)
+	gw.OS = 0xFF // unknown OS - avoid platform-dependent header
 	tw := tar.NewWriter(gw)
 
 	for _, file := range files {
@@ -33,6 +35,13 @@ func PackLayer(workDir string, files []string) ([]byte, error) {
 			return nil, fmt.Errorf("header %s: %w", normalized, err)
 		}
 		header.Name = normalized
+		// Zero out timestamps so identical file content produces identical
+		// archives regardless of when the file was last modified. This
+		// ensures round-trip idempotency: save → restore → save yields
+		// the same layer digests.
+		header.ModTime = time.Time{}
+		header.AccessTime = time.Time{}
+		header.ChangeTime = time.Time{}
 
 		if err := tw.WriteHeader(header); err != nil {
 			return nil, fmt.Errorf("write header %s: %w", normalized, err)

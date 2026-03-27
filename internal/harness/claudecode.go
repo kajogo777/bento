@@ -59,6 +59,7 @@ func (c ClaudeCode) Layers() []LayerDef {
 			},
 			MediaType: "application/vnd.bento.layer.project.v1.tar+gzip",
 			Frequency: ChangesOften,
+			CatchAll:  true,
 		},
 	}
 }

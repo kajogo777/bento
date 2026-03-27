@@ -33,13 +33,12 @@ func newInitCmd() *cobra.Command {
 			// Detect harness
 			var h harness.Harness
 			if flagHarness != "" && flagHarness != "auto" {
-				// TODO: look up by name
-				h = harness.Detect(dir)
+				h = harness.DetectSingle(dir, flagHarness)
+				fmt.Printf("Using agent: %s\n", h.Name())
 			} else {
 				h = harness.Detect(dir)
+				fmt.Printf("Detected agent: %s\n", h.Name())
 			}
-
-			fmt.Printf("Detected agent: %s\n", h.Name())
 
 			// Build config
 			cfg := &config.BentoConfig{

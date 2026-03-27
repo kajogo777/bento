@@ -75,9 +75,8 @@ func TestDetect_Fallback(t *testing.T) {
 	}
 }
 
-func TestDetect_Priority_ClaudeCodeOverCodex(t *testing.T) {
+func TestDetect_MultipleAgents_Composite(t *testing.T) {
 	dir := t.TempDir()
-	// Create both .claude and .codex; ClaudeCode should win (first in list).
 	if err := os.Mkdir(filepath.Join(dir, ".claude"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -86,8 +85,27 @@ func TestDetect_Priority_ClaudeCodeOverCodex(t *testing.T) {
 	}
 
 	h := Detect(dir)
+	if h.Name() != "claude-code+codex" {
+		t.Fatalf("expected composite claude-code+codex, got %s", h.Name())
+	}
+	layers := h.Layers()
+	if len(layers) < 4 {
+		t.Fatalf("expected at least 4 layers (2 agent + deps + project), got %d", len(layers))
+	}
+}
+
+func TestDetectSingle(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	h := DetectSingle(dir, "claude-code")
 	if h.Name() != "claude-code" {
-		t.Fatalf("expected claudecode to win priority, got %s", h.Name())
+		t.Fatalf("expected claude-code, got %s", h.Name())
 	}
 }
 

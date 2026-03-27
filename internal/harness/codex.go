@@ -40,6 +40,7 @@ func (c Codex) Layers() []LayerDef {
 			Patterns:  commonSourcePatterns(),
 			MediaType: "application/vnd.bento.layer.project.v1.tar+gzip",
 			Frequency: ChangesOften,
+			CatchAll:  true,
 		},
 	}
 }

@@ -14,6 +14,7 @@ type LayerDef struct {
 	Patterns  []string
 	MediaType string
 	Frequency ChangeFrequency
+	CatchAll  bool // if true, unmatched files fall into this layer
 }
 
 // SessionConfig holds metadata extracted from the workspace.

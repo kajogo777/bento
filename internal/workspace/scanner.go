@@ -48,11 +48,26 @@ func (s *Scanner) Scan() (map[string][]string, error) {
 			return nil
 		}
 
+		matched := false
 		for _, layer := range s.layers {
 			for _, pattern := range layer.Patterns {
 				if matchesPattern(pattern, rel) {
 					result[layer.Name] = append(result[layer.Name], rel)
-					return nil
+					matched = true
+					break
+				}
+			}
+			if matched {
+				break
+			}
+		}
+
+		// Assign unmatched files to the catch-all layer (typically project).
+		if !matched {
+			for _, layer := range s.layers {
+				if layer.CatchAll {
+					result[layer.Name] = append(result[layer.Name], rel)
+					break
 				}
 			}
 		}
