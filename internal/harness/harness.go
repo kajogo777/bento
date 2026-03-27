@@ -140,6 +140,7 @@ var CommonSourcePatterns = []string{
 	".gitignore", ".gitattributes",
 	".env.example", ".env.template",
 	".mcp.json",
+	"**", // catch-all: capture any remaining files not matched by other patterns
 }
 
 // CommonIgnorePatterns returns file patterns that should be excluded from all layers.
