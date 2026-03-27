@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/bentoci/bento/internal/config"
+	"github.com/bentoci/bento/internal/manifest"
 )
 
 // YAMLHarness implements the Harness interface from an inline YAML configuration.
@@ -38,10 +39,14 @@ func (y *YAMLHarness) Detect(workDir string) bool {
 func (y *YAMLHarness) Layers() []LayerDef {
 	layers := make([]LayerDef, 0, len(y.cfg.Layers))
 	for _, l := range y.cfg.Layers {
+		mediaType := l.MediaType
+		if mediaType == "" {
+			mediaType = manifest.MediaTypeForLayer(l.Name)
+		}
 		layers = append(layers, LayerDef{
 			Name:      l.Name,
 			Patterns:  l.Patterns,
-			MediaType: l.MediaType,
+			MediaType: mediaType,
 			Frequency: mapFrequency(l.Frequency),
 		})
 	}
@@ -69,14 +74,14 @@ func (y *YAMLHarness) Ignore() []string {
 	if len(y.cfg.Ignore) > 0 {
 		return y.cfg.Ignore
 	}
-	return commonIgnorePatterns()
+	return CommonIgnorePatterns
 }
 
 func (y *YAMLHarness) SecretPatterns() []string {
 	if len(y.cfg.SecretPatterns) > 0 {
 		return y.cfg.SecretPatterns
 	}
-	return commonSecretPatterns()
+	return CommonSecretPatterns
 }
 
 func (y *YAMLHarness) DefaultHooks() map[string]string {

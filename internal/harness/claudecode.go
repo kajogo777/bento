@@ -23,44 +23,11 @@ func (c ClaudeCode) Detect(workDir string) bool {
 }
 
 func (c ClaudeCode) Layers() []LayerDef {
-	// Order matters: scanner assigns files to the FIRST matching layer.
-	// Agent and deps patterns must come before the broad project globs,
-	// otherwise **/*.json etc. would capture .claude/ and node_modules/ files.
+	// Order: agent -> deps -> project (first-match-wins in scanner).
 	return []LayerDef{
-		{
-			Name:      "agent",
-			Patterns:  []string{"CLAUDE.md", ".claude/**"},
-			MediaType: "application/vnd.bento.layer.agent.v1.tar+gzip",
-			Frequency: ChangesOften,
-		},
-		{
-			Name:      "deps",
-			Patterns:  []string{"node_modules/**", ".venv/**", "vendor/**", ".tool-versions"},
-			MediaType: "application/vnd.bento.layer.deps.v1.tar+gzip",
-			Frequency: ChangesRarely,
-		},
-		{
-			Name: "project",
-			Patterns: []string{
-				"**/*.go", "**/*.py", "**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx",
-				"**/*.rs", "**/*.java", "**/*.c", "**/*.cpp", "**/*.h",
-				"**/*.html", "**/*.css", "**/*.scss",
-				"**/*.sql", "**/*.sh", "**/*.bash",
-				"**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.xml",
-				"**/*.md", "**/*.txt", "**/*.csv",
-				"Makefile", "Dockerfile", "docker-compose*.yaml",
-				"go.mod", "go.sum",
-				"package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-				"pyproject.toml", "requirements*.txt", "Pipfile", "Pipfile.lock",
-				"Cargo.toml", "Cargo.lock",
-				".gitignore", ".gitattributes",
-				".env.example", ".env.template",
-				".mcp.json",
-			},
-			MediaType: "application/vnd.bento.layer.project.v1.tar+gzip",
-			Frequency: ChangesOften,
-			CatchAll:  true,
-		},
+		AgentLayer([]string{"CLAUDE.md", ".claude/**"}),
+		DepsLayer(append(CommonDepsPatterns, ".tool-versions")),
+		ProjectLayer(CommonSourcePatterns),
 	}
 }
 
@@ -86,11 +53,11 @@ func (c ClaudeCode) SessionConfig(workDir string) (*SessionConfig, error) {
 }
 
 func (c ClaudeCode) Ignore() []string {
-	return commonIgnorePatterns()
+	return append(CommonIgnorePatterns, ".claude/credentials", ".claude/oauth_tokens")
 }
 
 func (c ClaudeCode) SecretPatterns() []string {
-	return commonSecretPatterns()
+	return CommonSecretPatterns
 }
 
 func (c ClaudeCode) DefaultHooks() map[string]string {
@@ -106,49 +73,4 @@ func execGit(workDir string, args ...string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
-}
-
-// commonIgnorePatterns returns the default ignore patterns shared across harnesses.
-func commonIgnorePatterns() []string {
-	return []string{
-		".env", ".env.local", ".env.*.local",
-		".claude/credentials", ".claude/oauth_tokens",
-		"*.pem", "*.key", "*.p12", "token.json", "credentials",
-		".DS_Store", "Thumbs.db",
-		"*.swp", "*.swo", "*~",
-		".git/**", "__pycache__/**", "*.pyc",
-		"dist/**", "build/**",
-	}
-}
-
-// commonSecretPatterns returns the default secret-detection regex patterns.
-func commonSecretPatterns() []string {
-	return []string{
-		`(?i)AKIA[0-9A-Z]{16}`,
-		`(?i)sk-[a-zA-Z0-9]{20,}`,
-		`ghp_[a-zA-Z0-9]{36}`,
-		`glpat-[a-zA-Z0-9\-]{20,}`,
-		`-----BEGIN (RSA |EC )?PRIVATE KEY`,
-		`(?i)(password|passwd|pwd)\s*[:=]`,
-	}
-}
-
-// commonSourcePatterns returns the default source file glob patterns.
-func commonSourcePatterns() []string {
-	return []string{
-		"**/*.go", "**/*.py", "**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx",
-		"**/*.rs", "**/*.java", "**/*.c", "**/*.cpp", "**/*.h",
-		"**/*.html", "**/*.css", "**/*.scss",
-		"**/*.sql", "**/*.sh", "**/*.bash",
-		"**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.xml",
-		"**/*.md", "**/*.txt", "**/*.csv",
-		"Makefile", "Dockerfile", "docker-compose*.yaml",
-		"go.mod", "go.sum",
-		"package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-		"pyproject.toml", "requirements*.txt", "Pipfile", "Pipfile.lock",
-		"Cargo.toml", "Cargo.lock",
-		".gitignore", ".gitattributes",
-		".env.example", ".env.template",
-		".mcp.json",
-	}
 }

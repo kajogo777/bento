@@ -21,55 +21,26 @@ func (c Codex) Detect(workDir string) bool {
 }
 
 func (c Codex) Layers() []LayerDef {
-	// Order matters: agent and deps before project (first-match-wins in scanner).
 	return []LayerDef{
-		{
-			Name:      "agent",
-			Patterns:  []string{"AGENTS.md", ".codex/**"},
-			MediaType: "application/vnd.bento.layer.agent.v1.tar+gzip",
-			Frequency: ChangesOften,
-		},
-		{
-			Name:      "deps",
-			Patterns:  []string{"node_modules/**", ".venv/**", "vendor/**"},
-			MediaType: "application/vnd.bento.layer.deps.v1.tar+gzip",
-			Frequency: ChangesRarely,
-		},
-		{
-			Name:      "project",
-			Patterns:  commonSourcePatterns(),
-			MediaType: "application/vnd.bento.layer.project.v1.tar+gzip",
-			Frequency: ChangesOften,
-			CatchAll:  true,
-		},
+		AgentLayer([]string{"AGENTS.md", ".codex/**"}),
+		DepsLayer(CommonDepsPatterns),
+		ProjectLayer(CommonSourcePatterns),
 	}
 }
 
 func (c Codex) SessionConfig(workDir string) (*SessionConfig, error) {
-	cfg := &SessionConfig{
-		Agent:  c.Name(),
-		Status: "paused",
-	}
-
+	cfg := &SessionConfig{Agent: c.Name(), Status: "paused"}
 	if out, err := execGit(workDir, "rev-parse", "HEAD"); err == nil {
 		cfg.GitSha = out
 	}
-
 	if out, err := execGit(workDir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
 		cfg.GitBranch = out
 	}
-
 	return cfg, nil
 }
 
-func (c Codex) Ignore() []string {
-	return commonIgnorePatterns()
-}
-
-func (c Codex) SecretPatterns() []string {
-	return commonSecretPatterns()
-}
-
+func (c Codex) Ignore() []string         { return CommonIgnorePatterns }
+func (c Codex) SecretPatterns() []string  { return CommonSecretPatterns }
 func (c Codex) DefaultHooks() map[string]string {
 	return map[string]string{
 		"post_restore": "test -f .codex/setup.sh && sh .codex/setup.sh || true",

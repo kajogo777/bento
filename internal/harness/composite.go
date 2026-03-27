@@ -1,6 +1,10 @@
 package harness
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/bentoci/bento/internal/manifest"
+)
 
 // CompositeHarness combines multiple detected agent harnesses into one.
 // Agent layers from all detected harnesses are merged, deps are deduplicated,
@@ -66,7 +70,7 @@ func (c *CompositeHarness) Layers() []LayerDef {
 		layers = append(layers, LayerDef{
 			Name:      "deps",
 			Patterns:  depsPatterns,
-			MediaType: "application/vnd.bento.layer.deps.v1.tar+gzip",
+			MediaType: manifest.MediaTypeDeps,
 			Frequency: ChangesRarely,
 		})
 	}
@@ -75,14 +79,7 @@ func (c *CompositeHarness) Layers() []LayerDef {
 	if projectLayer.Name != "" {
 		layers = append(layers, projectLayer)
 	} else {
-		// Fallback project layer
-		layers = append(layers, LayerDef{
-			Name:      "project",
-			Patterns:  commonSourcePatterns(),
-			MediaType: "application/vnd.bento.layer.project.v1.tar+gzip",
-			Frequency: ChangesOften,
-			CatchAll:  true,
-		})
+		layers = append(layers, ProjectLayer(CommonSourcePatterns))
 	}
 
 	return layers
