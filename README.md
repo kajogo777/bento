@@ -139,7 +139,7 @@ Use `--harness <name>` to force a single agent. This overrides auto-detection an
 |---------|:-----------:|:-----:|:--------:|:--------:|:------:|
 | Auto-detection | `.claude/`, `CLAUDE.md` | `.codex/` | `.opencode/`, `opencode.json` | `SOUL.md`, `IDENTITY.md` | `.cursor/`, `.cursorrules` |
 | Agent memory | CLAUDE.md, `.claude/**` | AGENTS.md, `.codex/**` | AGENTS.md, `.opencode/**` | SOUL.md, MEMORY.md, `memory/**` | `.cursor/rules/**` |
-| Session capture | `~/.claude/projects/<hash>/` | `~/.codex/` | `~/.local/share/opencode/` | `~/.openclaw/` | - |
+| Session capture | `~/.claude/projects/<hash>/` | `~/.codex/sessions/` (filtered by cwd) | `~/.local/share/opencode/storage/session/<hash>/` | `~/.openclaw/agents/<id>/sessions/` | `~/Library/.../Cursor/workspaceStorage/<hash>/` |
 | Credential exclusion | `.claude/credentials`, `oauth_tokens` | `auth.json` | `auth.json` | `.env`, `openclaw.json` | - |
 | Version detection | `claude --version` | - | `opencode --version` | - | - |
 | Post-restore hook | - | `.codex/setup.sh` | - | - | - |

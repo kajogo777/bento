@@ -1,8 +1,10 @@
 package harness
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Codex detects and configures the Codex agent framework.
@@ -33,20 +35,100 @@ func (c Codex) SessionConfig(workDir string) (*SessionConfig, error) {
 func (c Codex) Ignore() []string {
 	return append(CommonIgnorePatterns, CommonCredentialFiles...)
 }
-func (c Codex) SecretPatterns() []string  { return CommonSecretPatterns }
+func (c Codex) SecretPatterns() []string { return CommonSecretPatterns }
 func (c Codex) DefaultHooks() map[string]string {
 	return map[string]string{
 		"post_restore": "test -f .codex/setup.sh && sh .codex/setup.sh || true",
 	}
 }
 
-func (c Codex) ExternalPaths(_ string) []ExternalPathDef {
-	source := ExpandHome("~/.codex")
-	if info, err := os.Stat(source); err != nil || !info.IsDir() {
+// codexSessionRollouts finds rollout JSONL files whose cwd matches workDir.
+// Codex stores sessions flat in ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
+// with a session_meta first line containing "cwd".
+func codexSessionRollouts(codexHome, workDir string) []string {
+	absWork, err := filepath.Abs(workDir)
+	if err != nil {
 		return nil
 	}
-	return []ExternalPathDef{{
-		Source:        "~/.codex",
-		ArchivePrefix: "__external__/codex/",
-	}}
+	if resolved, err := filepath.EvalSymlinks(absWork); err == nil {
+		absWork = resolved
+	}
+
+	sessionsDir := filepath.Join(codexHome, "sessions")
+	if info, err := os.Stat(sessionsDir); err != nil || !info.IsDir() {
+		return nil
+	}
+
+	var matches []string
+	_ = filepath.WalkDir(sessionsDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+		// Read first line to check cwd
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		// Find end of first line
+		idx := strings.IndexByte(string(data), '\n')
+		var firstLine string
+		if idx >= 0 {
+			firstLine = string(data[:idx])
+		} else {
+			firstLine = string(data)
+		}
+		var meta struct {
+			CWD string `json:"cwd"`
+		}
+		if json.Unmarshal([]byte(firstLine), &meta) == nil && meta.CWD != "" {
+			cwdResolved := meta.CWD
+			if r, err := filepath.EvalSymlinks(meta.CWD); err == nil {
+				cwdResolved = r
+			}
+			if cwdResolved == absWork || strings.HasPrefix(cwdResolved, absWork+string(filepath.Separator)) {
+				matches = append(matches, path)
+			}
+		}
+		return nil
+	})
+	return matches
+}
+
+func (c Codex) ExternalPaths(workDir string) []ExternalPathDef {
+	codexHome := os.Getenv("CODEX_HOME")
+	if codexHome == "" {
+		codexHome = ExpandHome("~/.codex")
+	}
+	if info, err := os.Stat(codexHome); err != nil || !info.IsDir() {
+		return nil
+	}
+
+	// Find project-specific rollout files
+	rollouts := codexSessionRollouts(codexHome, workDir)
+	if len(rollouts) == 0 {
+		return nil
+	}
+
+	// Capture the sessions directory (contains the matching rollouts)
+	// We capture the whole sessions dir and rely on the scanner to include
+	// only the matching date subdirectories.
+	// For simplicity, capture the parent dirs of matching rollouts.
+	seen := make(map[string]bool)
+	var defs []ExternalPathDef
+	for _, r := range rollouts {
+		dir := filepath.Dir(r)
+		if !seen[dir] {
+			seen[dir] = true
+			// Use relative path from codexHome for archive prefix
+			rel, _ := filepath.Rel(codexHome, dir)
+			defs = append(defs, ExternalPathDef{
+				Source:        dir,
+				ArchivePrefix: "__external__/codex/" + rel + "/",
+			})
+		}
+	}
+	return defs
 }

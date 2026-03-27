@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 )
@@ -46,14 +47,73 @@ func (o OpenClaw) Ignore() []string {
 func (o OpenClaw) SecretPatterns() []string  { return CommonSecretPatterns }
 func (o OpenClaw) DefaultHooks() map[string]string { return nil }
 
-func (o OpenClaw) ExternalPaths(_ string) []ExternalPathDef {
-	// OpenClaw stores global state in ~/.openclaw/
-	source := ExpandHome("~/.openclaw")
-	if info, err := os.Stat(source); err != nil || !info.IsDir() {
+// openClawAgentForWorkspace tries to find the OpenClaw agent whose workspace
+// matches the given workDir by parsing ~/.openclaw/openclaw.json.
+func openClawAgentForWorkspace(openclawHome, workDir string) string {
+	absWork, err := filepath.Abs(workDir)
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(absWork); err == nil {
+		absWork = resolved
+	}
+
+	configFile := filepath.Join(openclawHome, "openclaw.json")
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return ""
+	}
+
+	// OpenClaw config has agents with workspace paths
+	var config struct {
+		Agents map[string]struct {
+			Workspace string `json:"workspace"`
+		} `json:"agents"`
+	}
+	if json.Unmarshal(data, &config) != nil {
+		return ""
+	}
+
+	for id, agent := range config.Agents {
+		ws := agent.Workspace
+		if ws == "" {
+			ws = filepath.Join(openclawHome, "workspace")
+		}
+		ws = ExpandHome(ws)
+		if resolved, err := filepath.EvalSymlinks(ws); err == nil {
+			ws = resolved
+		}
+		if ws == absWork {
+			return id
+		}
+	}
+	return ""
+}
+
+func (o OpenClaw) ExternalPaths(workDir string) []ExternalPathDef {
+	openclawHome := os.Getenv("OPENCLAW_STATE_DIR")
+	if openclawHome == "" {
+		openclawHome = ExpandHome("~/.openclaw")
+	}
+	if info, err := os.Stat(openclawHome); err != nil || !info.IsDir() {
 		return nil
 	}
+
+	// Try to find the agent scoped to this workspace
+	agentID := openClawAgentForWorkspace(openclawHome, workDir)
+	if agentID == "" {
+		// Can't determine project scope; don't capture everything blindly.
+		// Users can use external_paths in bento.yaml as escape hatch.
+		return nil
+	}
+
+	sessionsDir := filepath.Join(openclawHome, "agents", agentID, "sessions")
+	if info, err := os.Stat(sessionsDir); err != nil || !info.IsDir() {
+		return nil
+	}
+
 	return []ExternalPathDef{{
-		Source:        "~/.openclaw",
-		ArchivePrefix: "__external__/openclaw/",
+		Source:        sessionsDir,
+		ArchivePrefix: "__external__/openclaw/sessions/",
 	}}
 }
