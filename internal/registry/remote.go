@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/opencontainers/go-digest"
@@ -188,9 +189,17 @@ func newRemoteRepo(ctx context.Context, ref string) (*remote.Repository, error) 
 		return nil, fmt.Errorf("invalid remote reference %q: %w", ref, err)
 	}
 
-	// Use plaintext HTTP for localhost/loopback registries
+	// Use plaintext HTTP for local/development registries
 	host := repo.Reference.Host()
-	if strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1") {
+	if strings.HasPrefix(host, "localhost") ||
+		strings.HasPrefix(host, "127.0.0.1") ||
+		strings.HasPrefix(host, "host.docker.internal") ||
+		strings.HasPrefix(host, "0.0.0.0") {
+		repo.PlainHTTP = true
+	}
+
+	// Also support BENTO_PLAINHTTP=1 for other non-TLS registries
+	if os.Getenv("BENTO_PLAINHTTP") == "1" {
 		repo.PlainHTTP = true
 	}
 

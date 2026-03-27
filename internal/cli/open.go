@@ -39,17 +39,34 @@ func newOpenCmd() *cobra.Command {
 				return err
 			}
 
-			// Parse ref
-			storeName, tag, err := registry.ParseRef(ref)
-			if err != nil {
-				return err
-			}
-
-			// Determine store path. Use the source workspace (flagDir) for config,
-			// not the target dir (which may be a different location).
+			// Determine if ref is a full registry URL (contains /) or a local ref
 			sourceDir, _ := filepath.Abs(flagDir)
-			if storeName == "" {
-				storeName = filepath.Base(sourceDir)
+			isRemoteRef := strings.Contains(ref, "/")
+
+			var storeName, tag string
+			var remoteRef string
+
+			if isRemoteRef {
+				// Full registry ref like "ghcr.io/myorg/ws/project:cp-1"
+				if idx := strings.LastIndex(ref, ":"); idx > 0 && !strings.Contains(ref[idx:], "/") {
+					remoteRef = ref[:idx]
+					tag = ref[idx+1:]
+				} else {
+					remoteRef = ref
+					tag = "latest"
+				}
+				// Use last path segment as local cache name
+				parts := strings.Split(remoteRef, "/")
+				storeName = parts[len(parts)-1]
+			} else {
+				var parseErr error
+				storeName, tag, parseErr = registry.ParseRef(ref)
+				if parseErr != nil {
+					return parseErr
+				}
+				if storeName == "" {
+					storeName = filepath.Base(sourceDir)
+				}
 			}
 
 			storePath := ""
@@ -68,16 +85,16 @@ func newOpenCmd() *cobra.Command {
 			// Load checkpoint (try local first, fall back to remote pull)
 			manifestBytes, _, layers, err := store.LoadCheckpoint(tag)
 			if err != nil {
-				// If local load failed and a remote is configured, try pulling
-				remoteRef := ""
-				if cfgErr == nil && cfg.Remote != "" {
-					remoteRef = cfg.Remote + "/" + storeName
+				// Determine remote to pull from
+				pullRef := remoteRef
+				if pullRef == "" && cfgErr == nil && cfg.Remote != "" {
+					pullRef = cfg.Remote + "/" + storeName
 				}
-				if remoteRef != "" {
-					fmt.Printf("Not found locally, pulling from %s...\n", remoteRef)
+				if pullRef != "" {
+					fmt.Printf("Pulling from %s:%s...\n", pullRef, tag)
 					localStore := store.(*registry.LocalStore)
 					ctx := context.Background()
-					if pullErr := registry.PullFromRemote(ctx, localStore, remoteRef, tag); pullErr != nil {
+					if pullErr := registry.PullFromRemote(ctx, localStore, pullRef, tag); pullErr != nil {
 						return fmt.Errorf("checkpoint %s not found locally and pull failed: %w", ref, pullErr)
 					}
 					// Retry local load
