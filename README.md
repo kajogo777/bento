@@ -312,7 +312,7 @@ Yes. Checkpoints are portable across macOS, Linux, and Windows.
   - [ ] OpenClaw
   - [ ] OpenCode
   - [ ] GitHub Copilot
-- [ ] Remote registry push/pull
+- [x] Remote registry push/pull
 - [ ] Store schemes (`oci://`, `file://`)
 - [ ] `bento attach` (OCI referrers for diffs, test results, logs)
 - [ ] MCP server (agents checkpoint themselves)

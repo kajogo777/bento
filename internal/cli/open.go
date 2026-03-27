@@ -65,10 +65,29 @@ func newOpenCmd() *cobra.Command {
 				return fmt.Errorf("opening store: %w", err)
 			}
 
-			// Load checkpoint
+			// Load checkpoint (try local first, fall back to remote pull)
 			manifestBytes, _, layers, err := store.LoadCheckpoint(tag)
 			if err != nil {
-				return fmt.Errorf("loading checkpoint %s: %w", ref, err)
+				// If local load failed and a remote is configured, try pulling
+				remoteRef := ""
+				if cfgErr == nil && cfg.Remote != "" {
+					remoteRef = cfg.Remote + "/" + storeName
+				}
+				if remoteRef != "" {
+					fmt.Printf("Not found locally, pulling from %s...\n", remoteRef)
+					localStore := store.(*registry.LocalStore)
+					ctx := context.Background()
+					if pullErr := registry.PullFromRemote(ctx, localStore, remoteRef, tag); pullErr != nil {
+						return fmt.Errorf("checkpoint %s not found locally and pull failed: %w", ref, pullErr)
+					}
+					// Retry local load
+					manifestBytes, _, layers, err = store.LoadCheckpoint(tag)
+					if err != nil {
+						return fmt.Errorf("loading checkpoint %s after pull: %w", ref, err)
+					}
+				} else {
+					return fmt.Errorf("loading checkpoint %s: %w", ref, err)
+				}
 			}
 
 			// Parse manifest to get layer info
