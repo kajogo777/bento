@@ -22,8 +22,8 @@ func (a Aider) Detect(workDir string) bool {
 
 func (a Aider) Layers() []LayerDef {
 	return []LayerDef{
-		AgentLayer([]string{".aider*", ".aider.tags.cache.v3/**"}),
 		DepsLayer(CommonDepsPatterns),
+		AgentLayer([]string{".aider*", ".aider.tags.cache.v3/**"}),
 		ProjectLayer(CommonSourcePatterns),
 	}
 }

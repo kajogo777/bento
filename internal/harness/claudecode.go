@@ -23,10 +23,12 @@ func (c ClaudeCode) Detect(workDir string) bool {
 }
 
 func (c ClaudeCode) Layers() []LayerDef {
-	// Order: agent -> deps -> project (first-match-wins in scanner).
+	// Order: deps (bottom) -> agent -> project (top). Matches OCI convention
+	// (least-changing at bottom). All three must come before project for
+	// first-match-wins scanning.
 	return []LayerDef{
-		AgentLayer([]string{"CLAUDE.md", ".claude/**"}),
 		DepsLayer(append(CommonDepsPatterns, ".tool-versions")),
+		AgentLayer([]string{"CLAUDE.md", ".claude/**"}),
 		ProjectLayer(CommonSourcePatterns),
 	}
 }

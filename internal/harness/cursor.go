@@ -19,8 +19,8 @@ func (c Cursor) Detect(workDir string) bool {
 
 func (c Cursor) Layers() []LayerDef {
 	return []LayerDef{
-		AgentLayer([]string{".cursor/rules/**", ".cursor/mcp.json", ".cursorrules"}),
 		DepsLayer(CommonDepsPatterns),
+		AgentLayer([]string{".cursor/rules/**", ".cursor/mcp.json", ".cursorrules"}),
 		ProjectLayer(CommonSourcePatterns),
 	}
 }

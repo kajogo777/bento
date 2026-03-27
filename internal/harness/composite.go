@@ -30,26 +30,23 @@ func (c *CompositeHarness) Detect(workDir string) bool {
 }
 
 func (c *CompositeHarness) Layers() []LayerDef {
-	// Collect agent layers from all harnesses (each gets its own named layer).
-	var layers []LayerDef
+	// OCI convention: deps (bottom) -> agent(s) -> project (top).
 	seenDepsPatterns := make(map[string]bool)
 	var depsPatterns []string
+	var agentLayers []LayerDef
 	var projectLayer LayerDef
 
 	for _, h := range c.harnesses {
 		for _, ld := range h.Layers() {
 			switch {
 			case ld.Name == "agent":
-				// Rename to agent-<harness> for clarity
-				agentLayer := LayerDef{
+				agentLayers = append(agentLayers, LayerDef{
 					Name:      "agent-" + h.Name(),
 					Patterns:  ld.Patterns,
 					MediaType: ld.MediaType,
 					Frequency: ld.Frequency,
-				}
-				layers = append(layers, agentLayer)
+				})
 			case ld.Name == "deps":
-				// Merge deps patterns, deduplicating
 				for _, p := range ld.Patterns {
 					if !seenDepsPatterns[p] {
 						seenDepsPatterns[p] = true
@@ -57,7 +54,6 @@ func (c *CompositeHarness) Layers() []LayerDef {
 					}
 				}
 			case ld.CatchAll:
-				// Keep the broadest project layer (first one wins)
 				if projectLayer.Name == "" {
 					projectLayer = ld
 				}
@@ -65,7 +61,9 @@ func (c *CompositeHarness) Layers() []LayerDef {
 		}
 	}
 
-	// Add merged deps layer
+	var layers []LayerDef
+
+	// Deps layer first (bottom - changes rarely)
 	if len(depsPatterns) > 0 {
 		layers = append(layers, LayerDef{
 			Name:      "deps",
@@ -75,7 +73,10 @@ func (c *CompositeHarness) Layers() []LayerDef {
 		})
 	}
 
-	// Add project catch-all layer last
+	// Agent layers in the middle
+	layers = append(layers, agentLayers...)
+
+	// Project catch-all layer last (top - changes most)
 	if projectLayer.Name != "" {
 		layers = append(layers, projectLayer)
 	} else {

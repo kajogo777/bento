@@ -86,9 +86,9 @@ bento init
 # 3. Save a checkpoint
 bento save -m "refactored auth module"
 # Scanning workspace...
+#   deps:     1204 files, 89MB (unchanged, reusing sha256:a1b2...)
 #   agent:    8 files, 64KB (changed)
 #   project:  42 files, 128KB (changed)
-#   deps:     1204 files, 89MB (unchanged, reusing sha256:a1b2...)
 # Secret scan: clean
 # Tagged: cp-1, latest
 

@@ -19,8 +19,8 @@ func (w Windsurf) Detect(workDir string) bool {
 
 func (w Windsurf) Layers() []LayerDef {
 	return []LayerDef{
-		AgentLayer([]string{".windsurf/rules/**", ".windsurf/**"}),
 		DepsLayer(CommonDepsPatterns),
+		AgentLayer([]string{".windsurf/rules/**", ".windsurf/**"}),
 		ProjectLayer(CommonSourcePatterns),
 	}
 }

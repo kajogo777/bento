@@ -8,8 +8,8 @@ func (f Fallback) Detect(_ string) bool    { return true }
 
 func (f Fallback) Layers() []LayerDef {
 	return []LayerDef{
-		AgentLayer(nil),
 		DepsLayer(append(CommonDepsPatterns, "__pycache__/**")),
+		AgentLayer(nil),
 		ProjectLayer(CommonSourcePatterns),
 	}
 }

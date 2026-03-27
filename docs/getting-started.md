@@ -57,17 +57,17 @@ bento save -m "auth refactor complete"
 
 ```
 Scanning workspace...
-  agent:     8 files, 64KB (changed)
   deps:      1204 files, 89MB (unchanged, reusing)
+  agent:     8 files, 64KB (changed)
   project:   42 files, 128KB (changed)
 Secret scan: clean
 Tagged: cp-1, latest
 ```
 
-Bento splits your workspace into layers:
+Bento splits your workspace into layers, ordered from bottom to top in the OCI artifact:
 
+- **deps** -- installed packages like `node_modules` or `.venv` (changes rarely)
 - **agent** -- your agent's memory, plans, and settings
-- **deps** -- installed packages like `node_modules` or `.venv`
 - **project** -- your source code, tests, configs, and any other workspace files
 
 Layers that haven't changed are reused automatically, so your 89MB `node_modules` is stored once, not once per checkpoint. All file types in your workspace are captured -- source code, binaries, images, config files -- nothing is silently excluded.
@@ -172,10 +172,10 @@ bento diff cp-3 cp-5
 ```
 Comparing cp-3 → cp-5
 
+  deps: unchanged (digest sha256:4f4f...)
   agent: changed
     from: sha256:abc1... (64KB)
     to:   sha256:def4... (68KB)
-  deps: unchanged (digest sha256:4f4f...)
   project: changed
     from: sha256:111a... (128KB)
     to:   sha256:222b... (135KB)
@@ -292,9 +292,9 @@ Detected agent: claude-code+codex
 
 ```
 Scanning workspace...
+  deps:              0 files, 32B (empty)
   agent-claude-code: 3 files, 2KB (changed)
   agent-codex:       4 files, 3KB (changed)
-  deps:              0 files, 32B (empty)
   project:           12 files, 45KB (changed)
 ```
 

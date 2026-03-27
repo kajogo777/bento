@@ -22,8 +22,8 @@ func (c Codex) Detect(workDir string) bool {
 
 func (c Codex) Layers() []LayerDef {
 	return []LayerDef{
-		AgentLayer([]string{"AGENTS.md", ".codex/**"}),
 		DepsLayer(CommonDepsPatterns),
+		AgentLayer([]string{"AGENTS.md", ".codex/**"}),
 		ProjectLayer(CommonSourcePatterns),
 	}
 }
