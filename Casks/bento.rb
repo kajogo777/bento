@@ -3,7 +3,7 @@ cask "bento" do
   name "bento"
   desc "Portable agent workspaces. Save, ship, restore."
   homepage "https://github.com/kajogo777/bento"
-  version "0.1.12"
+  version "0.1.13"
 
   livecheck do
     skip "Auto-generated on release."
@@ -14,22 +14,22 @@ cask "bento" do
   on_macos do
     on_intel do
       url "https://github.com/kajogo777/bento/releases/download/v#{version}/bento_#{version}_darwin_amd64.tar.gz"
-      sha256 "71ffe62482b0e891a2ad9dbeb87beeac80f8585732b1dc079e013c44e4275db4"
+      sha256 "2cf39d2ac81b1e208bcb81ffb49404ecb39248b5ba32321d97aff2d61d37a2f0"
     end
     on_arm do
       url "https://github.com/kajogo777/bento/releases/download/v#{version}/bento_#{version}_darwin_arm64.tar.gz"
-      sha256 "45e5b4014bf5c0255e179e137b81d2ecea0ec14f26a6048f5ae318e8f17baa8f"
+      sha256 "83ba0034ff85786097d753d9dad70ce3605fac81f12cdd284fe2d85ec332734d"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/kajogo777/bento/releases/download/v#{version}/bento_#{version}_linux_amd64.tar.gz"
-      sha256 "8002b878bd13a9a3af35ebb2703d253b5bba80b1bcf68f81c3544a0aabc8763c"
+      sha256 "bb272711c0fd29cf2c93952c8ff13020b9f4347145f386d78c98bb8c73c3e95d"
     end
     on_arm do
       url "https://github.com/kajogo777/bento/releases/download/v#{version}/bento_#{version}_linux_arm64.tar.gz"
-      sha256 "cd04eb00606adccf955ca975ce2d8438c993d5359cbbc7294688ca2d9b987119"
+      sha256 "d764fa2bcab82eccd3633de2d6c653ec2ce50d0cff733aed9d8d6099632ba002"
     end
   end
 
