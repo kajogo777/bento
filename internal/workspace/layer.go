@@ -67,6 +67,33 @@ func PackLayer(workDir string, files []string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// ListLayerFilesWithHashes returns file paths and their content sizes from a tar.gz archive.
+// The returned map keys are normalized file paths, values are file sizes (used as a cheap
+// change indicator since identical files have identical sizes in the deterministic tar).
+func ListLayerFilesWithSizes(data []byte) (map[string]int64, error) {
+	gr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("gzip reader: %w", err)
+	}
+	defer gr.Close()
+
+	files := make(map[string]int64)
+	tr := tar.NewReader(gr)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("tar next: %w", err)
+		}
+		if header.Typeflag == tar.TypeReg {
+			files[NormalizePath(header.Name)] = header.Size
+		}
+	}
+	return files, nil
+}
+
 // ListLayerFiles returns the list of file paths contained in a tar.gz archive.
 func ListLayerFiles(data []byte) ([]string, error) {
 	gr, err := gzip.NewReader(bytes.NewReader(data))

@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 
 	"github.com/bentoci/bento/internal/config"
 	"github.com/bentoci/bento/internal/manifest"
 	"github.com/bentoci/bento/internal/registry"
+	"github.com/bentoci/bento/internal/workspace"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 )
 
@@ -47,18 +50,21 @@ func newInspectCmd() *cobra.Command {
 				return fmt.Errorf("opening store: %w", err)
 			}
 
-			manifestBytes, configBytes, _, err := store.LoadCheckpoint(tag)
+			manifestBytes, configBytes, layers, err := store.LoadCheckpoint(tag)
 			if err != nil {
 				return fmt.Errorf("loading checkpoint %s: %w", ref, err)
 			}
 
-			// Parse and display checkpoint info
+			// Parse checkpoint info
 			info, err := manifest.ParseCheckpointInfo(manifestBytes)
 			if err != nil {
 				return fmt.Errorf("parsing manifest: %w", err)
 			}
 
-			// Compute digest as sha256 of the manifest bytes
+			// Parse manifest for layer metadata
+			var m ocispec.Manifest
+			_ = json.Unmarshal(manifestBytes, &m)
+
 			digest := fmt.Sprintf("sha256:%x", sha256.Sum256(manifestBytes))
 
 			fmt.Printf("Checkpoint: %s (sequence %d)\n", tag, info.Sequence)
@@ -74,7 +80,7 @@ func newInspectCmd() *cobra.Command {
 				fmt.Printf("Message:    %s\n", info.Message)
 			}
 
-			// Display config object
+			// Display config
 			if len(configBytes) > 0 {
 				var cfgObj manifest.BentoConfigObj
 				if err := json.Unmarshal(configBytes, &cfgObj); err == nil {
@@ -91,6 +97,31 @@ func newInspectCmd() *cobra.Command {
 					if cfgObj.Environment != nil {
 						fmt.Printf("  Platform:  %s/%s\n", cfgObj.Environment.OS, cfgObj.Environment.Arch)
 					}
+				}
+			}
+
+			// Display layer file trees
+			fmt.Println("\nLayers:")
+			for i, ld := range layers {
+				layerName := fmt.Sprintf("layer-%d", i)
+				layerDigest := ld.Digest
+				if i < len(m.Layers) {
+					if name, ok := m.Layers[i].Annotations[manifest.AnnotationTitle]; ok {
+						layerName = name
+					}
+				}
+
+				files, _ := workspace.ListLayerFiles(ld.Data)
+				sort.Strings(files)
+
+				fmt.Printf("\n  %s (%d files, %s, %s)\n",
+					layerName, len(files), formatSize(len(ld.Data)), truncateDigest(layerDigest))
+
+				for _, f := range files {
+					fmt.Printf("    %s\n", f)
+				}
+				if len(files) == 0 {
+					fmt.Printf("    (empty)\n")
 				}
 			}
 
