@@ -77,7 +77,7 @@ curl -fsSL https://bento.dev/install.sh | sh
 # 1. Initialize in any project directory
 cd my-project
 bento init
-# Detected agent: claude-code (found .claude/)
+# Detected agent: claude-code
 # Created bento.yaml
 # Store: ~/.bento/store (local)
 
@@ -86,8 +86,8 @@ bento init
 # 3. Save a checkpoint
 bento save -m "refactored auth module"
 # Scanning workspace...
-#   project:  42 files, 128KB (changed)
 #   agent:    8 files, 64KB (changed)
+#   project:  42 files, 128KB (changed)
 #   deps:     1204 files, 89MB (unchanged, reusing sha256:a1b2...)
 # Secret scan: clean
 # Tagged: cp-1, latest
@@ -140,7 +140,7 @@ A harness tells bento how a specific agent framework organizes its workspace. Be
 
 ```bash
 bento init
-# Detected agent: claude-code (found .claude/)
+# Detected agent: claude-code
 ```
 
 Supported harnesses:
