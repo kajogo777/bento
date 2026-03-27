@@ -1,4 +1,5 @@
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates git
-COPY bento /usr/local/bin/bento
+ARG TARGETPLATFORM
+COPY ${TARGETPLATFORM}/bento /usr/local/bin/bento
 ENTRYPOINT ["bento"]

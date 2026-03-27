@@ -46,14 +46,14 @@ Bento artifacts are standard OCI artifacts. They work with any OCI-compatible re
 ## Install
 
 ```bash
-# macOS / Linux
+# macOS / Linux (Homebrew)
 brew install kajogo777/bento/bento
-
-# Windows
-scoop install bento
 
 # From source
 go install github.com/kajogo777/bento@latest
+
+# Or download a binary from GitHub Releases
+# https://github.com/kajogo777/bento/releases
 ```
 
 ## Quick Start

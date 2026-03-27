@@ -5,14 +5,14 @@ Bento saves your entire AI agent workspace (code, agent memory, dependencies) so
 ## Install
 
 ```bash
-# macOS / Linux
+# macOS / Linux (Homebrew)
 brew install kajogo777/bento/bento
-
-# Windows
-scoop install bento
 
 # From source
 go install github.com/kajogo777/bento@latest
+
+# Or download a binary from GitHub Releases
+# https://github.com/kajogo777/bento/releases
 ```
 
 Verify it works:

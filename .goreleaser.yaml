@@ -15,27 +15,31 @@ builds:
       - -s -w -X main.version={{.Version}}
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: "bento_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
 
-brews:
+homebrew_casks:
   - repository:
       owner: kajogo777
       name: bento
-    directory: Formula
+    directory: Casks
     homepage: https://github.com/kajogo777/bento
     description: "Portable agent workspaces. Pack, ship, resume."
 
-dockers:
-  - image_templates:
-      - "ghcr.io/kajogo777/bento:{{ .Version }}"
-      - "ghcr.io/kajogo777/bento:latest"
+dockers_v2:
+  - images:
+      - "ghcr.io/kajogo777/bento"
+    tags:
+      - "{{ .Version }}"
+      - "latest"
     dockerfile: Dockerfile.goreleaser
-    goarch: amd64
-    goos: linux
+    platforms:
+      - linux/amd64
 
 checksum:
   name_template: "checksums.txt"
