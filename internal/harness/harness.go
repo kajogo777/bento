@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/kajogo777/bento/internal/manifest"
+	"github.com/kajogo777/bento/internal/secrets"
 )
 
 // ChangeFrequency indicates how often a layer changes.
@@ -152,11 +153,5 @@ var CommonIgnorePatterns = []string{
 }
 
 // CommonSecretPatterns returns regex patterns for detecting secrets in file content.
-var CommonSecretPatterns = []string{
-	`(?i)AKIA[0-9A-Z]{16}`,
-	`(?i)sk-[a-zA-Z0-9]{20,}`,
-	`ghp_[a-zA-Z0-9]{36}`,
-	`glpat-[a-zA-Z0-9\-]{20,}`,
-	`-----BEGIN (RSA |EC )?PRIVATE KEY`,
-	`(?i)(password|passwd|pwd)\s*[:=]\s*[^\s${\}][^\s]*`,
-}
+// CommonSecretPatterns are the default secret detection patterns shared by all harnesses.
+var CommonSecretPatterns = secrets.DefaultPatterns
