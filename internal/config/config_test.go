@@ -90,9 +90,9 @@ func TestLoadDefaults(t *testing.T) {
 		t.Errorf("Sync = %q, want %q", cfg.Sync, "manual")
 	}
 
-	// Hooks timeout should default to 300.
-	if cfg.Hooks.Timeout != 300 {
-		t.Errorf("Hooks.Timeout = %d, want 300", cfg.Hooks.Timeout)
+	// Hooks timeout should be 0 (unset); the runner applies the 300s default.
+	if cfg.Hooks.Timeout != 0 {
+		t.Errorf("Hooks.Timeout = %d, want 0", cfg.Hooks.Timeout)
 	}
 }
 

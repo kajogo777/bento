@@ -10,7 +10,7 @@ import (
 // ClaudeCode detects and configures the Claude Code agent framework.
 type ClaudeCode struct{}
 
-func (c ClaudeCode) Name() string { return "claudecode" }
+func (c ClaudeCode) Name() string { return "claude-code" }
 
 func (c ClaudeCode) Detect(workDir string) bool {
 	if info, err := os.Stat(filepath.Join(workDir, ".claude")); err == nil && info.IsDir() {
@@ -24,12 +24,6 @@ func (c ClaudeCode) Detect(workDir string) bool {
 
 func (c ClaudeCode) Layers() []LayerDef {
 	return []LayerDef{
-		{
-			Name:      "agent",
-			Patterns:  []string{"CLAUDE.md", ".claude/**"},
-			MediaType: "application/vnd.bento.layer.agent.v1",
-			Frequency: ChangesOften,
-		},
 		{
 			Name: "project",
 			Patterns: []string{
@@ -48,13 +42,19 @@ func (c ClaudeCode) Layers() []LayerDef {
 				".env.example", ".env.template",
 				".mcp.json",
 			},
-			MediaType: "application/vnd.bento.layer.project.v1",
+			MediaType: "application/vnd.bento.layer.project.v1.tar+gzip",
+			Frequency: ChangesOften,
+		},
+		{
+			Name:      "agent",
+			Patterns:  []string{"CLAUDE.md", ".claude/**"},
+			MediaType: "application/vnd.bento.layer.agent.v1.tar+gzip",
 			Frequency: ChangesOften,
 		},
 		{
 			Name:      "deps",
 			Patterns:  []string{"node_modules/**", ".venv/**", "vendor/**", ".tool-versions"},
-			MediaType: "application/vnd.bento.layer.deps.v1",
+			MediaType: "application/vnd.bento.layer.deps.v1.tar+gzip",
 			Frequency: ChangesRarely,
 		},
 	}

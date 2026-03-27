@@ -15,7 +15,11 @@ type Runner struct {
 }
 
 // NewRunner creates a Runner with the given working directory and timeout in seconds.
+// If timeoutSecs is 0, a default of 300 seconds is used.
 func NewRunner(workDir string, timeoutSecs int) *Runner {
+	if timeoutSecs == 0 {
+		timeoutSecs = 300
+	}
 	return &Runner{
 		workDir: workDir,
 		timeout: time.Duration(timeoutSecs) * time.Second,

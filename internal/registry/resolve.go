@@ -2,8 +2,6 @@ package registry
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -12,18 +10,16 @@ import (
 // Accepted formats:
 //
 //	"myproject:cp-3"  -> storeName="myproject", tag="cp-3"
-//	"cp-3"           -> storeName=<current directory name>, tag="cp-3"
-//	"myproject"      -> storeName="myproject", tag="latest"
-//	""               -> storeName=<current directory name>, tag="latest"
+//	"myproject:latest" -> storeName="myproject", tag="latest"
+//	"postgres-done"  -> storeName="", tag="postgres-done"
+//	""               -> storeName="", tag="latest"
+//
+// When storeName is empty, callers should fall back to the current project name.
 func ParseRef(ref string) (storeName string, tag string, err error) {
 	ref = strings.TrimSpace(ref)
 
 	if ref == "" {
-		storeName, err = currentDirName()
-		if err != nil {
-			return "", "", err
-		}
-		return storeName, "latest", nil
+		return "", "latest", nil
 	}
 
 	// Check for "name:tag" format.
@@ -36,37 +32,9 @@ func ParseRef(ref string) (storeName string, tag string, err error) {
 		return storeName, tag, nil
 	}
 
-	// If the ref looks like a tag (contains "cp-" or is a known tag pattern),
-	// treat it as a tag with the current directory as the store name.
-	// Otherwise treat it as a store name with "latest" tag.
-	if looksLikeTag(ref) {
-		storeName, err = currentDirName()
-		if err != nil {
-			return "", "", err
-		}
-		return storeName, ref, nil
-	}
-
-	return ref, "latest", nil
+	// No colon found: treat the entire ref as a tag.
+	// The caller is responsible for determining the store name
+	// (typically the current project/directory name).
+	return "", ref, nil
 }
 
-// looksLikeTag returns true if the string looks like a tag rather than a project name.
-func looksLikeTag(s string) bool {
-	// Tags typically start with "cp-" or "checkpoint-" or are "latest".
-	if s == "latest" {
-		return true
-	}
-	if strings.HasPrefix(s, "cp-") || strings.HasPrefix(s, "checkpoint-") {
-		return true
-	}
-	return false
-}
-
-// currentDirName returns the base name of the current working directory.
-func currentDirName() (string, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("get working directory: %w", err)
-	}
-	return filepath.Base(wd), nil
-}

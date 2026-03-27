@@ -45,14 +45,21 @@ func GarbageCollect(store registry.Store, opts GCOptions) (deleted []string, err
 		}
 	}
 
-	// Delete everything not marked to keep.
+	// Delete everything not marked to keep, deduplicating digests to avoid
+	// attempting to delete the same digest twice (which would fail if a digest
+	// appears under multiple tags in the index).
+	deletedSet := make(map[string]bool)
 	for _, e := range entries {
 		if keep[e.Digest] {
+			continue
+		}
+		if deletedSet[e.Digest] {
 			continue
 		}
 		if err := store.DeleteCheckpoint(e.Digest); err != nil {
 			return deleted, err
 		}
+		deletedSet[e.Digest] = true
 		deleted = append(deleted, e.Digest)
 	}
 

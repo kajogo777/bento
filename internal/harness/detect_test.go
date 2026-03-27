@@ -13,7 +13,7 @@ func TestDetect_ClaudeCode(t *testing.T) {
 	}
 
 	h := Detect(dir)
-	if h.Name() != "claudecode" {
+	if h.Name() != "claude-code" {
 		t.Fatalf("expected claudecode, got %s", h.Name())
 	}
 }
@@ -86,7 +86,7 @@ func TestDetect_Priority_ClaudeCodeOverCodex(t *testing.T) {
 	}
 
 	h := Detect(dir)
-	if h.Name() != "claudecode" {
+	if h.Name() != "claude-code" {
 		t.Fatalf("expected claudecode to win priority, got %s", h.Name())
 	}
 }
@@ -96,7 +96,7 @@ func TestHarness_Names(t *testing.T) {
 		harness Harness
 		want    string
 	}{
-		{ClaudeCode{}, "claudecode"},
+		{ClaudeCode{}, "claude-code"},
 		{Codex{}, "codex"},
 		{Aider{}, "aider"},
 		{Cursor{}, "cursor"},

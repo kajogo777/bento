@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -57,8 +58,11 @@ func newInspectCmd() *cobra.Command {
 				return fmt.Errorf("parsing manifest: %w", err)
 			}
 
+			// Compute digest as sha256 of the manifest bytes
+			digest := fmt.Sprintf("sha256:%x", sha256.Sum256(manifestBytes))
+
 			fmt.Printf("Checkpoint: %s (sequence %d)\n", tag, info.Sequence)
-			fmt.Printf("Digest:     %s\n", info.Digest)
+			fmt.Printf("Digest:     %s\n", digest)
 			if info.Parent != "" {
 				fmt.Printf("Parent:     %s\n", info.Parent)
 			}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -15,6 +16,7 @@ import (
 	"github.com/bentoci/bento/internal/registry"
 	"github.com/bentoci/bento/internal/secrets"
 	"github.com/bentoci/bento/internal/workspace"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 )
 
@@ -99,38 +101,6 @@ func newSaveCmd() *cobra.Command {
 				}
 			}
 
-			// Pack layers
-			fmt.Println("Scanning workspace...")
-			var layerInfos []manifest.LayerInfo
-			for _, ld := range h.Layers() {
-				files := layerFiles[ld.Name]
-				data, err := workspace.PackLayer(dir, files)
-				if err != nil {
-					return fmt.Errorf("packing layer %s: %w", ld.Name, err)
-				}
-
-				mediaType := ld.MediaType
-				if mediaType == "" {
-					mediaType = manifest.MediaTypeForLayer(ld.Name)
-				}
-
-				status := "changed"
-				if len(files) == 0 {
-					status = "empty"
-				}
-
-				layerInfos = append(layerInfos, manifest.LayerInfo{
-					Name:      ld.Name,
-					MediaType: mediaType,
-					Data:      data,
-					FileCount: len(files),
-					Frequency: string(ld.Frequency),
-				})
-
-				sizeStr := formatSize(len(data))
-				fmt.Printf("  %-10s %d files, %s (%s)\n", ld.Name+":", len(files), sizeStr, status)
-			}
-
 			// Get session config from harness
 			sc, _ := h.SessionConfig(dir)
 
@@ -156,6 +126,58 @@ func newSaveCmd() *cobra.Command {
 				if d, err := store.ResolveTag("latest"); err == nil {
 					parentDigest = d
 				}
+			}
+
+			// Build map of previous layer digests for change detection
+			prevLayerDigests := make(map[string]string) // layer name -> digest
+			if parentDigest != "" {
+				if prevManifestBytes, _, _, loadErr := store.LoadCheckpoint(parentDigest); loadErr == nil {
+					var prevManifest ocispec.Manifest
+					if jsonErr := json.Unmarshal(prevManifestBytes, &prevManifest); jsonErr == nil {
+						for _, ld := range prevManifest.Layers {
+							if name, ok := ld.Annotations["org.opencontainers.image.title"]; ok {
+								prevLayerDigests[name] = string(ld.Digest)
+							}
+						}
+					}
+				}
+			}
+
+			// Pack layers
+			fmt.Println("Scanning workspace...")
+			var layerInfos []manifest.LayerInfo
+			for _, ld := range h.Layers() {
+				files := layerFiles[ld.Name]
+				data, err := workspace.PackLayer(dir, files)
+				if err != nil {
+					return fmt.Errorf("packing layer %s: %w", ld.Name, err)
+				}
+
+				mediaType := ld.MediaType
+				if mediaType == "" {
+					mediaType = manifest.MediaTypeForLayer(ld.Name)
+				}
+
+				status := "changed"
+				if len(files) == 0 {
+					status = "empty"
+				} else if parentDigest != "" {
+					newDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+					if prevDigest, ok := prevLayerDigests[ld.Name]; ok && prevDigest == newDigest {
+						status = "unchanged, reusing"
+					}
+				}
+
+				layerInfos = append(layerInfos, manifest.LayerInfo{
+					Name:      ld.Name,
+					MediaType: mediaType,
+					Data:      data,
+					FileCount: len(files),
+					Frequency: string(ld.Frequency),
+				})
+
+				sizeStr := formatSize(len(data))
+				fmt.Printf("  %-10s %d files, %s (%s)\n", ld.Name+":", len(files), sizeStr, status)
 			}
 
 			// Build config object
@@ -212,7 +234,9 @@ func newSaveCmd() *cobra.Command {
 				return fmt.Errorf("tagging latest: %w", err)
 			}
 
-			if flagMessage != "" {
+			if flagSkipSecretScan {
+				fmt.Printf("Secret scan: skipped\n")
+			} else {
 				fmt.Printf("Secret scan: clean\n")
 			}
 			fmt.Printf("Tagged: %s, latest\n", tag)

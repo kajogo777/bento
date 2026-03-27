@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/bentoci/bento/internal/registry"
 	"github.com/bentoci/bento/internal/secrets"
 	"github.com/bentoci/bento/internal/workspace"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 )
 
@@ -43,9 +45,15 @@ func newOpenCmd() *cobra.Command {
 				return err
 			}
 
-			// Determine store path
+			// Determine store path. Use the source workspace (flagDir) for config,
+			// not the target dir (which may be a different location).
+			sourceDir, _ := filepath.Abs(flagDir)
+			if storeName == "" {
+				storeName = filepath.Base(sourceDir)
+			}
+
 			storePath := ""
-			cfg, cfgErr := config.Load(targetDir)
+			cfg, cfgErr := config.Load(sourceDir)
 			if cfgErr == nil {
 				storePath = filepath.Join(cfg.Store, storeName)
 			} else {
@@ -137,12 +145,32 @@ func filterLayers(layers []registry.LayerData, manifestBytes []byte, names []str
 		nameSet[strings.TrimSpace(n)] = true
 	}
 
-	// We need to match by index since we don't have layer names on LayerData directly.
-	// For simplicity, include all if we can't determine names.
-	if exclude {
-		// Return layers whose index doesn't match excluded names
-		// This is a simplified approach
+	// Parse the manifest to get layer descriptors with title annotations.
+	var m ocispec.Manifest
+	if err := json.Unmarshal(manifestBytes, &m); err != nil {
+		// If we can't parse the manifest, return all layers unchanged.
 		return layers
 	}
-	return layers
+
+	var result []registry.LayerData
+	for i, ld := range layers {
+		layerName := ""
+		if i < len(m.Layers) {
+			layerName = m.Layers[i].Annotations[manifest.AnnotationTitle]
+		}
+
+		matched := nameSet[layerName]
+		if exclude {
+			// Keep layers that are NOT in the excluded set.
+			if !matched {
+				result = append(result, ld)
+			}
+		} else {
+			// Keep layers that ARE in the wanted set.
+			if matched {
+				result = append(result, ld)
+			}
+		}
+	}
+	return result
 }

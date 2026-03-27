@@ -118,10 +118,6 @@ func Load(dir string) (*BentoConfig, error) {
 		cfg.Sync = "manual"
 	}
 
-	if cfg.Hooks.Timeout == 0 {
-		cfg.Hooks.Timeout = 300
-	}
-
 	return cfg, nil
 }
 
