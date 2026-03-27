@@ -6,7 +6,7 @@ Bento saves your entire AI agent workspace (code, agent memory, dependencies) so
 
 ```bash
 # macOS / Linux
-brew install kajogo777/tap/bento
+brew install kajogo777/bento/bento
 
 # Windows
 scoop install bento

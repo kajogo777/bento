@@ -24,18 +24,10 @@ archives:
 brews:
   - repository:
       owner: kajogo777
-      name: homebrew-tap
-    homepage: https://bento.dev
+      name: bento
+      directory: Formula
+    homepage: https://github.com/kajogo777/bento
     description: "Portable agent workspaces. Pack, ship, resume."
-    skip_upload: auto
-
-scoops:
-  - repository:
-      owner: kajogo777
-      name: scoop-bucket
-    homepage: https://bento.dev
-    description: "Portable agent workspaces. Pack, ship, resume."
-    skip_upload: auto
 
 dockers:
   - image_templates:

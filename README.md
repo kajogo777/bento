@@ -47,7 +47,7 @@ Bento artifacts are standard OCI artifacts. They work with any OCI-compatible re
 
 ```bash
 # macOS / Linux
-brew install kajogo777/tap/bento
+brew install kajogo777/bento/bento
 
 # Windows
 scoop install bento
