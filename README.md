@@ -143,15 +143,16 @@ bento init
 # Detected agent: claude-code (found .claude/)
 ```
 
-Planned harnesses (contributions welcome):
+Supported harnesses:
 
-- [ ] Claude Code
+- [x] Claude Code
+- [x] Codex
+- [x] Aider
+- [x] Cursor
+- [x] Windsurf
 - [ ] OpenClaw
 - [ ] OpenCode
-- [ ] Cursor
-- [ ] Codex
 - [ ] GitHub Copilot
-- [ ] Windsurf
 
 Don't see your agent? Define a custom harness in `bento.yaml` -- no code required:
 
@@ -320,7 +321,7 @@ The agent gets six tools: `bento_save`, `bento_list`, `bento_restore`, `bento_fo
 - "I want to try two strategies, let me fork"
 - "What did I change since the last checkpoint?"
 
-The agent doesn't need to know about OCI, registries, or layers. It just calls `bento_save` and `bento_restore`. See [Appendix D of the spec](SPEC.md) for the full tool schema.
+The agent doesn't need to know about OCI, registries, or layers. It just calls `bento_save` and `bento_restore`. See [Appendix D of the spec](specs/SPEC.md) for the full tool schema.
 
 ## Docker & Kubernetes
 
@@ -458,7 +459,7 @@ The manifest config contains session metadata:
 }
 ```
 
-Full format details in [SPEC.md](SPEC.md).
+Full format details in [SPEC.md](specs/SPEC.md).
 
 ## Architecture
 
@@ -537,7 +538,7 @@ No. Your agent's `/undo` and `/rewind` commands handle file-level rollback durin
 Yes. Bento works on any directory. It's useful for any workflow where you want to snapshot and restore a working environment.
 
 **Can I checkpoint on Linux and restore on macOS or Windows?**
-Yes. Bento handles path separators, file permissions, and symlinks automatically across platforms. Checkpoints are fully portable. See the [spec](SPEC.md) for details.
+Yes. Bento handles path separators, file permissions, and symlinks automatically across platforms. Checkpoints are fully portable. See the [spec](specs/SPEC.md) for details.
 
 **What about running services (dev servers, databases)?**
 Bento captures filesystem state, not process state. Use the `post_restore` hook to restart services with your existing scripts, Makefile, or docker-compose. Bento doesn't reinvent orchestration.
@@ -545,18 +546,19 @@ Bento captures filesystem state, not process state. Use the `post_restore` hook 
 ## Roadmap
 
 - [x] Design spec and artifact format
-- [ ] Core CLI (`init`, `save`, `open`, `list`, `diff`, `fork`)
-- [ ] Local OCI layout store
-- [ ] Remote registry push/pull
-- [ ] Secret scanning and hydration
-- [ ] Harnesses:
-  - [ ] Claude Code
+- [x] Core CLI (`init`, `save`, `open`, `list`, `diff`, `fork`, `tag`, `inspect`, `gc`)
+- [x] Local OCI layout store
+- [x] Secret scanning and hydration
+- [x] Harnesses:
+  - [x] Claude Code
+  - [x] Codex
+  - [x] Aider
+  - [x] Cursor
+  - [x] Windsurf
   - [ ] OpenClaw
   - [ ] OpenCode
-  - [ ] Cursor
-  - [ ] Codex
   - [ ] GitHub Copilot
-  - [ ] Windsurf
+- [ ] Remote registry push/pull
 - [ ] MCP server (agents checkpoint themselves)
 - [ ] Docker Sandbox integration
 - [ ] `bento watch` (sidecar auto-checkpointing)
