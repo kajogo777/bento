@@ -23,12 +23,16 @@ archives:
         formats:
           - zip
 
-homebrew_casks:
+brews:
   - repository:
       owner: kajogo777
-      name: homebrew-bento
+      name: bento
+      directory: Formula
     homepage: https://github.com/kajogo777/bento
-    description: "Portable agent workspaces. Pack, ship, resume."
+    description: "Portable agent workspaces. Save, ship, restore."
+    license: MIT
+    install: |
+      bin.install "bento"
 
 dockers_v2:
   - images:
