@@ -1,7 +1,7 @@
 # Binaries
 bin/
 dist/
-bento
+/bento
 
 # Go
 *.exe
