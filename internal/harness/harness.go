@@ -158,5 +158,5 @@ var CommonSecretPatterns = []string{
 	`ghp_[a-zA-Z0-9]{36}`,
 	`glpat-[a-zA-Z0-9\-]{20,}`,
 	`-----BEGIN (RSA |EC )?PRIVATE KEY`,
-	`(?i)(password|passwd|pwd)\s*[:=]`,
+	`(?i)(password|passwd|pwd)\s*[:=]\s*[^\s${\}][^\s]*`,
 }
