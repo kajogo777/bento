@@ -67,7 +67,6 @@ func diffWorkspace(dir string, args []string) error {
 	if err != nil {
 		return err
 	}
-	_ = cfg
 
 	// Resolve which checkpoint to compare against
 	ref := "latest"
@@ -154,6 +153,71 @@ func diffWorkspace(dir string, args []string) error {
 		}
 		for _, f := range modified {
 			fmt.Printf("    %s~ %s%s\n", colorYellow, f, colorReset)
+		}
+	}
+
+	// Check external layer (agent session data outside workspace)
+	// The external layer is appended after the regular layers in the manifest
+	externalIdx := len(h.Layers())
+	if externalIdx < len(layers) {
+		// Check if this layer is the external layer via annotation
+		if externalIdx < len(m.Layers) {
+			if _, ok := m.Layers[externalIdx].Annotations[manifest.AnnotationExternalPaths]; ok {
+				savedSizes, _ := workspace.ListLayerFilesWithSizes(layers[externalIdx].Data)
+
+				// Scan current external paths
+				externalDefs := collectExternalDefs(h, cfg, dir)
+				currentExtSizes := make(map[string]int64)
+				if len(externalDefs) > 0 {
+					wsDefs := make([]workspace.ExternalPathDef, len(externalDefs))
+					for i, d := range externalDefs {
+						wsDefs[i] = workspace.ExternalPathDef{Source: harness.ExpandHome(d.Source), ArchivePrefix: d.ArchivePrefix}
+					}
+					extFiles, err := workspace.ScanExternalPaths(wsDefs, ignorePatterns)
+					if err == nil {
+						for _, ef := range extFiles {
+							info, err := os.Stat(ef.AbsPath)
+							if err == nil {
+								currentExtSizes[ef.ArchivePath] = info.Size()
+							}
+						}
+					}
+				}
+
+				var added, removed, modified []string
+				for f, size := range currentExtSizes {
+					if _, ok := savedSizes[f]; !ok {
+						added = append(added, f)
+					} else if savedSizes[f] != size {
+						modified = append(modified, f)
+					}
+				}
+				for f := range savedSizes {
+					if _, ok := currentExtSizes[f]; !ok {
+						removed = append(removed, f)
+					}
+				}
+				sort.Strings(added)
+				sort.Strings(removed)
+				sort.Strings(modified)
+
+				if len(added) > 0 || len(removed) > 0 || len(modified) > 0 {
+					hasChanges = true
+					total := len(added) + len(removed) + len(modified)
+					fmt.Printf("  external: %d change(s)\n", total)
+					for _, f := range added {
+						fmt.Printf("    %s+ %s%s\n", colorGreen, f, colorReset)
+					}
+					for _, f := range removed {
+						fmt.Printf("    %s- %s%s\n", colorRed, f, colorReset)
+					}
+					for _, f := range modified {
+						fmt.Printf("    %s~ %s%s\n", colorYellow, f, colorReset)
+					}
+				} else {
+					fmt.Printf("  %sexternal: unchanged%s\n", colorDim, colorReset)
+				}
+			}
 		}
 	}
 
