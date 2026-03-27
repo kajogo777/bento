@@ -303,8 +303,18 @@ Yes. Checkpoints are portable across macOS, Linux, and Windows.
 - [x] Core CLI (init, save, open, list, diff, fork, tag, inspect, gc)
 - [x] Local OCI store
 - [x] Secret scanning and hydration
-- [x] Harnesses: Claude Code, Codex, Aider, Cursor, Windsurf
+- [x] Harnesses:
+  - [x] Claude Code
+  - [x] Codex
+  - [x] Aider
+  - [x] Cursor
+  - [x] Windsurf
+  - [ ] OpenClaw
+  - [ ] OpenCode
+  - [ ] GitHub Copilot
 - [ ] Remote registry push/pull
+- [ ] Store schemes (`oci://`, `file://`)
+- [ ] `bento attach` (OCI referrers for diffs, test results, logs)
 - [ ] MCP server (agents checkpoint themselves)
 - [ ] `bento watch` (auto-checkpointing)
 - [ ] Docker sandbox integration
