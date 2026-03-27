@@ -1,8 +1,6 @@
 # Getting Started with Bento
 
-Bento saves your entire AI agent workspace -- code, agent memory, dependencies -- so you can pause, resume, and share your work. Think of it like git, but for everything git doesn't track.
-
-This guide walks you through the basics.
+Bento saves your entire AI agent workspace (code, agent memory, dependencies) so you can pause, resume, and share your work. Think of it like git, but for everything git doesn't track.
 
 ## Install
 
@@ -13,8 +11,8 @@ brew install kajogo777/tap/bento
 # Windows
 scoop install bento
 
-# Or grab a binary directly
-curl -fsSL https://bento.dev/install.sh | sh
+# From source
+go install github.com/kajogo777/bento@latest
 ```
 
 Verify it works:
@@ -64,23 +62,19 @@ Secret scan: clean
 Tagged: cp-1, latest
 ```
 
-Bento splits your workspace into layers, ordered from bottom to top in the OCI artifact:
+Bento splits your workspace into three layers:
 
-- **deps** -- installed packages like `node_modules` or `.venv` (changes rarely)
-- **agent** -- your agent's memory, plans, and settings
-- **project** -- your source code, tests, configs, and any other workspace files
+- **deps** - installed packages like `node_modules` or `.venv` (changes rarely)
+- **agent** - your agent's memory, plans, and settings
+- **project** - everything else (source code, tests, configs, binaries)
 
-Layers that haven't changed are reused automatically, so your 89MB `node_modules` is stored once, not once per checkpoint. All file types in your workspace are captured -- source code, binaries, images, config files -- nothing is silently excluded.
+Layers that haven't changed are reused automatically. All file types are captured.
 
 ### Keep working, keep saving
 
 ```bash
-# do more work with your agent...
-
 bento save -m "added tests"
 # Tagged: cp-2, latest
-
-# and more...
 
 bento save -m "fixed edge cases"
 # Tagged: cp-3, latest
@@ -109,14 +103,34 @@ bento inspect cp-2
 Checkpoint: cp-2 (sequence 2)
 Digest:     sha256:def456...
 Created:    2026-03-26T11:30:00Z
-Agent:      claudecode
+Agent:      claude-code
 Message:    added tests
 
 Config:
   Task:      refactor auth module
-  Harness:   claudecode
+  Harness:   claude-code
   Git:       main (a1b2c3d)
   Platform:  darwin/arm64
+
+Layers:
+
+  deps (1204 files, 89MB, sha256:333a...)
+    node_modules/express/lib/express.js
+    node_modules/express/package.json
+    ...
+
+  agent (8 files, 64KB, sha256:222b...)
+    .claude/plans/auth-refactor.md
+    .claude/settings.json
+    .claude/todos/current.json
+    CLAUDE.md
+
+  project (42 files, 128KB, sha256:111a...)
+    package.json
+    src/auth.ts
+    src/index.ts
+    tests/auth.test.ts
+    ...
 ```
 
 ## Going Back in Time
@@ -127,19 +141,15 @@ Something went wrong at cp-3? Restore to cp-2:
 bento open cp-2
 ```
 
-Your workspace is now exactly as it was at cp-2 -- code, agent memory, and all. Your agent can pick up right where it left off.
+Your workspace is now exactly as it was at cp-2: code, agent memory, and all. Files from later checkpoints are cleaned up.
 
 ### Restore to a separate directory
-
-Want to look at an old checkpoint without touching your current workspace?
 
 ```bash
 bento open cp-1 ~/old-checkpoint
 ```
 
 ### Skip the big stuff
-
-If you only need the agent's memory and your code (not the 89MB of dependencies):
 
 ```bash
 bento open cp-2 --skip-layers deps
@@ -149,13 +159,11 @@ bento open cp-2 --skip-layers deps
 
 ### Fork from a checkpoint
 
-Your agent tried one approach but you want to try something different? Fork:
-
 ```bash
 bento fork cp-1 -m "trying redis instead of postgres"
 ```
 
-This restores your workspace to cp-1 so you can take a different path. Your checkpoint history branches:
+This restores your workspace to cp-1 so you can take a different path:
 
 ```
 cp-1 → cp-2 → cp-3 (postgres approach)
@@ -172,119 +180,77 @@ bento diff cp-3 cp-5
 ```
 Comparing cp-3 → cp-5
 
-  deps: unchanged (digest sha256:4f4f...)
-  agent: changed
-    from: sha256:abc1... (64KB)
-    to:   sha256:def4... (68KB)
-  project: changed
-    from: sha256:111a... (128KB)
-    to:   sha256:222b... (135KB)
+  deps: unchanged (sha256:4f4f...)
+  agent: changed (64KB → 68KB)
+    ~ .claude/plans/auth-refactor.md
+  project: changed (128KB → 135KB)
+    + src/redis-client.ts
+    - src/postgres-client.ts
+    ~ src/auth.ts
 ```
 
-## Organizing with Tags
+Green `+` for added files, red `-` for removed, yellow `~` for modified.
 
-Give checkpoints meaningful names:
+## Organizing with Tags
 
 ```bash
 bento tag cp-3 postgres-done
 bento tag cp-5 redis-done
-```
 
-Now you can refer to them by name:
-
-```bash
 bento open postgres-done
 bento diff postgres-done redis-done
 ```
 
 ## Cleaning Up
 
-Over time, checkpoints accumulate. Clean up old ones:
-
 ```bash
-# Keep only the last 5 checkpoints
 bento gc --keep-last 5
-
-# Keep tagged checkpoints no matter what
 bento gc --keep-last 5 --keep-tagged
 ```
 
-## Managing Secrets Safely
+## Secrets
 
-Bento never stores your secrets. It stores *references* that get resolved when you restore.
-
-In your `bento.yaml`:
+Bento never stores secrets. It stores references that get resolved when you restore:
 
 ```yaml
 secrets:
   DATABASE_URL:
-    source: env           # reads from your DATABASE_URL env var
+    source: env
     var: DATABASE_URL
   API_KEY:
-    source: file          # reads from a file on disk
+    source: file
     path: /run/secrets/api-key
 
+env_files:
+  ".env":
+    secrets: ["DATABASE_URL", "API_KEY"]
+```
+
+On `bento open`, your `.env` file is populated with resolved values from your local machine. The secrets never leave your system. The `.env` file is written with 0600 permissions and excluded from checkpoints.
+
+If you have a `.env.example` template, reference it:
+
+```yaml
 env_files:
   ".env":
     template: ".env.example"
     secrets: ["DATABASE_URL", "API_KEY"]
 ```
 
-When you `bento open`, your `.env` file gets populated from the template with real values from your local machine. The actual secrets never leave your system.
+## Hooks
 
-Check what's configured:
-
-```bash
-bento env show
-```
-
-## Running Scripts on Save/Restore
-
-Hooks let you run commands at key moments:
+Run commands at lifecycle points:
 
 ```yaml
-# in bento.yaml
 hooks:
-  pre_save: "make clean"              # tidy up before saving
-  post_restore: "npm install"         # reinstall after restoring
-  pre_push: "npm test"               # run tests before sharing
-```
-
-## Supported Agents
-
-Bento auto-detects these agents when you run `bento init`:
-
-| Agent | How it's detected |
-|-------|-------------------|
-| Claude Code | `.claude/` directory or `CLAUDE.md` |
-| Codex | `.codex/` directory or `AGENTS.md` |
-| Aider | `.aider.conf.yml` or `.aider.chat.history.md` |
-| Cursor | `.cursor/` directory |
-| Windsurf | `.windsurf/` directory |
-
-Don't see your agent? You can define a custom harness in `bento.yaml`:
-
-```yaml
-harness_config:
-  name: my-agent
-  detect: ".my-agent/config.json"
-  layers:
-    - name: project
-      patterns: ["**/*.py", "**/*.js", "*.md", "*.yaml"]
-    - name: agent
-      patterns: [".my-agent/**"]
-    - name: deps
-      patterns: [".venv/**", "node_modules/**"]
-      frequency: rarely
+  pre_save: "make clean"
+  post_restore: "npm install"
+  pre_push: "npm test"
 ```
 
 ## Multiple Agents
 
-If your project uses multiple agents (e.g. Claude Code and Codex), bento detects all of them and creates separate agent layers:
-
-```bash
-bento init
-```
+If your project uses multiple agents, bento detects all of them:
 
 ```
 Detected agent: claude-code+codex
@@ -298,25 +264,30 @@ Scanning workspace...
   project:           12 files, 45KB (changed)
 ```
 
-Each agent's state is tracked independently. To force a single agent:
+Each agent's state is tracked independently. Use `--harness <name>` to force a single agent.
 
-```bash
-bento init --harness claude-code
-```
+## Supported Agents
+
+| Agent | Detection |
+|-------|-----------|
+| Claude Code | `.claude/` or `CLAUDE.md` |
+| Codex | `.codex/` or `AGENTS.md` |
+| Aider | `.aider.conf.yml` or `.aider.chat.history.md` |
+| Cursor | `.cursor/` directory |
+| Windsurf | `.windsurf/` directory |
 
 ## Quick Reference
 
-| What you want to do | Command |
-|---------------------|---------|
-| Start tracking a workspace | `bento init` |
-| Save a checkpoint | `bento save -m "description"` |
-| See all checkpoints | `bento list` |
-| Restore a checkpoint | `bento open cp-3` |
-| Restore to a different folder | `bento open cp-3 ~/other-dir` |
-| Try a different approach | `bento fork cp-1 -m "new idea"` |
-| Compare checkpoints | `bento diff cp-1 cp-3` |
-| Name a checkpoint | `bento tag cp-3 my-milestone` |
-| View checkpoint details | `bento inspect cp-3` |
-| Clean up old checkpoints | `bento gc --keep-last 10` |
-| View env/secret config | `bento env show` |
-| Push to a registry | `bento push` |
+| Action | Command |
+|--------|---------|
+| Start tracking | `bento init` |
+| Save checkpoint | `bento save -m "description"` |
+| List checkpoints | `bento list` |
+| Restore | `bento open cp-3` |
+| Restore elsewhere | `bento open cp-3 ~/other-dir` |
+| Fork | `bento fork cp-1 -m "new idea"` |
+| Compare | `bento diff cp-1 cp-3` |
+| Tag | `bento tag cp-3 milestone` |
+| Inspect | `bento inspect cp-3` |
+| Clean up | `bento gc --keep-last 10` |
+| Env config | `bento env show` |
