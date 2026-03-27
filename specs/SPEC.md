@@ -55,12 +55,13 @@ A bento checkpoint is represented as an OCI image manifest:
   },
   "layers": [
     {
-      "mediaType": "application/vnd.bento.layer.project.v1.tar+gzip",
-      "digest": "sha256:111...",
-      "size": 131072,
+      "mediaType": "application/vnd.bento.layer.deps.v1.tar+gzip",
+      "digest": "sha256:333...",
+      "size": 93323264,
       "annotations": {
-        "org.opencontainers.image.title": "project",
-        "dev.bento.layer.file-count": "42"
+        "org.opencontainers.image.title": "deps",
+        "dev.bento.layer.file-count": "1204",
+        "dev.bento.layer.change-frequency": "rarely"
       }
     },
     {
@@ -73,13 +74,12 @@ A bento checkpoint is represented as an OCI image manifest:
       }
     },
     {
-      "mediaType": "application/vnd.bento.layer.deps.v1.tar+gzip",
-      "digest": "sha256:333...",
-      "size": 93323264,
+      "mediaType": "application/vnd.bento.layer.project.v1.tar+gzip",
+      "digest": "sha256:111...",
+      "size": 131072,
       "annotations": {
-        "org.opencontainers.image.title": "deps",
-        "dev.bento.layer.file-count": "1204",
-        "dev.bento.layer.change-frequency": "rarely"
+        "org.opencontainers.image.title": "project",
+        "dev.bento.layer.file-count": "42"
       }
     }
   ],
@@ -145,11 +145,11 @@ Implementations MUST support these three layers. Together they cover the common 
 
 | Media Type | Name | Description |
 |---|---|---|
-| `application/vnd.bento.layer.project.v1.tar+gzip` | project | Source code, tests, build definitions, configs that belong in version control |
-| `application/vnd.bento.layer.agent.v1.tar+gzip` | agent | Agent memory, conversation history, plans, skills, commands, session state |
 | `application/vnd.bento.layer.deps.v1.tar+gzip` | deps | Installed packages, virtual environments, build caches, compiled artifacts |
+| `application/vnd.bento.layer.agent.v1.tar+gzip` | agent | Agent memory, conversation history, plans, skills, commands, session state |
+| `application/vnd.bento.layer.project.v1.tar+gzip` | project | Source code, tests, build definitions, configs, and any other workspace files |
 
-**Design rationale:** Real-world agent workspaces contain state that ranges from tiny source files to multi-gigabyte dependency trees. Three core layers provide the right default decomposition: project files change every checkpoint and are small, agent state changes every checkpoint and is medium, deps change rarely and are large. This maximizes deduplication -- the deps layer digest is reused across many checkpoints while only the small project and agent layers are re-uploaded.
+**Design rationale:** Layers are ordered from bottom (least-changing) to top (most-changing), following OCI convention. Deps change rarely and are large, so they sit at the bottom for maximum cache reuse -- the deps layer digest is reused across many checkpoints while only the smaller agent and project layers are re-uploaded. The project layer acts as a catch-all: any workspace file not matched by agent or deps patterns is captured here.
 
 #### 3.3.2 Well-Known Custom Layer Types
 
@@ -697,13 +697,13 @@ This table documents where major agent frameworks store their state on disk. Har
   },
   "layers": [
     {
-      "mediaType": "application/vnd.bento.layer.project.v1.tar+gzip",
-      "digest": "sha256:a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447",
-      "size": 131072,
+      "mediaType": "application/vnd.bento.layer.deps.v1.tar+gzip",
+      "digest": "sha256:7d865e959b2466918c9863afca942d0fb89d7c9ac0c99bafc3749504ded97730",
+      "size": 93323264,
       "annotations": {
-        "org.opencontainers.image.title": "project",
-        "dev.bento.layer.file-count": "42",
-        "dev.bento.layer.change-frequency": "often"
+        "org.opencontainers.image.title": "deps",
+        "dev.bento.layer.file-count": "1204",
+        "dev.bento.layer.change-frequency": "rarely"
       }
     },
     {
@@ -717,13 +717,13 @@ This table documents where major agent frameworks store their state on disk. Har
       }
     },
     {
-      "mediaType": "application/vnd.bento.layer.deps.v1.tar+gzip",
-      "digest": "sha256:7d865e959b2466918c9863afca942d0fb89d7c9ac0c99bafc3749504ded97730",
-      "size": 93323264,
+      "mediaType": "application/vnd.bento.layer.project.v1.tar+gzip",
+      "digest": "sha256:a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447",
+      "size": 131072,
       "annotations": {
-        "org.opencontainers.image.title": "deps",
-        "dev.bento.layer.file-count": "1204",
-        "dev.bento.layer.change-frequency": "rarely"
+        "org.opencontainers.image.title": "project",
+        "dev.bento.layer.file-count": "42",
+        "dev.bento.layer.change-frequency": "often"
       }
     }
   ],
