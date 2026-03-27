@@ -1,0 +1,259 @@
+package cli
+
+import (
+	"crypto/sha256"
+	"fmt"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"time"
+
+	"github.com/bentoci/bento/internal/config"
+	"github.com/bentoci/bento/internal/harness"
+	"github.com/bentoci/bento/internal/hooks"
+	"github.com/bentoci/bento/internal/manifest"
+	"github.com/bentoci/bento/internal/registry"
+	"github.com/bentoci/bento/internal/secrets"
+	"github.com/bentoci/bento/internal/workspace"
+	"github.com/spf13/cobra"
+)
+
+func newSaveCmd() *cobra.Command {
+	var (
+		flagMessage        string
+		flagTag            string
+		flagSkipSecretScan bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "save",
+		Short: "Save a checkpoint",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir, err := filepath.Abs(flagDir)
+			if err != nil {
+				return err
+			}
+
+			// Load config
+			cfg, err := config.Load(dir)
+			if err != nil {
+				return fmt.Errorf("no bento.yaml found. Run `bento init` first")
+			}
+
+			// Detect harness
+			h := harness.Detect(dir)
+
+			// Run pre_save hook
+			hookCmd := cfg.Hooks.PreSave
+			if hookCmd == "" {
+				if defaults := h.DefaultHooks(); defaults["pre_save"] != "" {
+					hookCmd = defaults["pre_save"]
+				}
+			}
+			if hookCmd != "" {
+				runner := hooks.NewRunner(dir, cfg.Hooks.Timeout)
+				if err := runner.Run("pre_save", hookCmd); err != nil {
+					return fmt.Errorf("pre_save hook failed: %w", err)
+				}
+			}
+
+			// Collect ignore patterns
+			ignorePatterns := append(config.DefaultIgnorePatterns, h.Ignore()...)
+			ignorePatterns = append(ignorePatterns, cfg.Ignore...)
+			if bentoIgnore, err := workspace.LoadBentoIgnore(dir); err == nil {
+				ignorePatterns = append(ignorePatterns, bentoIgnore...)
+			}
+
+			// Scan workspace
+			scanner := workspace.NewScanner(dir, h.Layers(), ignorePatterns)
+			layerFiles, err := scanner.Scan()
+			if err != nil {
+				return fmt.Errorf("scanning workspace: %w", err)
+			}
+
+			// Secret scan
+			if !flagSkipSecretScan {
+				secretPatterns := h.SecretPatterns()
+				if len(secretPatterns) > 0 {
+					secretScanner, err := secrets.NewSecretScanner(secretPatterns)
+					if err != nil {
+						return fmt.Errorf("initializing secret scanner: %w", err)
+					}
+					var allFiles []string
+					for _, files := range layerFiles {
+						for _, f := range files {
+							allFiles = append(allFiles, filepath.Join(dir, f))
+						}
+					}
+					results, err := secretScanner.ScanFiles(allFiles)
+					if err != nil {
+						return fmt.Errorf("secret scan error: %w", err)
+					}
+					if len(results) > 0 {
+						fmt.Println("Secret scan found potential secrets:")
+						for _, r := range results {
+							fmt.Printf("  %s:%d matched pattern: %s\n", r.File, r.Line, r.Pattern)
+						}
+						return fmt.Errorf("aborting save due to potential secrets. Use --skip-secret-scan to bypass")
+					}
+				}
+			}
+
+			// Pack layers
+			fmt.Println("Scanning workspace...")
+			var layerInfos []manifest.LayerInfo
+			for _, ld := range h.Layers() {
+				files := layerFiles[ld.Name]
+				data, err := workspace.PackLayer(dir, files)
+				if err != nil {
+					return fmt.Errorf("packing layer %s: %w", ld.Name, err)
+				}
+
+				mediaType := ld.MediaType
+				if mediaType == "" {
+					mediaType = manifest.MediaTypeForLayer(ld.Name)
+				}
+
+				status := "changed"
+				if len(files) == 0 {
+					status = "empty"
+				}
+
+				layerInfos = append(layerInfos, manifest.LayerInfo{
+					Name:      ld.Name,
+					MediaType: mediaType,
+					Data:      data,
+					FileCount: len(files),
+					Frequency: string(ld.Frequency),
+				})
+
+				sizeStr := formatSize(len(data))
+				fmt.Printf("  %-10s %d files, %s (%s)\n", ld.Name+":", len(files), sizeStr, status)
+			}
+
+			// Get session config from harness
+			sc, _ := h.SessionConfig(dir)
+
+			// Open store
+			projectName := filepath.Base(dir)
+			storePath := filepath.Join(cfg.Store, projectName)
+			store, err := registry.NewStore(storePath)
+			if err != nil {
+				return fmt.Errorf("opening store: %w", err)
+			}
+
+			// Determine checkpoint sequence (count unique digests)
+			existing, _ := store.ListCheckpoints()
+			seen := make(map[string]bool)
+			for _, e := range existing {
+				seen[e.Digest] = true
+			}
+			seq := len(seen) + 1
+
+			// Find parent
+			parentDigest := ""
+			if len(existing) > 0 {
+				if d, err := store.ResolveTag("latest"); err == nil {
+					parentDigest = d
+				}
+			}
+
+			// Build config object
+			cfgObj := &manifest.BentoConfigObj{
+				SchemaVersion:    "1.0.0",
+				Checkpoint:       seq,
+				Created:          time.Now().UTC().Format(time.RFC3339),
+				Status:           "paused",
+				Harness:          h.Name(),
+				ParentCheckpoint: parentDigest,
+				Task:             cfg.Task,
+				Environment: &manifest.Environment{
+					OS:   runtime.GOOS,
+					Arch: runtime.GOARCH,
+				},
+			}
+			if sc != nil {
+				cfgObj.Agent = sc.Agent
+				cfgObj.AgentVersion = sc.AgentVersion
+				cfgObj.GitSha = sc.GitSha
+				cfgObj.GitBranch = sc.GitBranch
+			}
+
+			// Build manifest
+			cfgObj.Message = flagMessage
+			manifestBytes, configBytes, err := manifest.BuildManifest(cfgObj, layerInfos)
+			if err != nil {
+				return fmt.Errorf("building manifest: %w", err)
+			}
+
+			// Prepare layer data for store
+			var storeLayerData []registry.LayerData
+			for _, li := range layerInfos {
+				digest := fmt.Sprintf("sha256:%x", sha256.Sum256(li.Data))
+				storeLayerData = append(storeLayerData, registry.LayerData{
+					MediaType: li.MediaType,
+					Data:      li.Data,
+					Digest:    digest,
+				})
+			}
+
+			// Save to store
+			tag := fmt.Sprintf("cp-%d", seq)
+			if flagTag != "" {
+				tag = flagTag
+			}
+			manifestDigest, err := store.SaveCheckpoint(tag, manifestBytes, configBytes, storeLayerData)
+			if err != nil {
+				return fmt.Errorf("saving checkpoint: %w", err)
+			}
+
+			// Also tag as latest
+			if err := store.Tag(manifestDigest, "latest"); err != nil {
+				return fmt.Errorf("tagging latest: %w", err)
+			}
+
+			if flagMessage != "" {
+				fmt.Printf("Secret scan: clean\n")
+			}
+			fmt.Printf("Tagged: %s, latest\n", tag)
+
+			// Run post_save hook
+			postHookCmd := cfg.Hooks.PostSave
+			if postHookCmd == "" {
+				if defaults := h.DefaultHooks(); defaults["post_save"] != "" {
+					postHookCmd = defaults["post_save"]
+				}
+			}
+			if postHookCmd != "" {
+				runner := hooks.NewRunner(dir, cfg.Hooks.Timeout)
+				if err := runner.Run("post_save", postHookCmd); err != nil {
+					fmt.Printf("Warning: post_save hook failed: %v\n", err)
+				}
+			}
+
+			_ = manifestDigest
+			_ = strconv.Itoa(seq)
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&flagMessage, "message", "m", "", "checkpoint message")
+	cmd.Flags().StringVar(&flagTag, "tag", "", "custom tag for this checkpoint")
+	cmd.Flags().BoolVar(&flagSkipSecretScan, "skip-secret-scan", false, "skip secret scanning")
+
+	return cmd
+}
+
+func formatSize(bytes int) string {
+	switch {
+	case bytes >= 1<<30:
+		return fmt.Sprintf("%.1fGB", float64(bytes)/float64(1<<30))
+	case bytes >= 1<<20:
+		return fmt.Sprintf("%.1fMB", float64(bytes)/float64(1<<20))
+	case bytes >= 1<<10:
+		return fmt.Sprintf("%.1fKB", float64(bytes)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%dB", bytes)
+	}
+}
