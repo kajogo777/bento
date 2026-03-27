@@ -243,12 +243,15 @@ retention:
 
 Bento artifacts follow the [OCI Image Spec v1.1](https://github.com/opencontainers/image-spec). Each checkpoint is an OCI manifest with typed layer descriptors:
 
-| Component | Media Type |
-|-----------|-----------|
-| Config | `application/vnd.bento.config.v1+json` |
-| Deps layer | `application/vnd.bento.layer.deps.v1.tar+gzip` |
-| Agent layer | `application/vnd.bento.layer.agent.v1.tar+gzip` |
-| Project layer | `application/vnd.bento.layer.project.v1.tar+gzip` |
+Bento uses standard OCI media types for native Docker compatibility:
+
+| Component | Media Type | Identified by |
+|-----------|-----------|--------------|
+| Config | `application/vnd.oci.image.config.v1+json` | - |
+| All layers | `application/vnd.oci.image.layer.v1.tar+gzip` | `org.opencontainers.image.title` annotation |
+| Artifact type | `application/vnd.bento.workspace.v1` | manifest `artifactType` field |
+
+This means `COPY --from=<bento-ref>` works natively in Dockerfiles.
 
 Full format details in [SPEC.md](specs/SPEC.md).
 

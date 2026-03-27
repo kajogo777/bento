@@ -41,7 +41,7 @@ Bento uses the standard OCI image manifest with `artifactType` set to `applicati
 
 ### 3.1 Manifest
 
-A bento checkpoint is represented as an OCI image manifest:
+A bento checkpoint is represented as an OCI image manifest. Bento uses **standard OCI media types** for the config and layers, making artifacts natively compatible with Docker, containerd, buildkit, and all OCI tooling. The `artifactType` field and `dev.bento.*` annotations distinguish bento artifacts from regular container images. Layer semantics (deps, agent, project) are carried by the `org.opencontainers.image.title` annotation on each layer descriptor.
 
 ```json
 {
@@ -49,13 +49,13 @@ A bento checkpoint is represented as an OCI image manifest:
   "mediaType": "application/vnd.oci.image.manifest.v1+json",
   "artifactType": "application/vnd.bento.workspace.v1",
   "config": {
-    "mediaType": "application/vnd.bento.config.v1+json",
+    "mediaType": "application/vnd.oci.image.config.v1+json",
     "digest": "sha256:abc123...",
-    "size": 256
+    "size": 512
   },
   "layers": [
     {
-      "mediaType": "application/vnd.bento.layer.deps.v1.tar+gzip",
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
       "digest": "sha256:333...",
       "size": 93323264,
       "annotations": {
@@ -65,7 +65,7 @@ A bento checkpoint is represented as an OCI image manifest:
       }
     },
     {
-      "mediaType": "application/vnd.bento.layer.agent.v1.tar+gzip",
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
       "digest": "sha256:222...",
       "size": 65536,
       "annotations": {
@@ -74,7 +74,7 @@ A bento checkpoint is represented as an OCI image manifest:
       }
     },
     {
-      "mediaType": "application/vnd.bento.layer.project.v1.tar+gzip",
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
       "digest": "sha256:111...",
       "size": 131072,
       "annotations": {
@@ -94,11 +94,35 @@ A bento checkpoint is represented as an OCI image manifest:
 }
 ```
 
+**Design decision: standard OCI media types.** Early drafts of this spec used custom media types (`application/vnd.bento.layer.*.v1.tar+gzip`) for layers and config. We switched to standard OCI types (`application/vnd.oci.image.layer.v1.tar+gzip`, `application/vnd.oci.image.config.v1+json`) because bento layers are structurally identical to OCI image layers (tar+gzip filesystem archives). Using standard types enables native Docker interop: `COPY --from` in Dockerfiles, `docker pull`, and containerd extraction all work without the bento binary. Layer semantics are fully preserved through annotations, and the `artifactType` field identifies bento artifacts for tools that need to distinguish them from container images.
+
 ### 3.2 Config Object
 
-Media type: `application/vnd.bento.config.v1+json`
+Media type: `application/vnd.oci.image.config.v1+json`
 
-The config object contains structured session metadata:
+The config object is a valid OCI image config. Bento metadata is stored in `config.Labels` for Docker compatibility, with the full bento config serialized in the `dev.bento.config` label for lossless round-trip:
+
+```json
+{
+  "architecture": "amd64",
+  "os": "linux",
+  "created": "2026-03-26T10:00:00Z",
+  "config": {
+    "Labels": {
+      "dev.bento.agent": "claude-code",
+      "dev.bento.checkpoint.sequence": "3",
+      "dev.bento.format.version": "0.3.0",
+      "dev.bento.config": "{\"schemaVersion\":\"1.0.0\",\"agent\":\"claude-code\",\"task\":\"refactor auth module\",\"checkpoint\":3,\"created\":\"2026-03-26T10:00:00Z\",\"harness\":\"claude-code\"}"
+    }
+  },
+  "rootfs": {
+    "type": "layers",
+    "diff_ids": ["sha256:333...", "sha256:222...", "sha256:111..."]
+  }
+}
+```
+
+The `dev.bento.config` label contains the full bento metadata as JSON:
 
 ```json
 {
@@ -106,50 +130,29 @@ The config object contains structured session metadata:
   "agent": "claude-code",
   "agentVersion": "1.2.3",
   "task": "refactor auth module",
-  "sessionId": "abc123",
-  "parentCheckpoint": "sha256:def456...",
   "checkpoint": 3,
   "created": "2026-03-26T10:00:00Z",
   "status": "paused",
   "harness": "claude-code",
   "gitSha": "a1b2c3d",
   "gitBranch": "main",
-  "envFiles": {
-    ".env": {
-      "template": ".env.example",
-      "secrets": ["DATABASE_URL", "GITHUB_TOKEN"]
-    }
-  },
-  "metrics": {
-    "tokenUsage": 45000,
-    "duration": "1h23m",
-    "layerCount": 3
-  },
-  "environment": {
-    "os": "linux",
-    "arch": "amd64"
-  }
+  "environment": { "os": "linux", "arch": "amd64" }
 }
 ```
-
-**Required fields:** `schemaVersion`, `created`, `checkpoint`, `harness`
-**Optional fields:** All others. Implementations SHOULD include as many fields as available.
-
-The `envFiles` section maps `.env` file paths to their templates and required secrets. On restore, implementations SHOULD populate `.env` files by reading the template from the project layer and substituting secret values resolved from the secrets manifest.
 
 ### 3.3 Layer Types
 
 #### 3.3.1 Core Layer Types
 
-Implementations MUST support these three layers. Together they cover the common case for most agent workspaces.
+All layers use the standard OCI media type `application/vnd.oci.image.layer.v1.tar+gzip`. The layer's role is identified by the `org.opencontainers.image.title` annotation.
 
-| Media Type | Name | Description |
+| Name | Title annotation | Description |
 |---|---|---|
-| `application/vnd.bento.layer.deps.v1.tar+gzip` | deps | Installed packages, virtual environments, build caches, compiled artifacts |
-| `application/vnd.bento.layer.agent.v1.tar+gzip` | agent | Agent memory, conversation history, plans, skills, commands, session state |
-| `application/vnd.bento.layer.project.v1.tar+gzip` | project | Source code, tests, build definitions, configs, and any other workspace files |
+| deps | `deps` | Installed packages, virtual environments, build caches, compiled artifacts |
+| agent | `agent` | Agent memory, conversation history, plans, skills, commands, session state |
+| project | `project` | Source code, tests, build definitions, configs, and any other workspace files |
 
-**Design rationale:** Layers are ordered from bottom (least-changing) to top (most-changing), following OCI convention. Deps change rarely and are large, so they sit at the bottom for maximum cache reuse -- the deps layer digest is reused across many checkpoints while only the smaller agent and project layers are re-uploaded. The project layer acts as a catch-all: any workspace file not matched by agent or deps patterns is captured here.
+**Design rationale:** Layers are ordered from bottom (least-changing) to top (most-changing), following OCI convention. Deps change rarely and are large, so they sit at the bottom for maximum cache reuse. The project layer acts as a catch-all: any workspace file not matched by agent or deps patterns is captured here.
 
 #### 3.3.2 Well-Known Custom Layer Types
 
@@ -182,9 +185,7 @@ Layers MUST NOT contain:
 
 #### 3.3.5 Layer Assignment Rules
 
-When a file matches patterns in multiple layers, the **first matching layer** in the harness definition order wins. Files that match no layer pattern are **excluded by default**. This is a deliberate design choice -- it keeps checkpoints clean and forces explicit decisions about what state matters.
-
-If a harness needs to capture files that don't fit any defined layer, it should define an additional custom layer with appropriate patterns rather than relying on a catch-all.
+When a file matches patterns in multiple layers, the **first matching layer** in the harness definition order wins. The project layer is a **catch-all**: any workspace file not matched by agent or deps patterns (and not in the ignore list) is captured in the project layer. This ensures no workspace file is silently excluded.
 
 ### 3.4 Annotations
 
@@ -627,25 +628,19 @@ The following are anticipated but not yet specified:
 
 ## Appendix A: IANA Media Type Registrations
 
-The following media types are defined by this specification:
+The following media types are defined or used by this specification:
 
-### Core types
-
-```
-application/vnd.bento.workspace.v1
-application/vnd.bento.config.v1+json
-application/vnd.bento.layer.project.v1.tar+gzip
-application/vnd.bento.layer.agent.v1.tar+gzip
-application/vnd.bento.layer.deps.v1.tar+gzip
-```
-
-### Well-known custom layer types
+### Bento-specific types
 
 ```
-application/vnd.bento.layer.build-cache.v1.tar+gzip
-application/vnd.bento.layer.data.v1.tar+gzip
-application/vnd.bento.layer.runtime.v1.tar+gzip
-application/vnd.bento.layer.custom.v1.tar+gzip
+application/vnd.bento.workspace.v1              (manifest artifactType)
+```
+
+### Standard OCI types (used for Docker compatibility)
+
+```
+application/vnd.oci.image.config.v1+json        (config)
+application/vnd.oci.image.layer.v1.tar+gzip     (all layers)
 ```
 
 ### Non-layer artifacts
@@ -691,13 +686,13 @@ This table documents where major agent frameworks store their state on disk. Har
   "mediaType": "application/vnd.oci.image.manifest.v1+json",
   "artifactType": "application/vnd.bento.workspace.v1",
   "config": {
-    "mediaType": "application/vnd.bento.config.v1+json",
+    "mediaType": "application/vnd.oci.image.config.v1+json",
     "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "size": 412
+    "size": 512
   },
   "layers": [
     {
-      "mediaType": "application/vnd.bento.layer.deps.v1.tar+gzip",
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
       "digest": "sha256:7d865e959b2466918c9863afca942d0fb89d7c9ac0c99bafc3749504ded97730",
       "size": 93323264,
       "annotations": {
@@ -707,7 +702,7 @@ This table documents where major agent frameworks store their state on disk. Har
       }
     },
     {
-      "mediaType": "application/vnd.bento.layer.agent.v1.tar+gzip",
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
       "digest": "sha256:b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c",
       "size": 65536,
       "annotations": {
@@ -717,7 +712,7 @@ This table documents where major agent frameworks store their state on disk. Har
       }
     },
     {
-      "mediaType": "application/vnd.bento.layer.project.v1.tar+gzip",
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
       "digest": "sha256:a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447",
       "size": 131072,
       "annotations": {
@@ -729,15 +724,13 @@ This table documents where major agent frameworks store their state on disk. Har
   ],
   "annotations": {
     "org.opencontainers.image.created": "2026-03-26T10:00:00Z",
-    "org.opencontainers.image.authors": "developer@example.com",
     "dev.bento.checkpoint.sequence": "3",
     "dev.bento.checkpoint.parent": "sha256:abc123def456...",
     "dev.bento.checkpoint.message": "refactored auth module",
     "dev.bento.agent": "claude-code",
-    "dev.bento.agent.version": "1.2.3",
     "dev.bento.task": "refactor auth module",
     "dev.bento.harness": "claude-code",
-    "dev.bento.format.version": "0.2.0"
+    "dev.bento.format.version": "0.3.0"
   }
 }
 ```

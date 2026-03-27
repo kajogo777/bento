@@ -103,8 +103,8 @@ func TestBuildManifest(t *testing.T) {
 	}
 
 	// Verify config JSON contains correct fields.
-	var cfgParsed BentoConfigObj
-	if err := json.Unmarshal(configBytes, &cfgParsed); err != nil {
+	cfgParsed, err := UnmarshalConfig(configBytes)
+	if err != nil {
 		t.Fatalf("failed to parse config JSON: %v", err)
 	}
 	if cfgParsed.Agent != "claude" {

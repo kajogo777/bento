@@ -1,7 +1,6 @@
 package registry
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -93,8 +92,8 @@ func TestLocalStore_FullLifecycle(t *testing.T) {
 	}
 
 	// Verify config roundtrip.
-	var loadedCfg manifest.BentoConfigObj
-	if err := json.Unmarshal(loadedConfig, &loadedCfg); err != nil {
+	loadedCfg, err := manifest.UnmarshalConfig(loadedConfig)
+	if err != nil {
 		t.Fatalf("failed to parse loaded config: %v", err)
 	}
 	if loadedCfg.Agent != "claude" {

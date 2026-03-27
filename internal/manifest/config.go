@@ -1,8 +1,12 @@
 package manifest
 
-import "encoding/json"
+import (
+	"encoding/json"
 
-// BentoConfigObj is the OCI config object stored as a blob in the registry.
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+)
+
+// BentoConfigObj holds bento-specific metadata for a checkpoint.
 type BentoConfigObj struct {
 	SchemaVersion    string                `json:"schemaVersion"`
 	Agent            string                `json:"agent,omitempty"`
@@ -46,8 +50,23 @@ func MarshalConfig(cfg *BentoConfigObj) ([]byte, error) {
 	return json.Marshal(cfg)
 }
 
-// UnmarshalConfig deserializes JSON into a BentoConfigObj.
+// UnmarshalConfig extracts BentoConfigObj from OCI image config bytes.
+// The bento metadata is stored in config.Labels["dev.bento.config"] as JSON.
+// Falls back to direct unmarshal for backward compatibility with older formats.
 func UnmarshalConfig(data []byte) (*BentoConfigObj, error) {
+	// Try OCI image config format first (current format)
+	var imageConfig ocispec.Image
+	if err := json.Unmarshal(data, &imageConfig); err == nil {
+		if bentoJSON, ok := imageConfig.Config.Labels["dev.bento.config"]; ok {
+			var cfg BentoConfigObj
+			if err := json.Unmarshal([]byte(bentoJSON), &cfg); err != nil {
+				return nil, err
+			}
+			return &cfg, nil
+		}
+	}
+
+	// Fall back to direct bento config format (legacy)
 	var cfg BentoConfigObj
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err

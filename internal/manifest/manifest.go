@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/opencontainers/go-digest"
 	specs "github.com/opencontainers/image-spec/specs-go"
@@ -19,11 +20,69 @@ type LayerInfo struct {
 	Frequency string
 }
 
-// BuildManifest constructs an OCI manifest and serialized config for a checkpoint.
-// It returns the JSON-encoded manifest and config bytes.
+// BuildManifest constructs an OCI image manifest with a Docker-compatible config.
+// The config is a valid OCI image config with bento metadata in Labels.
+// Layers use the standard OCI layer media type for Docker/containerd compatibility.
 func BuildManifest(cfg *BentoConfigObj, layers []LayerInfo) (manifestBytes []byte, configBytes []byte, err error) {
-	// Marshal the config object.
-	configBytes, err = json.Marshal(cfg)
+	// Build diff_ids (uncompressed digests are approximated by compressed digests
+	// since our tar archives are deterministic). Docker uses these for layer identity.
+	diffIDs := make([]digest.Digest, len(layers))
+	for i, l := range layers {
+		diffIDs[i] = digest.FromBytes(l.Data)
+	}
+
+	// Build OCI image config with bento metadata in Labels.
+	// This makes the artifact a valid OCI image that Docker can pull and extract.
+	// Use linux/amd64 as the OCI platform regardless of build host.
+	// Bento layers are OS-agnostic filesystem archives, but Docker requires
+	// a linux platform to accept the image for COPY --from and extraction.
+	os := "linux"
+	arch := "amd64"
+
+	labels := map[string]string{
+		AnnotationFormatVersion: FormatVersion,
+	}
+	if cfg.Agent != "" {
+		labels[AnnotationAgent] = cfg.Agent
+	}
+	if cfg.Task != "" {
+		labels[AnnotationTask] = cfg.Task
+	}
+	if cfg.Harness != "" {
+		labels[AnnotationHarness] = cfg.Harness
+	}
+	if cfg.Message != "" {
+		labels[AnnotationCheckpointMessage] = cfg.Message
+	}
+	if cfg.ParentCheckpoint != "" {
+		labels[AnnotationCheckpointParent] = cfg.ParentCheckpoint
+	}
+	labels[AnnotationCheckpointSeq] = strconv.Itoa(cfg.Checkpoint)
+
+	// Store full bento config as a label for lossless round-trip
+	bentoJSON, _ := json.Marshal(cfg)
+	labels["dev.bento.config"] = string(bentoJSON)
+
+	imageConfig := ocispec.Image{
+		Platform: ocispec.Platform{
+			Architecture: arch,
+			OS:           os,
+		},
+		RootFS: ocispec.RootFS{
+			Type:    "layers",
+			DiffIDs: diffIDs,
+		},
+		Config: ocispec.ImageConfig{
+			Labels: labels,
+		},
+	}
+	if cfg.Created != "" {
+		if t, err := time.Parse(time.RFC3339, cfg.Created); err == nil {
+			imageConfig.Created = &t
+		}
+	}
+
+	configBytes, err = json.Marshal(imageConfig)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal config: %w", err)
 	}
@@ -35,7 +94,8 @@ func BuildManifest(cfg *BentoConfigObj, layers []LayerInfo) (manifestBytes []byt
 		Size:      int64(len(configBytes)),
 	}
 
-	// Build layer descriptors.
+	// Build layer descriptors with standard OCI media type.
+	// Layer semantics are carried by annotations.
 	layerDescs := make([]ocispec.Descriptor, 0, len(layers))
 	for _, l := range layers {
 		annotations := map[string]string{
@@ -49,7 +109,7 @@ func BuildManifest(cfg *BentoConfigObj, layers []LayerInfo) (manifestBytes []byt
 		}
 
 		layerDescs = append(layerDescs, ocispec.Descriptor{
-			MediaType:   l.MediaType,
+			MediaType:   LayerMediaType,
 			Digest:      digest.FromBytes(l.Data),
 			Size:        int64(len(l.Data)),
 			Annotations: annotations,
@@ -83,12 +143,12 @@ func BuildManifest(cfg *BentoConfigObj, layers []LayerInfo) (manifestBytes []byt
 	}
 
 	manifest := ocispec.Manifest{
-		Versioned:    specs.Versioned{SchemaVersion: 2},
-		MediaType:    ocispec.MediaTypeImageManifest,
-		ArtifactType:  ArtifactType,
-		Config:        configDesc,
-		Layers:        layerDescs,
-		Annotations:   manifestAnnotations,
+		Versioned:   specs.Versioned{SchemaVersion: 2},
+		MediaType:   ocispec.MediaTypeImageManifest,
+		ArtifactType: ArtifactType,
+		Config:      configDesc,
+		Layers:      layerDescs,
+		Annotations: manifestAnnotations,
 	}
 
 	manifestBytes, err = json.Marshal(manifest)

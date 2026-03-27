@@ -82,8 +82,8 @@ func newInspectCmd() *cobra.Command {
 
 			// Display config
 			if len(configBytes) > 0 {
-				var cfgObj manifest.BentoConfigObj
-				if err := json.Unmarshal(configBytes, &cfgObj); err == nil {
+				cfgObj, err := manifest.UnmarshalConfig(configBytes)
+				if err == nil {
 					fmt.Println("\nConfig:")
 					if cfgObj.Task != "" {
 						fmt.Printf("  Task:      %s\n", cfgObj.Task)
