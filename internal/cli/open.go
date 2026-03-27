@@ -134,11 +134,21 @@ func newOpenCmd() *cobra.Command {
 					}
 				}
 
-				// Populate env files from templates
+				// Populate env files
 				for envPath, envFile := range cfg.EnvFiles {
-					templatePath := filepath.Join(targetDir, envFile.Template)
+					templatePath := ""
+					if envFile.Template != "" {
+						templatePath = filepath.Join(targetDir, envFile.Template)
+					}
 					outputPath := filepath.Join(targetDir, envPath)
-					if err := secrets.PopulateEnvFile(templatePath, outputPath, allVars); err != nil {
+
+					// Filter to only the secrets listed in the env file config
+					fileVars := make(map[string]string)
+					for k, v := range allVars {
+						fileVars[k] = v
+					}
+
+					if err := secrets.PopulateEnvFile(templatePath, outputPath, fileVars); err != nil {
 						fmt.Printf("Warning: populating %s: %v\n", envPath, err)
 					}
 				}
