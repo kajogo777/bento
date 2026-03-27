@@ -1,0 +1,52 @@
+version: 2
+builds:
+  - main: ./cmd/bento
+    binary: bento
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - format: tar.gz
+    name_template: "bento_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+brews:
+  - repository:
+      owner: bentoci
+      name: homebrew-tap
+    homepage: https://bento.dev
+    description: "Portable agent workspaces. Pack, ship, resume."
+
+scoops:
+  - repository:
+      owner: bentoci
+      name: scoop-bucket
+    homepage: https://bento.dev
+    description: "Portable agent workspaces. Pack, ship, resume."
+
+dockers:
+  - image_templates:
+      - "ghcr.io/bentoci/bento:{{ .Version }}"
+      - "ghcr.io/bentoci/bento:latest"
+    dockerfile: Dockerfile
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
