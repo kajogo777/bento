@@ -23,27 +23,25 @@ archives:
         formats:
           - zip
 
-brews:
-  - repository:
+homebrew_casks:
+  - name: bento
+    repository:
       owner: kajogo777
       name: bento
-    directory: Formula
+    directory: Casks
     homepage: https://github.com/kajogo777/bento
     description: "Portable agent workspaces. Save, ship, restore."
-    license: MIT
-    install: |
-      bin.install "bento"
 
-dockers_v2:
-  - images:
-      - "ghcr.io/kajogo777/bento"
-    tags:
-      - "{{ .Version }}"
-      - "latest"
-    dockerfile: Dockerfile.goreleaser
-    platforms:
-      - linux/amd64
-    sbom: false
+# dockers_v2:
+#   - images:
+#       - "ghcr.io/kajogo777/bento"
+#     tags:
+#       - "{{ .Version }}"
+#       - "latest"
+#     dockerfile: Dockerfile.goreleaser
+#     platforms:
+#       - linux/amd64
+#     sbom: false
 
 checksum:
   name_template: "checksums.txt"
