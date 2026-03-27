@@ -51,7 +51,7 @@ func (s *Scanner) ScanFile(path string) ([]ScanResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening file %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var results []ScanResult
 	scanner := bufio.NewScanner(f)

@@ -20,7 +20,7 @@ func PopulateEnvFile(templatePath, outputPath string, values map[string]string) 
 		if err != nil {
 			return fmt.Errorf("opening template %s: %w", templatePath, err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		var lines []string
 		scanner := bufio.NewScanner(f)

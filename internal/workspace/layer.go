@@ -75,7 +75,7 @@ func ListLayerFilesWithSizes(data []byte) (map[string]int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gzip reader: %w", err)
 	}
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 
 	files := make(map[string]int64)
 	tr := tar.NewReader(gr)
@@ -100,7 +100,7 @@ func ListLayerFiles(data []byte) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gzip reader: %w", err)
 	}
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 
 	var files []string
 	tr := tar.NewReader(gr)
@@ -170,14 +170,14 @@ func CleanStaleFiles(targetDir string, keepFiles map[string]bool) error {
 
 	// Remove stale files
 	for _, path := range toRemove {
-		os.Remove(path)
+		_ = os.Remove(path)
 	}
 
 	// Remove empty directories (walk bottom-up by sorting longest paths first)
 	// Do multiple passes until no more empty dirs are found
 	for {
 		removed := false
-		filepath.WalkDir(targetDir, func(path string, d os.DirEntry, err error) error {
+		_ = filepath.WalkDir(targetDir, func(path string, d os.DirEntry, err error) error {
 			if err != nil || !d.IsDir() {
 				return nil
 			}
@@ -188,7 +188,7 @@ func CleanStaleFiles(targetDir string, keepFiles map[string]bool) error {
 			}
 			entries, _ := os.ReadDir(path)
 			if len(entries) == 0 {
-				os.Remove(path)
+				_ = os.Remove(path)
 				removed = true
 			}
 			return nil
@@ -208,7 +208,7 @@ func UnpackLayer(data []byte, targetDir string) error {
 	if err != nil {
 		return fmt.Errorf("gzip reader: %w", err)
 	}
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 
 	tr := tar.NewReader(gr)
 	for {
