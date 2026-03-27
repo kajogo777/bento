@@ -52,10 +52,10 @@ func PackLayer(workDir string, files []string) ([]byte, error) {
 			return nil, fmt.Errorf("open %s: %w", normalized, err)
 		}
 		if _, err := io.Copy(tw, f); err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, fmt.Errorf("copy %s: %w", normalized, err)
 		}
-		f.Close()
+		_ = f.Close()
 	}
 
 	if err := tw.Close(); err != nil {
@@ -252,10 +252,10 @@ func UnpackLayer(data []byte, targetDir string) error {
 				return fmt.Errorf("create %s: %w", name, err)
 			}
 			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
+				_ = f.Close()
 				return fmt.Errorf("write %s: %w", name, err)
 			}
-			f.Close()
+			_ = f.Close()
 		}
 	}
 	return nil

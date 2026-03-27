@@ -12,8 +12,7 @@ func TestHydrateSecrets_EnvSource(t *testing.T) {
 	const envKey = "BENTO_TEST_SECRET_HYDRATE"
 	const envVal = "supersecretvalue"
 
-	os.Setenv(envKey, envVal)
-	defer os.Unsetenv(envKey)
+	t.Setenv(envKey, envVal)
 
 	secrets := map[string]config.Secret{
 		"my_secret": {
@@ -33,7 +32,7 @@ func TestHydrateSecrets_EnvSource(t *testing.T) {
 
 func TestHydrateSecrets_MissingEnvVar(t *testing.T) {
 	// Make sure the variable is not set.
-	os.Unsetenv("BENTO_TEST_MISSING_VAR_XYZ")
+	_ = os.Unsetenv("BENTO_TEST_MISSING_VAR_XYZ")
 
 	secrets := map[string]config.Secret{
 		"missing": {
@@ -55,9 +54,8 @@ func TestHydrateSecrets_PartialSuccess(t *testing.T) {
 	const envKey = "BENTO_TEST_SECRET_PARTIAL"
 	const envVal = "partialvalue"
 
-	os.Setenv(envKey, envVal)
-	defer os.Unsetenv(envKey)
-	os.Unsetenv("BENTO_TEST_NONEXIST_PARTIAL")
+	t.Setenv(envKey, envVal)
+	_ = os.Unsetenv("BENTO_TEST_NONEXIST_PARTIAL")
 
 	secrets := map[string]config.Secret{
 		"good": {
