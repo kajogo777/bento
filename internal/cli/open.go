@@ -113,19 +113,32 @@ func newOpenCmd() *cobra.Command {
 				}
 			}
 
-			// Hydrate secrets if config available
-			if cfgErr == nil && cfg != nil && len(cfg.Secrets) > 0 {
-				ctx := context.Background()
-				resolved, errs := secrets.HydrateSecrets(ctx, cfg.Secrets)
-				for _, e := range errs {
-					fmt.Printf("Warning: secret hydration: %v\n", e)
+			// Hydrate env vars and secrets
+			if cfgErr == nil && cfg != nil {
+				allVars := make(map[string]string)
+
+				// Plain env vars from bento.yaml
+				for k, v := range cfg.Env {
+					allVars[k] = v
 				}
 
-				// Populate env files
+				// Resolved secrets
+				if len(cfg.Secrets) > 0 {
+					ctx := context.Background()
+					resolved, errs := secrets.HydrateSecrets(ctx, cfg.Secrets)
+					for _, e := range errs {
+						fmt.Printf("Warning: secret hydration: %v\n", e)
+					}
+					for k, v := range resolved {
+						allVars[k] = v
+					}
+				}
+
+				// Populate env files from templates
 				for envPath, envFile := range cfg.EnvFiles {
 					templatePath := filepath.Join(targetDir, envFile.Template)
 					outputPath := filepath.Join(targetDir, envPath)
-					if err := secrets.PopulateEnvFile(templatePath, outputPath, resolved); err != nil {
+					if err := secrets.PopulateEnvFile(templatePath, outputPath, allVars); err != nil {
 						fmt.Printf("Warning: populating %s: %v\n", envPath, err)
 					}
 				}
