@@ -3,7 +3,7 @@ package harness
 import (
 	"strings"
 
-	"github.com/bentoci/bento/internal/manifest"
+	"github.com/kajogo777/bento/internal/manifest"
 )
 
 // CompositeHarness combines multiple detected agent harnesses into one.

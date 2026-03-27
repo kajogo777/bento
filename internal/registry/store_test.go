@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bentoci/bento/internal/manifest"
+	"github.com/kajogo777/bento/internal/manifest"
 )
 
 func TestLocalStore_FullLifecycle(t *testing.T) {

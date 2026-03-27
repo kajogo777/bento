@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bentoci/bento/internal/config"
-	"github.com/bentoci/bento/internal/secrets/providers"
+	"github.com/kajogo777/bento/internal/config"
+	"github.com/kajogo777/bento/internal/secrets/providers"
 )
 
 // HydrateSecrets resolves all secret references from the bento.yaml config and

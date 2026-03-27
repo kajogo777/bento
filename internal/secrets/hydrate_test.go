@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bentoci/bento/internal/config"
+	"github.com/kajogo777/bento/internal/config"
 )
 
 func TestHydrateSecrets_EnvSource(t *testing.T) {

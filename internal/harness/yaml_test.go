@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bentoci/bento/internal/config"
+	"github.com/kajogo777/bento/internal/config"
 )
 
 func TestNewYAMLHarness_Name(t *testing.T) {

@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/bentoci/bento/internal/cli"
+	"github.com/kajogo777/bento/internal/cli"
 )
 
 var version = "dev"

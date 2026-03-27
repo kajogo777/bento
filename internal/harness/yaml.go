@@ -4,8 +4,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bentoci/bento/internal/config"
-	"github.com/bentoci/bento/internal/manifest"
+	"github.com/kajogo777/bento/internal/config"
+	"github.com/kajogo777/bento/internal/manifest"
 )
 
 // YAMLHarness implements the Harness interface from an inline YAML configuration.

@@ -53,15 +53,15 @@ Bento artifacts are standard OCI artifacts. They work with any OCI-compatible re
 
 ```bash
 # macOS / Linux
-brew install bentoci/tap/bento
+brew install kajogo777/tap/bento
 
 # Windows
 scoop install bento
 # or
-winget install bentoci.bento
+winget install kajogo777.bento
 
 # From source
-go install github.com/bentoci/bento@latest
+go install github.com/kajogo777/bento@latest
 
 # Or grab a binary
 curl -fsSL https://bento.dev/install.sh | sh
@@ -267,7 +267,7 @@ services:
     volumes: [workspace:/workspace]
 
   checkpointer:
-    image: ghcr.io/bentoci/bento:latest
+    image: ghcr.io/kajogo777/bento:latest
     command: ["bento", "watch", "--dir", "/workspace", "--interval", "5m"]
     volumes: [workspace:/workspace]
 
@@ -334,14 +334,14 @@ cosign sign ghcr.io/myorg/ws/myproject:cp-3
 ```yaml
 initContainers:
   - name: workspace-init
-    image: ghcr.io/bentoci/bento:latest
+    image: ghcr.io/kajogo777/bento:latest
     command: ["bento", "open", "ghcr.io/myorg/ws/myproject:latest", "--target=/workspace"]
 containers:
   - name: agent
     image: ghcr.io/myorg/claude-code-runner:latest
     workingDir: /workspace
   - name: checkpointer
-    image: ghcr.io/bentoci/bento:latest
+    image: ghcr.io/kajogo777/bento:latest
     command: ["bento", "watch", "--dir=/workspace", "--interval=5m"]
 ```
 

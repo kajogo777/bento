@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/bentoci/bento/internal/config"
-	"github.com/bentoci/bento/internal/manifest"
-	"github.com/bentoci/bento/internal/registry"
-	"github.com/bentoci/bento/internal/workspace"
+	"github.com/kajogo777/bento/internal/config"
+	"github.com/kajogo777/bento/internal/manifest"
+	"github.com/kajogo777/bento/internal/registry"
+	"github.com/kajogo777/bento/internal/workspace"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 )

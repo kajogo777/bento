@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/bentoci/bento/internal/registry"
-	"github.com/bentoci/bento/internal/workspace"
+	"github.com/kajogo777/bento/internal/registry"
+	"github.com/kajogo777/bento/internal/workspace"
 	"github.com/spf13/cobra"
 )
 

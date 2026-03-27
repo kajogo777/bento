@@ -8,7 +8,7 @@ This guide walks you through the basics.
 
 ```bash
 # macOS / Linux
-brew install bentoci/tap/bento
+brew install kajogo777/tap/bento
 
 # Windows
 scoop install bento

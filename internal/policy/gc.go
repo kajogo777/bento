@@ -4,7 +4,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/bentoci/bento/internal/registry"
+	"github.com/kajogo777/bento/internal/registry"
 )
 
 // GCOptions configures garbage collection behavior.

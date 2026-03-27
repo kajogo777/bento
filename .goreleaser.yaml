@@ -23,22 +23,22 @@ archives:
 
 brews:
   - repository:
-      owner: bentoci
+      owner: kajogo777
       name: homebrew-tap
     homepage: https://bento.dev
     description: "Portable agent workspaces. Pack, ship, resume."
 
 scoops:
   - repository:
-      owner: bentoci
+      owner: kajogo777
       name: scoop-bucket
     homepage: https://bento.dev
     description: "Portable agent workspaces. Pack, ship, resume."
 
 dockers:
   - image_templates:
-      - "ghcr.io/bentoci/bento:{{ .Version }}"
-      - "ghcr.io/bentoci/bento:latest"
+      - "ghcr.io/kajogo777/bento:{{ .Version }}"
+      - "ghcr.io/kajogo777/bento:latest"
     dockerfile: Dockerfile
 
 checksum:

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bentoci/bento/internal/harness"
+	"github.com/kajogo777/bento/internal/harness"
 )
 
 // helper to create a file with content in a temp directory.

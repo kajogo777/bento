@@ -4,7 +4,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/bentoci/bento/internal/manifest"
+	"github.com/kajogo777/bento/internal/manifest"
 )
 
 // ChangeFrequency indicates how often a layer changes.

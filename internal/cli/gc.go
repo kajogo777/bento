@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/bentoci/bento/internal/policy"
+	"github.com/kajogo777/bento/internal/policy"
 	"github.com/spf13/cobra"
 )
 

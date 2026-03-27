@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bentoci/bento/internal/registry"
+	"github.com/kajogo777/bento/internal/registry"
 )
 
 // mockStore implements registry.Store for testing GC logic.
