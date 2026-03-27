@@ -2,7 +2,9 @@ package secrets
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 )
@@ -45,13 +47,34 @@ func NewSecretScanner(patterns []string) (*Scanner, error) {
 	return &Scanner{patterns: compiled}, nil
 }
 
+// isBinary checks if a file appears to be binary by looking for null bytes
+// in the first 512 bytes.
+func isBinary(f *os.File) (bool, error) {
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return false, err
+	}
+	return bytes.ContainsRune(buf[:n], 0), nil
+}
+
 // ScanFile scans a single file line by line and returns any secret matches.
+// Binary files are skipped.
 func (s *Scanner) ScanFile(path string) ([]ScanResult, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening file %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
+
+	if binary, err := isBinary(f); err != nil {
+		return nil, fmt.Errorf("checking file %s: %w", path, err)
+	} else if binary {
+		return nil, nil
+	}
 
 	var results []ScanResult
 	scanner := bufio.NewScanner(f)
