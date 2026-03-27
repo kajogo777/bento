@@ -43,7 +43,7 @@ func newSaveCmd() *cobra.Command {
 			}
 
 			// Detect harness
-			h := harness.Detect(dir)
+			h := harness.ResolveHarness(dir, cfg.Harness)
 
 			// Run pre_save hook
 			hookCmd := cfg.Hooks.PreSave
@@ -180,6 +180,51 @@ func newSaveCmd() *cobra.Command {
 				fmt.Printf("  %-10s %d files, %s (%s)\n", ld.Name+":", len(files), sizeStr, status)
 			}
 
+			// Pack external paths (agent session data outside workspace)
+			externalDefs := collectExternalDefs(h, cfg, dir)
+			if len(externalDefs) > 0 {
+				wsDefs := make([]workspace.ExternalPathDef, len(externalDefs))
+				for i, d := range externalDefs {
+					wsDefs[i] = workspace.ExternalPathDef{Source: d.Source, ArchivePrefix: d.ArchivePrefix}
+				}
+				extFiles, err := workspace.ScanExternalPaths(wsDefs, ignorePatterns)
+				if err != nil {
+					fmt.Printf("Warning: scanning external paths: %v\n", err)
+				}
+				if len(extFiles) > 0 {
+					extData, err := workspace.PackExternalFiles(extFiles)
+					if err != nil {
+						return fmt.Errorf("packing external files: %w", err)
+					}
+
+					// Build path map annotation (archive prefix -> source with ~ for portability)
+					pathMap := make(map[string]string)
+					for _, d := range externalDefs {
+						pathMap[d.ArchivePrefix] = d.Source
+					}
+					pathMapJSON, _ := json.Marshal(pathMap)
+
+					status := "changed"
+					if parentDigest != "" {
+						newDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(extData))
+						if prevDigest, ok := prevLayerDigests["external"]; ok && prevDigest == newDigest {
+							status = "unchanged, reusing"
+						}
+					}
+
+					layerInfos = append(layerInfos, manifest.LayerInfo{
+						Name:        "external",
+						MediaType:   manifest.LayerMediaType,
+						Data:        extData,
+						FileCount:   len(extFiles),
+						Frequency:   string(harness.ChangesOften),
+						Annotations: map[string]string{manifest.AnnotationExternalPaths: string(pathMapJSON)},
+					})
+
+					fmt.Printf("  %-10s %d files, %s (%s)\n", "external:", len(extFiles), formatSize(len(extData)), status)
+				}
+			}
+
 			// Build config object
 			cfgObj := &manifest.BentoConfigObj{
 				SchemaVersion:    "1.0.0",
@@ -267,6 +312,19 @@ func newSaveCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&flagSkipSecretScan, "skip-secret-scan", false, "skip secret scanning")
 
 	return cmd
+}
+
+// collectExternalDefs merges harness and config external path definitions.
+func collectExternalDefs(h harness.Harness, cfg *config.BentoConfig, workDir string) []harness.ExternalPathDef {
+	var defs []harness.ExternalPathDef
+	defs = append(defs, h.ExternalPaths(workDir)...)
+	for _, ep := range cfg.ExternalPaths {
+		defs = append(defs, harness.ExternalPathDef{
+			Source:        ep.Path,
+			ArchivePrefix: "__external__/" + ep.Prefix + "/",
+		})
+	}
+	return defs
 }
 
 func formatSize(bytes int) string {

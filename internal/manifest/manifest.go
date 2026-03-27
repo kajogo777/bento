@@ -13,11 +13,12 @@ import (
 
 // LayerInfo describes a single layer to include in the manifest.
 type LayerInfo struct {
-	Name      string
-	MediaType string
-	Data      []byte
-	FileCount int
-	Frequency string
+	Name        string
+	MediaType   string
+	Data        []byte
+	FileCount   int
+	Frequency   string
+	Annotations map[string]string // extra annotations merged into the layer descriptor
 }
 
 // BuildManifest constructs an OCI image manifest with a Docker-compatible config.
@@ -106,6 +107,9 @@ func BuildManifest(cfg *BentoConfigObj, layers []LayerInfo) (manifestBytes []byt
 		}
 		if l.Frequency != "" {
 			annotations[AnnotationLayerChangeFreq] = l.Frequency
+		}
+		for k, v := range l.Annotations {
+			annotations[k] = v
 		}
 
 		layerDescs = append(layerDescs, ocispec.Descriptor{

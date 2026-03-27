@@ -85,7 +85,7 @@ func diffWorkspace(dir string, args []string) error {
 	_ = json.Unmarshal(manifestBytes, &m)
 
 	// Scan current workspace using same logic as save
-	h := harness.Detect(dir)
+	h := harness.ResolveHarness(dir, cfg.Harness)
 	ignorePatterns := append(config.DefaultIgnorePatterns, h.Ignore()...)
 	ignorePatterns = append(ignorePatterns, cfg.Ignore...)
 	if bentoIgnore, err := workspace.LoadBentoIgnore(dir); err == nil {

@@ -3,7 +3,7 @@ package harness
 // Fallback is the default harness used when no specific agent framework is detected.
 type Fallback struct{}
 
-func (f Fallback) Name() string            { return "default" }
+func (f Fallback) Name() string            { return "auto" }
 func (f Fallback) Detect(_ string) bool    { return true }
 
 func (f Fallback) Layers() []LayerDef {
@@ -21,3 +21,4 @@ func (f Fallback) SessionConfig(workDir string) (*SessionConfig, error) {
 func (f Fallback) Ignore() []string         { return CommonIgnorePatterns }
 func (f Fallback) SecretPatterns() []string  { return CommonSecretPatterns }
 func (f Fallback) DefaultHooks() map[string]string { return nil }
+func (f Fallback) ExternalPaths(_ string) []ExternalPathDef { return nil }

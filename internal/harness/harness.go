@@ -1,7 +1,9 @@
 package harness
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/kajogo777/bento/internal/manifest"
@@ -34,6 +36,14 @@ type SessionConfig struct {
 	GitBranch    string `json:"gitBranch,omitempty"`
 }
 
+// ExternalPathDef maps an external directory to an archive prefix.
+// Source is the absolute path on disk (supports ~). ArchivePrefix is the
+// path prefix used inside the tar archive (e.g. "__external__/claude-sessions/").
+type ExternalPathDef struct {
+	Source        string
+	ArchivePrefix string
+}
+
 // Harness maps an agent framework's file layout to bento's layer taxonomy.
 type Harness interface {
 	// Name returns the harness identifier.
@@ -56,6 +66,9 @@ type Harness interface {
 
 	// DefaultHooks returns suggested hooks for this agent framework.
 	DefaultHooks() map[string]string
+
+	// ExternalPaths returns paths outside the workspace to include in the agent layer.
+	ExternalPaths(workDir string) []ExternalPathDef
 }
 
 // execGit runs a git command in the given directory and returns trimmed output.
@@ -153,6 +166,23 @@ var CommonIgnorePatterns = []string{
 	"dist/**", "build/**",
 }
 
+// CommonCredentialFiles are filenames that should be excluded from all layers
+// to prevent accidental credential leakage (especially in external paths).
+var CommonCredentialFiles = []string{
+	"auth.json", "oauth_tokens", "credentials.json",
+	"*.sqlite", "*.db", "*.sqlite-shm", "*.sqlite-wal",
+}
+
 // CommonSecretPatterns returns regex patterns for detecting secrets in file content.
 // CommonSecretPatterns are the default secret detection patterns shared by all harnesses.
 var CommonSecretPatterns = secrets.DefaultPatterns
+
+// ExpandHome expands ~ prefix to the user's home directory.
+func ExpandHome(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}

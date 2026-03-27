@@ -32,8 +32,10 @@ func newInitCmd() *cobra.Command {
 
 			// Detect harness
 			var h harness.Harness
+			harnessConfig := "auto"
 			if flagHarness != "" && flagHarness != "auto" {
 				h = harness.DetectSingle(dir, flagHarness)
+				harnessConfig = flagHarness
 				fmt.Printf("Using agent: %s\n", h.Name())
 			} else {
 				h = harness.Detect(dir)
@@ -43,7 +45,7 @@ func newInitCmd() *cobra.Command {
 			// Build config
 			cfg := &config.BentoConfig{
 				Store:   config.DefaultStorePath(),
-				Harness: h.Name(),
+				Harness: harnessConfig,
 				Task:    flagTask,
 				Ignore:  []string{"*.log", "tmp/", ".DS_Store"},
 			}

@@ -6,9 +6,9 @@ func allAgentHarnesses() []Harness {
 	return []Harness{
 		ClaudeCode{},
 		Codex{},
-		Aider{},
+		OpenCode{},
+		OpenClaw{},
 		Cursor{},
-		Windsurf{},
 	}
 }
 
@@ -33,13 +33,26 @@ func Detect(workDir string) Harness {
 	}
 }
 
-// DetectSingle probes for a specific harness by name.
-// Returns Fallback if the named harness is not found or doesn't match.
+// DetectSingle returns the harness with the given name.
+// When explicitly requested by the user, the harness is returned regardless
+// of whether its markers are present (force mode).
 func DetectSingle(workDir, name string) Harness {
 	for _, h := range allAgentHarnesses() {
-		if h.Name() == name && h.Detect(workDir) {
+		if h.Name() == name {
 			return h
 		}
 	}
 	return Fallback{}
+}
+
+// ResolveHarness returns the appropriate harness based on config.
+// If harnessName is empty, "auto", or "default" (backward compat), auto-detect.
+// Otherwise, detect the specific named harness.
+func ResolveHarness(workDir, harnessName string) Harness {
+	switch harnessName {
+	case "", "auto", "default":
+		return Detect(workDir)
+	default:
+		return DetectSingle(workDir, harnessName)
+	}
 }

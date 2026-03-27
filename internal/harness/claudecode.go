@@ -42,7 +42,8 @@ func (c ClaudeCode) SessionConfig(workDir string) (*SessionConfig, error) {
 }
 
 func (c ClaudeCode) Ignore() []string {
-	return append(CommonIgnorePatterns, ".claude/credentials", ".claude/oauth_tokens")
+	patterns := append(CommonIgnorePatterns, CommonCredentialFiles...)
+	return append(patterns, ".claude/credentials", ".claude/oauth_tokens")
 }
 
 func (c ClaudeCode) SecretPatterns() []string {
@@ -51,4 +52,25 @@ func (c ClaudeCode) SecretPatterns() []string {
 
 func (c ClaudeCode) DefaultHooks() map[string]string {
 	return nil
+}
+
+func (c ClaudeCode) ExternalPaths(workDir string) []ExternalPathDef {
+	absDir, err := filepath.Abs(workDir)
+	if err != nil {
+		return nil
+	}
+	// Resolve symlinks so /tmp -> /private/tmp on macOS
+	if resolved, err := filepath.EvalSymlinks(absDir); err == nil {
+		absDir = resolved
+	}
+	// Claude Code uses the absolute path with "/" replaced by "-" as the project hash
+	hash := strings.ReplaceAll(absDir, string(filepath.Separator), "-")
+	source := ExpandHome("~/.claude/projects/" + hash)
+	if info, err := os.Stat(source); err != nil || !info.IsDir() {
+		return nil
+	}
+	return []ExternalPathDef{{
+		Source:        "~/.claude/projects/" + hash,
+		ArchivePrefix: "__external__/claude-sessions/",
+	}}
 }

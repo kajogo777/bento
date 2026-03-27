@@ -14,7 +14,7 @@ func TestDetect_ClaudeCode(t *testing.T) {
 
 	h := Detect(dir)
 	if h.Name() != "claude-code" {
-		t.Fatalf("expected claudecode, got %s", h.Name())
+		t.Fatalf("expected claude-code, got %s", h.Name())
 	}
 }
 
@@ -30,15 +30,51 @@ func TestDetect_Codex(t *testing.T) {
 	}
 }
 
-func TestDetect_Aider(t *testing.T) {
+func TestDetect_OpenCode(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".aider.conf.yml"), []byte(""), 0o644); err != nil {
+	if err := os.Mkdir(filepath.Join(dir, ".opencode"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	h := Detect(dir)
-	if h.Name() != "aider" {
-		t.Fatalf("expected aider, got %s", h.Name())
+	if h.Name() != "opencode" {
+		t.Fatalf("expected opencode, got %s", h.Name())
+	}
+}
+
+func TestDetect_OpenCode_ConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "opencode.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := Detect(dir)
+	if h.Name() != "opencode" {
+		t.Fatalf("expected opencode, got %s", h.Name())
+	}
+}
+
+func TestDetect_OpenClaw(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("# soul"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := Detect(dir)
+	if h.Name() != "openclaw" {
+		t.Fatalf("expected openclaw, got %s", h.Name())
+	}
+}
+
+func TestDetect_OpenClaw_Identity(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "IDENTITY.md"), []byte("# id"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := Detect(dir)
+	if h.Name() != "openclaw" {
+		t.Fatalf("expected openclaw, got %s", h.Name())
 	}
 }
 
@@ -54,24 +90,12 @@ func TestDetect_Cursor(t *testing.T) {
 	}
 }
 
-func TestDetect_Windsurf(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, ".windsurf"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	h := Detect(dir)
-	if h.Name() != "windsurf" {
-		t.Fatalf("expected windsurf, got %s", h.Name())
-	}
-}
-
 func TestDetect_Fallback(t *testing.T) {
 	dir := t.TempDir()
 
 	h := Detect(dir)
-	if h.Name() != "default" {
-		t.Fatalf("expected default (fallback), got %s", h.Name())
+	if h.Name() != "auto" {
+		t.Fatalf("expected auto (fallback), got %s", h.Name())
 	}
 }
 
@@ -116,10 +140,10 @@ func TestHarness_Names(t *testing.T) {
 	}{
 		{ClaudeCode{}, "claude-code"},
 		{Codex{}, "codex"},
-		{Aider{}, "aider"},
+		{OpenCode{}, "opencode"},
+		{OpenClaw{}, "openclaw"},
 		{Cursor{}, "cursor"},
-		{Windsurf{}, "windsurf"},
-		{Fallback{}, "default"},
+		{Fallback{}, "auto"},
 	}
 
 	for _, tt := range tests {
@@ -133,9 +157,9 @@ func TestHarness_LayersNonEmpty(t *testing.T) {
 	harnesses := []Harness{
 		ClaudeCode{},
 		Codex{},
-		Aider{},
+		OpenCode{},
+		OpenClaw{},
 		Cursor{},
-		Windsurf{},
 		Fallback{},
 	}
 
@@ -155,6 +179,30 @@ func TestHarness_LayersNonEmpty(t *testing.T) {
 	}
 }
 
+func TestHarness_IgnoreIncludesCredentials(t *testing.T) {
+	harnesses := []Harness{
+		ClaudeCode{},
+		Codex{},
+		OpenCode{},
+		OpenClaw{},
+		Cursor{},
+	}
+
+	for _, h := range harnesses {
+		patterns := h.Ignore()
+		found := false
+		for _, p := range patterns {
+			if p == "auth.json" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s: Ignore() missing credential file 'auth.json'", h.Name())
+		}
+	}
+}
+
 func TestClaudeCode_DetectsClaudeMD(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# claude"), 0o644); err != nil {
@@ -167,15 +215,24 @@ func TestClaudeCode_DetectsClaudeMD(t *testing.T) {
 	}
 }
 
-func TestCodex_DetectsAgentsMD(t *testing.T) {
+func TestCodex_RequiresCodexDir(t *testing.T) {
 	dir := t.TempDir()
+	// AGENTS.md alone should NOT trigger Codex (ambiguous with OpenCode)
 	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# agents"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	h := Codex{}
+	if h.Detect(dir) {
+		t.Fatal("expected Codex.Detect to return false for AGENTS.md alone")
+	}
+
+	// .codex/ dir should trigger
+	if err := os.Mkdir(filepath.Join(dir, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if !h.Detect(dir) {
-		t.Fatal("expected Codex.Detect to return true for AGENTS.md")
+		t.Fatal("expected Codex.Detect to return true for .codex/ dir")
 	}
 }
 

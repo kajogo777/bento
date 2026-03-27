@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kajogo777/bento/internal/config"
+	"github.com/kajogo777/bento/internal/harness"
 	"github.com/kajogo777/bento/internal/hooks"
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/kajogo777/bento/internal/registry"
@@ -134,9 +135,30 @@ func newOpenCmd() *cobra.Command {
 				}
 			}
 
+			// Parse manifest for layer annotations
+			var ociManifest ocispec.Manifest
+			_ = json.Unmarshal(manifestBytes, &ociManifest)
+
 			// Unpack layers
 			fmt.Printf("Restoring checkpoint %s (sequence %d)...\n", tag, info.Sequence)
-			for _, ld := range layersToRestore {
+			for i, ld := range layersToRestore {
+				// Check if this is an external layer
+				if i < len(ociManifest.Layers) {
+					if pathMapJSON, ok := ociManifest.Layers[i].Annotations[manifest.AnnotationExternalPaths]; ok {
+						var pathMap map[string]string
+						if err := json.Unmarshal([]byte(pathMapJSON), &pathMap); err == nil {
+							// Expand ~ in target paths
+							expandedMap := make(map[string]string)
+							for prefix, target := range pathMap {
+								expandedMap[prefix] = harness.ExpandHome(target)
+							}
+							if err := workspace.UnpackExternalLayer(ld.Data, expandedMap); err != nil {
+								fmt.Printf("Warning: restoring external data: %v\n", err)
+							}
+							continue
+						}
+					}
+				}
 				if err := workspace.UnpackLayer(ld.Data, targetDir); err != nil {
 					return fmt.Errorf("unpacking layer: %w", err)
 				}

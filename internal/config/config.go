@@ -23,8 +23,17 @@ type BentoConfig struct {
 	Hooks    HooksConfig       `yaml:"hooks,omitempty"`
 	Retention RetentionConfig  `yaml:"retention,omitempty"`
 
+	// ExternalPaths lists directories outside the workspace to include.
+	ExternalPaths []ExternalPathConfig `yaml:"external_paths,omitempty"`
+
 	// HarnessInline allows defining a custom harness inline.
 	HarnessInline *InlineHarness `yaml:"harness_config,omitempty"`
+}
+
+// ExternalPathConfig defines a directory outside the workspace to capture.
+type ExternalPathConfig struct {
+	Path   string `yaml:"path"`   // absolute path or ~/path
+	Prefix string `yaml:"prefix"` // archive prefix name
 }
 
 // Secret represents a secret reference in bento.yaml.
@@ -116,6 +125,11 @@ func Load(dir string) (*BentoConfig, error) {
 
 	if cfg.Sync == "" {
 		cfg.Sync = "manual"
+	}
+
+	// Expand ~ in external paths
+	for i := range cfg.ExternalPaths {
+		cfg.ExternalPaths[i].Path = expandPath(cfg.ExternalPaths[i].Path)
 	}
 
 	return cfg, nil

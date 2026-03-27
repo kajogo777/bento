@@ -137,3 +137,17 @@ func (c *CompositeHarness) DefaultHooks() map[string]string {
 	}
 	return merged
 }
+
+func (c *CompositeHarness) ExternalPaths(workDir string) []ExternalPathDef {
+	seen := make(map[string]bool)
+	var defs []ExternalPathDef
+	for _, h := range c.harnesses {
+		for _, d := range h.ExternalPaths(workDir) {
+			if !seen[d.Source] {
+				seen[d.Source] = true
+				defs = append(defs, d)
+			}
+		}
+	}
+	return defs
+}

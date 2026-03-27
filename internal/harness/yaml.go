@@ -75,6 +75,8 @@ func (y *YAMLHarness) DefaultHooks() map[string]string {
 	return y.cfg.Hooks
 }
 
+func (y *YAMLHarness) ExternalPaths(_ string) []ExternalPathDef { return nil }
+
 // mapFrequency converts a string frequency value to the ChangeFrequency type.
 func mapFrequency(s string) ChangeFrequency {
 	switch s {

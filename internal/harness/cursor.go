@@ -14,6 +14,9 @@ func (c Cursor) Detect(workDir string) bool {
 	if info, err := os.Stat(filepath.Join(workDir, ".cursor")); err == nil && info.IsDir() {
 		return true
 	}
+	if _, err := os.Stat(filepath.Join(workDir, ".cursorrules")); err == nil {
+		return true
+	}
 	return false
 }
 
@@ -29,6 +32,9 @@ func (c Cursor) SessionConfig(workDir string) (*SessionConfig, error) {
 	return BaseSessionConfig(c.Name(), workDir), nil
 }
 
-func (c Cursor) Ignore() []string         { return CommonIgnorePatterns }
+func (c Cursor) Ignore() []string {
+	return append(CommonIgnorePatterns, CommonCredentialFiles...)
+}
 func (c Cursor) SecretPatterns() []string  { return CommonSecretPatterns }
 func (c Cursor) DefaultHooks() map[string]string { return nil }
+func (c Cursor) ExternalPaths(_ string) []ExternalPathDef { return nil }

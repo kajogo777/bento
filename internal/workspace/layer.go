@@ -201,6 +201,116 @@ func CleanStaleFiles(targetDir string, keepFiles map[string]bool) error {
 	return nil
 }
 
+// PackExternalFiles creates a tar.gz archive from files outside the workspace.
+// Each ExternalFile specifies an absolute source path and an archive path.
+func PackExternalFiles(files []ExternalFile) ([]byte, error) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	for _, f := range files {
+		info, err := os.Stat(f.AbsPath)
+		if err != nil {
+			continue // skip unreadable files
+		}
+		if info.IsDir() {
+			continue
+		}
+
+		data, err := os.ReadFile(f.AbsPath)
+		if err != nil {
+			continue
+		}
+
+		hdr := &tar.Header{
+			Name:    f.ArchivePath,
+			Size:    info.Size(),
+			Mode:    int64(DefaultFileMode(f.ArchivePath)),
+			ModTime: time.Time{},
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return nil, fmt.Errorf("writing header for %s: %w", f.ArchivePath, err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			return nil, fmt.Errorf("writing data for %s: %w", f.ArchivePath, err)
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	if err := gw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// UnpackExternalLayer extracts an external layer, mapping archive prefixes to target directories.
+// pathMap maps archive prefix (e.g. "__external__/claude-sessions/") to absolute target directory.
+func UnpackExternalLayer(data []byte, pathMap map[string]string) error {
+	gr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("opening gzip: %w", err)
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("reading tar: %w", err)
+		}
+
+		name := filepath.ToSlash(hdr.Name)
+
+		// Find matching prefix
+		var targetDir, relPath string
+		for prefix, dir := range pathMap {
+			if strings.HasPrefix(name, prefix) {
+				targetDir = dir
+				relPath = name[len(prefix):]
+				break
+			}
+		}
+		if targetDir == "" {
+			continue // no matching prefix, skip
+		}
+
+		// Safety checks on relPath
+		if filepath.IsAbs(relPath) || strings.Contains(relPath, "..") {
+			continue
+		}
+
+		targetPath := filepath.Join(targetDir, filepath.FromSlash(relPath))
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(targetPath, 0o755); err != nil {
+				return fmt.Errorf("creating dir %s: %w", targetPath, err)
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+				return fmt.Errorf("creating parent dir for %s: %w", targetPath, err)
+			}
+			content, err := io.ReadAll(tr)
+			if err != nil {
+				return fmt.Errorf("reading %s: %w", name, err)
+			}
+			mode := os.FileMode(hdr.Mode)
+			if mode == 0 {
+				mode = DefaultFileMode(relPath)
+			}
+			if err := os.WriteFile(targetPath, content, mode); err != nil {
+				return fmt.Errorf("writing %s: %w", targetPath, err)
+			}
+		}
+	}
+	return nil
+}
+
 // UnpackLayer extracts a tar.gz archive to targetDir. It handles cross-platform
 // path conversion and rejects absolute paths or paths containing ".." for safety.
 func UnpackLayer(data []byte, targetDir string) error {

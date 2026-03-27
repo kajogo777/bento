@@ -116,23 +116,33 @@ Harnesses can define additional custom layers. Unchanged layers are deduplicated
 
 ### Harnesses
 
-A harness maps an agent framework's file layout to bento's layers. Bento auto-detects your agent:
+A harness maps an agent framework's file layout to bento's layers.
+
+By default, `harness` is set to `auto`. In auto mode, bento scans the workspace on every `save` and `diff` to detect which agents are active. If you add a new agent mid-project, bento picks it up automatically.
 
 ```bash
 bento init
 # Detected agent: claude-code
-```
 
-Multiple agents in the same workspace are combined automatically:
-
-```bash
-bento init
+# Later, start using Codex too...
+bento save -m "multi-agent"
 # Detected agent: claude-code+codex
 ```
 
-Use `--harness <name>` to force a single agent.
+When multiple agents are detected, their layers are merged. Each agent gets its own agent layer (`agent-claude-code`, `agent-codex`), while deps and project layers are shared.
 
-**Supported:** Claude Code, Codex, Aider, Cursor, Windsurf
+Use `--harness <name>` to force a single agent. This overrides auto-detection and uses that harness's layer definitions regardless of which markers are present.
+
+#### Support Matrix
+
+| Feature | Claude Code | Codex | OpenCode | OpenClaw | Cursor |
+|---------|:-----------:|:-----:|:--------:|:--------:|:------:|
+| Auto-detection | `.claude/`, `CLAUDE.md` | `.codex/` | `.opencode/`, `opencode.json` | `SOUL.md`, `IDENTITY.md` | `.cursor/`, `.cursorrules` |
+| Agent memory | CLAUDE.md, `.claude/**` | AGENTS.md, `.codex/**` | AGENTS.md, `.opencode/**` | SOUL.md, MEMORY.md, `memory/**` | `.cursor/rules/**` |
+| Session capture | `~/.claude/projects/<hash>/` | `~/.codex/` | `~/.local/share/opencode/` | `~/.openclaw/` | - |
+| Credential exclusion | `.claude/credentials`, `oauth_tokens` | `auth.json` | `auth.json` | `.env`, `openclaw.json` | - |
+| Version detection | `claude --version` | - | `opencode --version` | - | - |
+| Post-restore hook | - | `.codex/setup.sh` | - | - | - |
 
 Define a custom harness in `bento.yaml` for unsupported agents:
 
@@ -315,13 +325,11 @@ Yes. Checkpoints are portable across macOS, Linux, and Windows.
 - [x] Local OCI store
 - [x] Secret scanning and hydration
 - [x] Harnesses:
-  - [x] Claude Code
-  - [x] Codex
-  - [x] Aider
+  - [x] Claude Code (with session capture)
+  - [x] Codex (with session capture)
+  - [x] OpenCode (with session capture)
+  - [x] OpenClaw (with session capture)
   - [x] Cursor
-  - [x] Windsurf
-  - [ ] OpenClaw
-  - [ ] OpenCode
   - [ ] GitHub Copilot
 - [x] Remote registry push/pull
 - [ ] Store schemes (`oci://`, `file://`)
