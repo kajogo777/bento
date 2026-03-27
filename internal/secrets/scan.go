@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 // DefaultPatterns are the built-in secret detection patterns used when a harness
@@ -17,7 +19,7 @@ var DefaultPatterns = []string{
 	`ghp_[a-zA-Z0-9]{36}`,                        // GitHub PAT
 	`glpat-[a-zA-Z0-9\-]{20,}`,                   // GitLab PAT
 	`-----BEGIN (RSA |EC )?PRIVATE KEY`,           // Private keys
-	`(?i)(password|passwd|pwd)\s*[:=]\s*\S+`,      // Password assignments
+	`(?i)(password|passwd|pwd)\s*[:=]\s*[^\s${\}][^\s]*`, // Password assignments (excludes template vars)
 }
 
 // ScanResult represents a single secret match found in a file.
@@ -61,14 +63,38 @@ func isBinary(f *os.File) (bool, error) {
 	return bytes.ContainsRune(buf[:n], 0), nil
 }
 
+// shouldSkipFile returns true for files unlikely to contain real secrets.
+func shouldSkipFile(path string) bool {
+	base := filepath.Base(path)
+	ext := filepath.Ext(path)
+
+	// Test files contain fake secrets by design
+	if strings.HasSuffix(base, "_test.go") || strings.HasSuffix(base, ".test.js") ||
+		strings.HasSuffix(base, ".test.ts") || strings.HasSuffix(base, "_test.py") ||
+		strings.HasSuffix(base, ".spec.js") || strings.HasSuffix(base, ".spec.ts") {
+		return true
+	}
+
+	// Documentation and spec files
+	if ext == ".md" || ext == ".rst" || ext == ".adoc" {
+		return true
+	}
+
+	return false
+}
+
 // ScanFile scans a single file line by line and returns any secret matches.
-// Binary files are skipped.
+// Binary files and test/doc files are skipped.
 func (s *Scanner) ScanFile(path string) ([]ScanResult, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening file %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
+
+	if shouldSkipFile(path) {
+		return nil, nil
+	}
 
 	if binary, err := isBinary(f); err != nil {
 		return nil, fmt.Errorf("checking file %s: %w", path, err)
