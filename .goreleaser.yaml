@@ -39,7 +39,9 @@ dockers:
   - image_templates:
       - "ghcr.io/kajogo777/bento:{{ .Version }}"
       - "ghcr.io/kajogo777/bento:latest"
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.goreleaser
+    goarch: amd64
+    goos: linux
 
 checksum:
   name_template: "checksums.txt"

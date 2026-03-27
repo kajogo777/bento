@@ -281,6 +281,7 @@ Full format details in [SPEC.md](specs/SPEC.md).
 | Deduplication | yes | - | - | yes |
 | Inspectable | yes | - | - | yes |
 | Branching | yes | - | - | yes |
+| Docker interop | - | yes | - | yes |
 | Works offline | yes | yes | - | yes |
 | Open standard | yes | - | - | yes |
 
@@ -294,6 +295,9 @@ Those capture raw process memory: opaque, architecture-dependent, uninspectable.
 
 **Why OCI?**
 The infrastructure exists. Every cloud runs an OCI registry. No new accounts or tools needed.
+
+**What about sandboxes?**
+Bento makes workspaces portable across sandboxes. Save a checkpoint in one sandbox (E2B, Docker, Fly.io), open it in another. Move between providers based on cost, GPU availability, or region without rebuilding context.
 
 **Can I use this without an AI agent?**
 Yes. Bento works on any directory.
