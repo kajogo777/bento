@@ -26,8 +26,7 @@ archives:
 homebrew_casks:
   - repository:
       owner: kajogo777
-      name: bento
-    directory: Casks
+      name: homebrew-bento
     homepage: https://github.com/kajogo777/bento
     description: "Portable agent workspaces. Pack, ship, resume."
 
