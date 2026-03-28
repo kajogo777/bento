@@ -15,6 +15,35 @@ import (
 	"time"
 )
 
+// makeMultiLayerWorkspace creates a workspace with numLayers custom layers,
+// each containing a single pseudo-random file of layerSizeBytes bytes.
+// The last layer is a catch_all; earlier layers use directory patterns.
+func makeMultiLayerWorkspace(t *testing.T, numLayers, layerSizeBytes int) string {
+	t.Helper()
+	dir := t.TempDir()
+	storeDir := t.TempDir()
+
+	var sb strings.Builder
+	sb.WriteString("store: " + storeDir + "\n")
+	sb.WriteString("layers:\n")
+	for i := 1; i <= numLayers; i++ {
+		sb.WriteString(fmt.Sprintf("  - name: layer%d\n", i))
+		if i < numLayers {
+			sb.WriteString(fmt.Sprintf("    patterns:\n      - \"layer%d/**\"\n", i))
+		} else {
+			sb.WriteString("    catch_all: true\n")
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bento.yaml"), []byte(sb.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 1; i <= numLayers; i++ {
+		writeLargeFile(t, filepath.Join(dir, fmt.Sprintf("layer%d", i), "data.txt"), layerSizeBytes)
+	}
+	return dir
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -233,4 +262,91 @@ func TestStreamingScaling(t *testing.T) {
 	if ratio > 2.0 {
 		t.Errorf("RSS scaled %.2f× from 50MiB to 200MiB (expected <2×) — possible in-memory file loading", ratio)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// TestParallelSaveSpeedup: 4-layer save should benefit from parallel packing
+//
+// Compares a single-layer save against a 4-layer save with the same per-layer
+// workload. Sequential execution would take 4×; parallel should be < 3×.
+// ---------------------------------------------------------------------------
+
+func TestParallelSaveSpeedup(t *testing.T) {
+	if runtime.NumCPU() < 2 {
+		t.Skip("parallel speedup test requires at least 2 CPUs")
+	}
+
+	const mbPerLayer = 20  // 20 MiB per layer — CPU-bound gzip work
+	const numLayers = 4
+
+	dir1 := makeMultiLayerWorkspace(t, 1, mbPerLayer<<20)
+	_, t1, _ := runMeasured(t, dir1, "save", "--skip-secret-scan")
+
+	dir4 := makeMultiLayerWorkspace(t, numLayers, mbPerLayer<<20)
+	_, t4, _ := runMeasured(t, dir4, "save", "--skip-secret-scan")
+
+	ratio := float64(t4) / float64(t1)
+	t.Logf("parallel save: 1×%dMiB=%v %d×%dMiB=%v ratio=%.2f×",
+		mbPerLayer, t1.Round(time.Millisecond),
+		numLayers, mbPerLayer, t4.Round(time.Millisecond),
+		ratio)
+
+	// Sequential: 4 layers × same work = ~4× single-layer time.
+	// Parallel on ≥2 CPUs should be well under that.
+	const maxRatio = 3.0
+	if ratio > maxRatio {
+		t.Errorf("4-layer save took %.2f× single-layer time (expected <%.1f×) — parallelism may not be working",
+			ratio, maxRatio)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestParallelDiffSpeedup: 4-layer diff should benefit from parallel hashing
+// ---------------------------------------------------------------------------
+
+func TestParallelDiffSpeedup(t *testing.T) {
+	if runtime.NumCPU() < 2 {
+		t.Skip("parallel speedup test requires at least 2 CPUs")
+	}
+
+	const mbPerLayer = 20
+	const numLayers = 4
+
+	// Baseline: single layer.
+	dir1 := makeMultiLayerWorkspace(t, 1, mbPerLayer<<20)
+	run(t, dir1, "save", "--skip-secret-scan")
+	// Append a line to trigger a real change.
+	appendLine(t, filepath.Join(dir1, "layer1", "data.txt"))
+	_, t1, _ := runMeasured(t, dir1, "diff")
+
+	// Parallel: 4 layers.
+	dir4 := makeMultiLayerWorkspace(t, numLayers, mbPerLayer<<20)
+	run(t, dir4, "save", "--skip-secret-scan")
+	for i := 1; i <= numLayers; i++ {
+		appendLine(t, filepath.Join(dir4, fmt.Sprintf("layer%d", i), "data.txt"))
+	}
+	_, t4, _ := runMeasured(t, dir4, "diff")
+
+	ratio := float64(t4) / float64(t1)
+	t.Logf("parallel diff: 1×%dMiB=%v %d×%dMiB=%v ratio=%.2f×",
+		mbPerLayer, t1.Round(time.Millisecond),
+		numLayers, mbPerLayer, t4.Round(time.Millisecond),
+		ratio)
+
+	const maxRatio = 3.0
+	if ratio > maxRatio {
+		t.Errorf("4-layer diff took %.2f× single-layer time (expected <%.1f×) — parallelism may not be working",
+			ratio, maxRatio)
+	}
+}
+
+// appendLine appends a single line to a file to create a detectable change.
+func appendLine(t *testing.T, path string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fmt.Fprintln(f, "modified line appended for speed test")
+	_ = f.Close()
 }
