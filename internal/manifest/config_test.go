@@ -19,11 +19,9 @@ func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 		GitSha:           "deadbeef",
 		GitBranch:        "main",
 		Message:          "checkpoint after refactor",
-		EnvFiles: map[string]EnvFileRef{
-			".env": {
-				Template: "KEY={{secret}}",
-				Secrets:  []string{"MY_SECRET"},
-			},
+		Env: map[string]ManifestEnvEntry{
+			"NODE_ENV": {Value: "development"},
+			"DB_URL":   {Source: "env", Var: "DATABASE_URL", IsRef: true},
 		},
 		Metrics: &Metrics{
 			TokenUsage: 1500,
@@ -87,19 +85,17 @@ func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 		t.Errorf("Message: got %q, want %q", got.Message, cfg.Message)
 	}
 
-	// EnvFiles
-	if len(got.EnvFiles) != 1 {
-		t.Fatalf("EnvFiles length: got %d, want 1", len(got.EnvFiles))
+	// Env entries
+	if len(got.Env) != 2 {
+		t.Fatalf("Env length: got %d, want 2", len(got.Env))
 	}
-	envRef, ok := got.EnvFiles[".env"]
-	if !ok {
-		t.Fatal("EnvFiles missing .env key")
+	nodeEnv := got.Env["NODE_ENV"]
+	if nodeEnv.IsRef || nodeEnv.Value != "development" {
+		t.Errorf("Env[NODE_ENV]: got value=%q isRef=%v, want literal 'development'", nodeEnv.Value, nodeEnv.IsRef)
 	}
-	if envRef.Template != "KEY={{secret}}" {
-		t.Errorf("EnvFiles[.env].Template: got %q, want %q", envRef.Template, "KEY={{secret}}")
-	}
-	if len(envRef.Secrets) != 1 || envRef.Secrets[0] != "MY_SECRET" {
-		t.Errorf("EnvFiles[.env].Secrets: got %v, want [MY_SECRET]", envRef.Secrets)
+	dbURL := got.Env["DB_URL"]
+	if !dbURL.IsRef || dbURL.Source != "env" || dbURL.Var != "DATABASE_URL" {
+		t.Errorf("Env[DB_URL]: got source=%q var=%q isRef=%v, want env ref", dbURL.Source, dbURL.Var, dbURL.IsRef)
 	}
 
 	// Metrics
@@ -185,9 +181,6 @@ func TestMarshalUnmarshalRoundtrip_OptionalFieldsEmpty(t *testing.T) {
 	}
 	if got.Message != "" {
 		t.Errorf("Message should be empty, got %q", got.Message)
-	}
-	if got.EnvFiles != nil {
-		t.Errorf("EnvFiles should be nil, got %v", got.EnvFiles)
 	}
 	if got.Metrics != nil {
 		t.Errorf("Metrics should be nil, got %v", got.Metrics)

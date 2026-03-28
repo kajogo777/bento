@@ -7,18 +7,12 @@ remote: ghcr.io/myorg/workspaces
 
 env:
   NODE_ENV: development
-
-secrets:
   DATABASE_URL:
     source: env
     var: DATABASE_URL
   API_KEY:
     source: file
     path: /run/secrets/api-key
-
-env_files:
-  ".env":
-    secrets: ["DATABASE_URL", "API_KEY"]
 
 hooks:
   post_restore: "npm install"

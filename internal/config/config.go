@@ -13,18 +13,16 @@ import (
 
 // BentoConfig represents the bento.yaml configuration file.
 type BentoConfig struct {
-	ID        string             `yaml:"id,omitempty"`
-	Agent     string             `yaml:"agent,omitempty"`
-	Task      string             `yaml:"task,omitempty"`
-	Store     string             `yaml:"store,omitempty"`
-	Remote    string             `yaml:"remote,omitempty"`
-	Layers    []LayerConfig      `yaml:"layers,omitempty"`
-	Ignore    []string           `yaml:"ignore,omitempty"`
-	Env       map[string]string  `yaml:"env,omitempty"`
-	Secrets   map[string]Secret  `yaml:"secrets,omitempty"`
-	EnvFiles  map[string]EnvFile `yaml:"env_files,omitempty"`
-	Hooks     HooksConfig        `yaml:"hooks,omitempty"`
-	Retention RetentionConfig    `yaml:"retention,omitempty"`
+	ID        string              `yaml:"id,omitempty"`
+	Agent     string              `yaml:"agent,omitempty"`
+	Task      string              `yaml:"task,omitempty"`
+	Store     string              `yaml:"store,omitempty"`
+	Remote    string              `yaml:"remote,omitempty"`
+	Layers    []LayerConfig       `yaml:"layers,omitempty"`
+	Ignore    []string            `yaml:"ignore,omitempty"`
+	Env       map[string]EnvEntry `yaml:"env,omitempty"`
+	Hooks     HooksConfig         `yaml:"hooks,omitempty"`
+	Retention RetentionConfig     `yaml:"retention,omitempty"`
 }
 
 // LayerConfig defines a layer in bento.yaml.
@@ -36,16 +34,84 @@ type LayerConfig struct {
 	CatchAll bool     `yaml:"catch_all,omitempty"`
 }
 
-// Secret represents a secret reference in bento.yaml.
-type Secret struct {
-	Source string            `yaml:"source"`
-	Fields map[string]string `yaml:",inline"`
+// EnvEntry represents a single environment variable in bento.yaml.
+// It can be either a plain string value or a secret reference.
+//
+// Plain value in YAML:
+//
+//	env:
+//	  NODE_ENV: development
+//
+// Secret reference in YAML:
+//
+//	env:
+//	  DATABASE_URL:
+//	    source: env
+//	    var: DATABASE_URL
+type EnvEntry struct {
+	// Value holds a literal string value. Non-empty when IsRef is false.
+	Value string
+	// Source identifies the secret provider (env, file, exec, vault, etc.).
+	// Non-empty when IsRef is true.
+	Source string
+	// Fields holds provider-specific fields (var, path, key, role, command).
+	Fields map[string]string
+	// IsRef is true when this entry is a secret reference, false for literals.
+	IsRef bool
 }
 
-// EnvFile represents an env file template mapping.
-type EnvFile struct {
-	Template string   `yaml:"template,omitempty"`
-	Secrets  []string `yaml:"secrets"`
+// NewLiteralEnv creates an EnvEntry for a plain string value.
+func NewLiteralEnv(value string) EnvEntry {
+	return EnvEntry{Value: value}
+}
+
+// NewSecretEnv creates an EnvEntry for a secret reference.
+func NewSecretEnv(source string, fields map[string]string) EnvEntry {
+	return EnvEntry{Source: source, Fields: fields, IsRef: true}
+}
+
+// UnmarshalYAML implements custom YAML unmarshaling for EnvEntry.
+// Accepts either a scalar string or a mapping with source + fields.
+func (e *EnvEntry) UnmarshalYAML(value *yaml.Node) error {
+	// Scalar → literal value.
+	if value.Kind == yaml.ScalarNode {
+		e.Value = value.Value
+		e.IsRef = false
+		return nil
+	}
+
+	// Mapping → secret reference.
+	if value.Kind == yaml.MappingNode {
+		m := make(map[string]string)
+		if err := value.Decode(&m); err != nil {
+			return err
+		}
+		source, ok := m["source"]
+		if !ok || source == "" {
+			return fmt.Errorf("env entry has mapping form but no 'source' field")
+		}
+		e.Source = source
+		delete(m, "source")
+		e.Fields = m
+		e.IsRef = true
+		return nil
+	}
+
+	return fmt.Errorf("env entry must be a string or a mapping, got %v", value.Kind)
+}
+
+// MarshalYAML implements custom YAML marshaling for EnvEntry.
+// Literals are emitted as scalars; references as mappings.
+func (e EnvEntry) MarshalYAML() (interface{}, error) {
+	if !e.IsRef {
+		return e.Value, nil
+	}
+	m := make(map[string]string, len(e.Fields)+1)
+	m["source"] = e.Source
+	for k, v := range e.Fields {
+		m[k] = v
+	}
+	return m, nil
 }
 
 // HooksConfig defines lifecycle hooks.
@@ -139,10 +205,10 @@ func (c *BentoConfig) Validate() error {
 		}
 	}
 
-	// Validate secrets regardless of whether layers are configured.
-	for name, s := range c.Secrets {
-		if s.Source == "" {
-			return fmt.Errorf("secret %q has no source — set source: to the secret provider (e.g. aws_ssm, env)", name)
+	// Validate env entries with secret references.
+	for name, entry := range c.Env {
+		if entry.IsRef && entry.Source == "" {
+			return fmt.Errorf("env %q has a reference form but no source — set source: to the secret provider (e.g. env, file, exec)", name)
 		}
 	}
 

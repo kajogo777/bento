@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"encoding/json"
+	"fmt"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -21,13 +22,10 @@ type BentoConfigObj struct {
 	GitSha           string                `json:"gitSha,omitempty"`
 	GitBranch        string                `json:"gitBranch,omitempty"`
 	Message          string                `json:"message,omitempty"`
-	// Env holds plain key-value environment variables to set on restore.
-	// Values are stored verbatim; do NOT put secrets here.
-	Env map[string]string `json:"env,omitempty"`
-	// Secrets maps variable names to references for secrets to resolve on restore.
-	// Only references (provider + path) are stored, never secret values.
-	Secrets  map[string]SecretRef  `json:"secrets,omitempty"`
-	EnvFiles map[string]EnvFileRef `json:"envFiles,omitempty"`
+	// Env holds environment variables — each entry is either a plain string value
+	// or a secret reference (object with source + provider fields).
+	// Secret references store only pointers, never actual secret values.
+	Env map[string]ManifestEnvEntry `json:"env,omitempty"`
 	Metrics  *Metrics              `json:"metrics,omitempty"`
 	Environment *Environment       `json:"environment,omitempty"`
 
@@ -66,21 +64,87 @@ type RetentionDef struct {
 	KeepTagged bool `json:"keepTagged,omitempty"`
 }
 
-// SecretRef describes how to resolve a secret at restore time.
-// Only the reference is stored in the manifest, never the secret value.
-type SecretRef struct {
-	Source string `json:"source"`           // vault, env, aws-sts, 1password, gcloud, azure, file, exec
-	Path   string `json:"path,omitempty"`   // vault path, file path, or 1password item
-	Key    string `json:"key,omitempty"`    // field within the secret
-	Var    string `json:"var,omitempty"`    // source env var name (source=env)
-	Role   string `json:"role,omitempty"`   // IAM role ARN (source=aws-sts)
-	Command string `json:"command,omitempty"` // shell command (source=exec)
+// ManifestEnvEntry represents an env var in the OCI manifest config.
+// It can be either a plain string or a secret reference object.
+// In JSON: a string value serializes as a JSON string, a secret reference
+// serializes as an object with "source" and provider-specific fields.
+type ManifestEnvEntry struct {
+	// Value holds a literal string. Non-empty when IsRef is false.
+	Value string
+	// Source identifies the secret provider. Non-empty when IsRef is true.
+	Source string `json:"source,omitempty"`
+	// Path is the vault/file path.
+	Path string `json:"path,omitempty"`
+	// Key is the field within the secret.
+	Key string `json:"key,omitempty"`
+	// Var is the source env var name (source=env).
+	Var string `json:"var,omitempty"`
+	// Role is the IAM role ARN (source=aws-sts).
+	Role string `json:"role,omitempty"`
+	// Command is the shell command (source=exec).
+	Command string `json:"command,omitempty"`
+	// IsRef distinguishes literals from references.
+	IsRef bool `json:"-"`
 }
 
-// EnvFileRef describes a templated env file and the secrets it references.
-type EnvFileRef struct {
-	Template string   `json:"template"`
-	Secrets  []string `json:"secrets"`
+// MarshalJSON emits a plain JSON string for literals or an object for refs.
+func (e ManifestEnvEntry) MarshalJSON() ([]byte, error) {
+	if !e.IsRef {
+		return json.Marshal(e.Value)
+	}
+	// Build a clean map with only non-empty fields.
+	m := map[string]string{"source": e.Source}
+	if e.Path != "" {
+		m["path"] = e.Path
+	}
+	if e.Key != "" {
+		m["key"] = e.Key
+	}
+	if e.Var != "" {
+		m["var"] = e.Var
+	}
+	if e.Role != "" {
+		m["role"] = e.Role
+	}
+	if e.Command != "" {
+		m["command"] = e.Command
+	}
+	return json.Marshal(m)
+}
+
+// UnmarshalJSON accepts either a JSON string (literal) or object (secret ref).
+func (e *ManifestEnvEntry) UnmarshalJSON(data []byte) error {
+	// Try string first.
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		e.Value = s
+		e.IsRef = false
+		return nil
+	}
+	// Try object.
+	type refFields struct {
+		Source  string `json:"source"`
+		Path    string `json:"path"`
+		Key     string `json:"key"`
+		Var     string `json:"var"`
+		Role    string `json:"role"`
+		Command string `json:"command"`
+	}
+	var rf refFields
+	if err := json.Unmarshal(data, &rf); err != nil {
+		return err
+	}
+	if rf.Source == "" {
+		return fmt.Errorf("env entry object missing required 'source' field")
+	}
+	e.Source = rf.Source
+	e.Path = rf.Path
+	e.Key = rf.Key
+	e.Var = rf.Var
+	e.Role = rf.Role
+	e.Command = rf.Command
+	e.IsRef = true
+	return nil
 }
 
 // Metrics holds runtime metrics for a checkpoint.

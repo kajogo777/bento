@@ -262,33 +262,24 @@ func newSaveCmd() *cobra.Command {
 			}
 			cfgObj.Message = flagMessage
 
-			// Embed env vars (non-secret) into the manifest for portability
+			// Embed env vars and secret references into the manifest for portability.
+			// Literal values are stored verbatim; secret references store only
+			// pointers (source + fields), never actual secret values.
 			if len(cfg.Env) > 0 {
-				cfgObj.Env = cfg.Env
-			}
-
-			// Embed secret references (not values) into the manifest for portability
-			if len(cfg.Secrets) > 0 {
-				cfgObj.Secrets = make(map[string]manifest.SecretRef, len(cfg.Secrets))
-				for name, s := range cfg.Secrets {
-					cfgObj.Secrets[name] = manifest.SecretRef{
-						Source:  s.Source,
-						Path:    s.Fields["path"],
-						Key:     s.Fields["key"],
-						Var:     s.Fields["var"],
-						Role:    s.Fields["role"],
-						Command: s.Fields["command"],
-					}
-				}
-			}
-
-			// Embed env file mappings for portability
-			if len(cfg.EnvFiles) > 0 {
-				cfgObj.EnvFiles = make(map[string]manifest.EnvFileRef, len(cfg.EnvFiles))
-				for path, ef := range cfg.EnvFiles {
-					cfgObj.EnvFiles[path] = manifest.EnvFileRef{
-						Template: ef.Template,
-						Secrets:  ef.Secrets,
+				cfgObj.Env = make(map[string]manifest.ManifestEnvEntry, len(cfg.Env))
+				for name, entry := range cfg.Env {
+					if entry.IsRef {
+						cfgObj.Env[name] = manifest.ManifestEnvEntry{
+							Source:  entry.Source,
+							Path:    entry.Fields["path"],
+							Key:     entry.Fields["key"],
+							Var:     entry.Fields["var"],
+							Role:    entry.Fields["role"],
+							Command: entry.Fields["command"],
+							IsRef:   true,
+						}
+					} else {
+						cfgObj.Env[name] = manifest.ManifestEnvEntry{Value: entry.Value}
 					}
 				}
 			}

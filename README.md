@@ -171,27 +171,29 @@ Pre-hooks abort the operation on failure. Post-hooks warn but continue.
 
 ### Secrets
 
-Bento never stores secrets. It stores references that are resolved at restore time:
+Bento never stores secrets. It stores references that are resolved on demand:
 
 ```yaml
 env:
   NODE_ENV: development
-
-secrets:
   DATABASE_URL:
     source: env
     var: DATABASE_URL
   API_KEY:
     source: file
     path: /run/secrets/api-key
-
-env_files:
-  ".env":
-    template: ".env.example"    # optional, generates directly if omitted
-    secrets: ["DATABASE_URL", "API_KEY"]
 ```
 
-On `bento open`, env vars and resolved secrets are written to `.env` (0600 permissions, excluded from checkpoints). A pre-save scan catches credentials before they're stored.
+Manage env vars and secrets from the CLI:
+
+```bash
+bento env set NODE_ENV development                           # plain env var
+bento env set DATABASE_URL --source env --var DATABASE_URL   # secret ref
+bento env show                                               # inspect config
+bento env export -o .env                                     # generate .env file
+```
+
+A pre-save scan catches credentials before they're stored.
 
 ## CLI Reference
 
@@ -207,7 +209,10 @@ bento inspect [ref]                           Show metadata and file tree
 bento push [<remote>]                         Push to registry
 bento gc [--keep-last <n>] [--keep-tagged]    Clean up old checkpoints and blobs
 bento env show                                Show env vars and secret refs
-bento env set <key> <value>                   Set an env var
+bento env set <key> <value>                   Set a plain env var
+bento env set <key> --source <src> [flags]    Set a secret reference
+bento env unset <key>                         Remove an env var or secret
+bento env export [-o <file>] [--template t]   Export resolved .env file
 ```
 
 ## Configuration
@@ -232,15 +237,9 @@ remote: ghcr.io/myorg/workspaces
 
 env:
   NODE_ENV: development
-
-secrets:
   DATABASE_URL:
     source: env
     var: DATABASE_URL
-
-env_files:
-  ".env":
-    secrets: ["DATABASE_URL"]
 
 ignore:
   - "*.log"

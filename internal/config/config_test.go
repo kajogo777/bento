@@ -43,8 +43,8 @@ retention:
 	if cfg.Task != "my-task" {
 		t.Errorf("Task = %q, want %q", cfg.Task, "my-task")
 	}
-	if cfg.Env["FOO"] != "bar" {
-		t.Errorf("Env[FOO] = %q, want %q", cfg.Env["FOO"], "bar")
+	if cfg.Env["FOO"].Value != "bar" {
+		t.Errorf("Env[FOO] = %q, want %q", cfg.Env["FOO"].Value, "bar")
 	}
 	if cfg.Hooks.PreSave != "echo pre" {
 		t.Errorf("Hooks.PreSave = %q, want %q", cfg.Hooks.PreSave, "echo pre")
@@ -95,7 +95,7 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 		Remote: "s3://roundtrip",
 		Agent:  "cursor",
 		Task:   "roundtrip-task",
-		Env:    map[string]string{"KEY": "value"},
+		Env:    map[string]EnvEntry{"KEY": NewLiteralEnv("value")},
 		Hooks: HooksConfig{
 			PreSave: "echo hello",
 			Timeout: 120,
@@ -127,8 +127,8 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	if loaded.Task != original.Task {
 		t.Errorf("Task = %q, want %q", loaded.Task, original.Task)
 	}
-	if loaded.Env["KEY"] != "value" {
-		t.Errorf("Env[KEY] = %q, want %q", loaded.Env["KEY"], "value")
+	if loaded.Env["KEY"].Value != "value" {
+		t.Errorf("Env[KEY] = %q, want %q", loaded.Env["KEY"].Value, "value")
 	}
 	if loaded.Hooks.PreSave != original.Hooks.PreSave {
 		t.Errorf("Hooks.PreSave = %q, want %q", loaded.Hooks.PreSave, original.Hooks.PreSave)
@@ -244,12 +244,12 @@ func TestValidate_Errors(t *testing.T) {
 			"no patterns",
 		},
 		{
-			"secret without source",
-			`secrets:
+			"env ref without source",
+			`env:
   MY_TOKEN:
     path: /secret/token
 `,
-			"no source",
+			"no 'source' field",
 		},
 	}
 	for _, tc := range cases {

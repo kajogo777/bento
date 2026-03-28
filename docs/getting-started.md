@@ -219,32 +219,35 @@ Blob pruning happens automatically — after removing old checkpoints, bento sca
 
 ## Secrets
 
-Bento never stores secrets. It stores references that get resolved when you restore:
+Bento never stores secrets. It stores references that get resolved on demand.
+Secret references live alongside plain values in the `env:` section:
 
 ```yaml
-secrets:
+env:
+  NODE_ENV: development
   DATABASE_URL:
     source: env
     var: DATABASE_URL
   API_KEY:
     source: file
     path: /run/secrets/api-key
-
-env_files:
-  ".env":
-    secrets: ["DATABASE_URL", "API_KEY"]
 ```
 
-On `bento open`, your `.env` file is populated with resolved values from your local machine. The secrets never leave your system. The `.env` file is written with 0600 permissions and excluded from checkpoints.
+You can also manage secrets from the CLI:
 
-If you have a `.env.example` template, reference it:
-
-```yaml
-env_files:
-  ".env":
-    template: ".env.example"
-    secrets: ["DATABASE_URL", "API_KEY"]
+```bash
+bento env set DATABASE_URL --source env --var DATABASE_URL
+bento env set API_KEY --source file --path /run/secrets/api-key
 ```
+
+To generate a `.env` file with resolved secrets:
+
+```bash
+bento env export -o .env                          # write resolved values
+bento env export -o .env --template .env.example  # use a template
+```
+
+The `.env` file is written with 0600 permissions. Secrets never leave your system and are excluded from checkpoints.
 
 ## Hooks
 
@@ -298,5 +301,10 @@ Each agent's state is tracked independently. Use `--agent <name>` to force a sin
 | Compare | `bento diff cp-1 cp-3` |
 | Tag | `bento tag cp-3 milestone` |
 | Inspect | `bento inspect cp-3` |
+| Set env var | `bento env set KEY value` |
+| Set secret | `bento env set KEY --source env --var KEY` |
+| Remove env/secret | `bento env unset KEY` |
+| Show config | `bento env show` |
+| Export .env | `bento env export -o .env` |
 | Clean up | `bento gc --keep-last 10` |
 | Env config | `bento env show` |

@@ -8,21 +8,27 @@ import (
 	"github.com/kajogo777/bento/internal/secrets/providers"
 )
 
-// HydrateSecrets resolves all secret references from the bento.yaml config and
-// returns a map of secret name to resolved value. Partial success is supported:
-// secrets that fail to resolve are collected as errors while the rest proceed.
-func HydrateSecrets(ctx context.Context, secrets map[string]config.Secret) (map[string]string, []error) {
-	resolved := make(map[string]string, len(secrets))
+// HydrateEnv resolves all env entries from the bento.yaml config and returns
+// a map of name to resolved value. Literal values are passed through directly.
+// Secret references are resolved via their provider. Partial success is
+// supported: secrets that fail to resolve are collected as errors while the
+// rest proceed.
+func HydrateEnv(ctx context.Context, env map[string]config.EnvEntry) (map[string]string, []error) {
+	resolved := make(map[string]string, len(env))
 	var errs []error
 
-	for name, sec := range secrets {
+	for name, entry := range env {
+		if !entry.IsRef {
+			resolved[name] = entry.Value
+			continue
+		}
 		ref := providers.SecretRef{
-			Source: sec.Source,
-			Fields: sec.Fields,
+			Source: entry.Source,
+			Fields: entry.Fields,
 		}
 		val, err := providers.Resolve(ctx, ref)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("resolving secret %q: %w", name, err))
+			errs = append(errs, fmt.Errorf("resolving %q: %w", name, err))
 			continue
 		}
 		resolved[name] = val

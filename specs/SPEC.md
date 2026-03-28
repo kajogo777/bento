@@ -278,27 +278,24 @@ The secrets manifest (`application/vnd.bento.secrets-manifest.v1+json`) contains
 
 Supported source types: `vault`, `env`, `aws-sts`, `1password`, `gcloud`, `azure-keyvault`, `file`. Implementations MAY add custom source types.
 
-### 6.2 Env File Templates
+### 6.2 Env File Export
 
-The config object's `envFiles` section maps `.env` file paths to templates:
+Implementations SHOULD provide a CLI command to resolve all env vars and secrets
+and export them as a `.env` file:
 
-```json
-{
-  "envFiles": {
-    ".env": {
-      "template": ".env.example",
-      "secrets": ["DATABASE_URL", "GITHUB_TOKEN"]
-    }
-  }
-}
+```bash
+bento env export -o .env                          # generate from resolved values
+bento env export -o .env --template .env.example  # use a template file
 ```
 
-On restore, implementations SHOULD:
-1. Read the template file from the project layer
-2. Resolve each referenced secret from the secrets manifest
-3. Write the populated `.env` file to disk
+When a template is provided, implementations SHOULD:
+1. Read the template file
+2. Resolve each secret from the secrets config
+3. Substitute matching keys in the template
+4. Write the populated `.env` file to disk with 0600 permissions
 
-The template file (e.g., `.env.example`) is captured in the project layer with placeholder values. The populated `.env` file is excluded from all layers.
+The template file (e.g., `.env.example`) is captured in the project layer with
+placeholder values. The populated `.env` file is excluded from all layers.
 
 ### 6.3 Pre-Push Secret Scan
 
@@ -376,24 +373,7 @@ Secret references are stored in the `secrets` field. Only the reference (provide
 
 Supported `source` values: `vault`, `env`, `aws-sts`, `1password`, `gcloud`, `azure`, `file`, `exec`.
 
-### 6.5.3 Env File Templates
-
-The `envFiles` field maps output `.env` file paths to their templates and the secrets that populate them:
-
-```json
-{
-  "envFiles": {
-    ".env": {
-      "template": ".env.example",
-      "secrets": ["DATABASE_URL", "GITHUB_TOKEN"]
-    }
-  }
-}
-```
-
-On restore, implementations populate each env file by resolving the listed secrets and substituting them into the template.
-
-### 6.5.4 Docker Compatibility
+### 6.5.3 Docker Compatibility
 
 Docker and containerd ignore unknown labels in the OCI image config. Storing env vars and secret refs in `dev.bento.config` is therefore fully Docker-compatible: `docker pull`, `COPY --from`, and containerd extraction all work unmodified.
 

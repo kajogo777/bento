@@ -219,44 +219,12 @@ func newOpenCmd() *cobra.Command {
 				}
 			}
 
-			// Hydrate env vars and secrets
-			if cfgErr == nil && cfg != nil {
-				allVars := make(map[string]string)
-
-				// Plain env vars from bento.yaml
-				for k, v := range cfg.Env {
-					allVars[k] = v
-				}
-
-				// Resolved secrets
-				if len(cfg.Secrets) > 0 {
-					ctx := context.Background()
-					resolved, errs := secrets.HydrateSecrets(ctx, cfg.Secrets)
-					for _, e := range errs {
-						fmt.Printf("Warning: secret hydration: %v\n", e)
-					}
-					for k, v := range resolved {
-						allVars[k] = v
-					}
-				}
-
-				// Populate env files
-				for envPath, envFile := range cfg.EnvFiles {
-					templatePath := ""
-					if envFile.Template != "" {
-						templatePath = filepath.Join(targetDir, envFile.Template)
-					}
-					outputPath := filepath.Join(targetDir, envPath)
-
-					// Filter to only the secrets listed in the env file config
-					fileVars := make(map[string]string)
-					for k, v := range allVars {
-						fileVars[k] = v
-					}
-
-					if err := secrets.PopulateEnvFile(templatePath, outputPath, fileVars); err != nil {
-						fmt.Printf("Warning: populating %s: %v\n", envPath, err)
-					}
+			// Validate secret references can resolve (dry-run hydration)
+			if cfgErr == nil && cfg != nil && len(cfg.Env) > 0 {
+				ctx := context.Background()
+				_, errs := secrets.HydrateEnv(ctx, cfg.Env)
+				for _, e := range errs {
+					fmt.Printf("Warning: %v\n", e)
 				}
 			}
 
@@ -343,45 +311,30 @@ func configFromArtifact(obj *manifest.BentoConfigObj) *config.BentoConfig {
 		cfg.Agent = "auto"
 	}
 
-	// Env vars
+	// Env vars and secret references
 	if len(obj.Env) > 0 {
-		cfg.Env = obj.Env
-	}
-
-	// Secret references
-	if len(obj.Secrets) > 0 {
-		cfg.Secrets = make(map[string]config.Secret, len(obj.Secrets))
-		for name, ref := range obj.Secrets {
-			fields := make(map[string]string)
-			if ref.Path != "" {
-				fields["path"] = ref.Path
-			}
-			if ref.Key != "" {
-				fields["key"] = ref.Key
-			}
-			if ref.Var != "" {
-				fields["var"] = ref.Var
-			}
-			if ref.Role != "" {
-				fields["role"] = ref.Role
-			}
-			if ref.Command != "" {
-				fields["command"] = ref.Command
-			}
-			cfg.Secrets[name] = config.Secret{
-				Source: ref.Source,
-				Fields: fields,
-			}
-		}
-	}
-
-	// Env file mappings
-	if len(obj.EnvFiles) > 0 {
-		cfg.EnvFiles = make(map[string]config.EnvFile, len(obj.EnvFiles))
-		for path, ef := range obj.EnvFiles {
-			cfg.EnvFiles[path] = config.EnvFile{
-				Template: ef.Template,
-				Secrets:  ef.Secrets,
+		cfg.Env = make(map[string]config.EnvEntry, len(obj.Env))
+		for name, entry := range obj.Env {
+			if entry.IsRef {
+				fields := make(map[string]string)
+				if entry.Path != "" {
+					fields["path"] = entry.Path
+				}
+				if entry.Key != "" {
+					fields["key"] = entry.Key
+				}
+				if entry.Var != "" {
+					fields["var"] = entry.Var
+				}
+				if entry.Role != "" {
+					fields["role"] = entry.Role
+				}
+				if entry.Command != "" {
+					fields["command"] = entry.Command
+				}
+				cfg.Env[name] = config.NewSecretEnv(entry.Source, fields)
+			} else {
+				cfg.Env[name] = config.NewLiteralEnv(entry.Value)
 			}
 		}
 	}
