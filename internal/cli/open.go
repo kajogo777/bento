@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -89,7 +90,7 @@ func newOpenCmd() *cobra.Command {
 
 			// Load checkpoint (try local first, fall back to remote pull).
 			// Layers are backed by temp files; we defer cleanup for all of them.
-			manifestBytes, _, layers, err := store.LoadCheckpoint(tag)
+			manifestBytes, configBytes, layers, err := store.LoadCheckpoint(tag)
 			if err != nil {
 				// Determine remote to pull from
 				pullRef := remoteRef
@@ -104,7 +105,7 @@ func newOpenCmd() *cobra.Command {
 						return fmt.Errorf("checkpoint %s not found locally and pull failed: %w", ref, pullErr)
 					}
 					// Retry local load
-					manifestBytes, _, layers, err = store.LoadCheckpoint(tag)
+					manifestBytes, configBytes, layers, err = store.LoadCheckpoint(tag)
 					if err != nil {
 						return fmt.Errorf("loading checkpoint %s after pull: %w", ref, err)
 					}
@@ -185,6 +186,36 @@ func newOpenCmd() *cobra.Command {
 			if len(keepFiles) > 0 {
 				if err := workspace.CleanStaleFiles(targetDir, keepFiles); err != nil {
 					fmt.Printf("Warning: cleaning stale files: %v\n", err)
+				}
+			}
+
+			// Regenerate bento.yaml if the target directory doesn't have one.
+			// This enables the "open anywhere" workflow: pull from a registry,
+			// get a fully functional workspace that can save/push/diff immediately.
+			// See specs/portable-config.md for the full specification.
+			if _, statErr := os.Stat(filepath.Join(targetDir, "bento.yaml")); os.IsNotExist(statErr) {
+				if bentoCfg, parseErr := manifest.UnmarshalConfig(configBytes); parseErr == nil {
+					newCfg := configFromArtifact(bentoCfg)
+					if err := config.Save(targetDir, newCfg); err != nil {
+						fmt.Printf("Warning: generating bento.yaml: %v\n", err)
+					} else {
+						fmt.Println("Generated bento.yaml from artifact metadata")
+						// Also use the regenerated config for env hydration and hooks below
+						cfg = newCfg
+						cfgErr = nil
+					}
+
+					// Regenerate .bentoignore from embedded ignore patterns
+					if len(bentoCfg.Ignore) > 0 {
+						ignoreContent := "# Bento ignore patterns (restored from checkpoint)\n"
+						for _, p := range bentoCfg.Ignore {
+							ignoreContent += p + "\n"
+						}
+						ignorePath := filepath.Join(targetDir, ".bentoignore")
+						if err := os.WriteFile(ignorePath, []byte(ignoreContent), 0644); err != nil {
+							fmt.Printf("Warning: generating .bentoignore: %v\n", err)
+						}
+					}
 				}
 			}
 
@@ -289,4 +320,109 @@ func filterLayers(layers []registry.LayerData, manifestBytes []byte, names []str
 		}
 	}
 	return result
+}
+
+// configFromArtifact reconstructs a BentoConfig from the OCI config metadata
+// embedded in a checkpoint. Local fields (id, store) get fresh values;
+// portable fields are carried over from the artifact.
+// See specs/portable-config.md for the full specification.
+func configFromArtifact(obj *manifest.BentoConfigObj) *config.BentoConfig {
+	newID, err := config.GenerateWorkspaceID()
+	if err != nil {
+		newID = "ws-restored"
+	}
+
+	cfg := &config.BentoConfig{
+		ID:     newID,
+		Store:  config.DefaultStorePath(),
+		Agent:  obj.Harness,
+		Task:   obj.Task,
+		Remote: obj.Remote,
+	}
+	if cfg.Agent == "" {
+		cfg.Agent = "auto"
+	}
+
+	// Env vars
+	if len(obj.Env) > 0 {
+		cfg.Env = obj.Env
+	}
+
+	// Secret references
+	if len(obj.Secrets) > 0 {
+		cfg.Secrets = make(map[string]config.Secret, len(obj.Secrets))
+		for name, ref := range obj.Secrets {
+			fields := make(map[string]string)
+			if ref.Path != "" {
+				fields["path"] = ref.Path
+			}
+			if ref.Key != "" {
+				fields["key"] = ref.Key
+			}
+			if ref.Var != "" {
+				fields["var"] = ref.Var
+			}
+			if ref.Role != "" {
+				fields["role"] = ref.Role
+			}
+			if ref.Command != "" {
+				fields["command"] = ref.Command
+			}
+			cfg.Secrets[name] = config.Secret{
+				Source: ref.Source,
+				Fields: fields,
+			}
+		}
+	}
+
+	// Env file mappings
+	if len(obj.EnvFiles) > 0 {
+		cfg.EnvFiles = make(map[string]config.EnvFile, len(obj.EnvFiles))
+		for path, ef := range obj.EnvFiles {
+			cfg.EnvFiles[path] = config.EnvFile{
+				Template: ef.Template,
+				Secrets:  ef.Secrets,
+			}
+		}
+	}
+
+	// Custom layer definitions
+	if len(obj.Layers) > 0 {
+		cfg.Layers = make([]config.LayerConfig, len(obj.Layers))
+		for i, l := range obj.Layers {
+			cfg.Layers[i] = config.LayerConfig{
+				Name:     l.Name,
+				Patterns: l.Patterns,
+				CatchAll: l.CatchAll,
+			}
+		}
+	}
+
+	// Hooks
+	if obj.Hooks != nil {
+		cfg.Hooks = config.HooksConfig{
+			PreSave:     obj.Hooks.PreSave,
+			PostSave:    obj.Hooks.PostSave,
+			PostRestore: obj.Hooks.PostRestore,
+			PrePush:     obj.Hooks.PrePush,
+			PostPush:    obj.Hooks.PostPush,
+			PostFork:    obj.Hooks.PostFork,
+			Timeout:     obj.Hooks.Timeout,
+		}
+	}
+
+	// Ignore patterns (stored in bento.yaml ignore field)
+	if len(obj.Ignore) > 0 {
+		cfg.Ignore = obj.Ignore
+	}
+
+	// Retention policy
+	if obj.Retention != nil {
+		cfg.Retention = config.RetentionConfig{
+			KeepLast:   obj.Retention.KeepLast,
+			KeepTagged: obj.Retention.KeepTagged,
+		}
+	}
+
+	return cfg
 }

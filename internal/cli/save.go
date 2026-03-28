@@ -293,6 +293,58 @@ func newSaveCmd() *cobra.Command {
 				}
 			}
 
+			// Embed portable workspace config so `bento open` can regenerate
+			// a working bento.yaml in a fresh directory without `bento init`.
+			// See specs/portable-config.md for the full specification.
+
+			// Remote registry URL
+			if cfg.Remote != "" {
+				cfgObj.Remote = cfg.Remote
+			}
+
+			// Custom layer definitions
+			if len(cfg.Layers) > 0 {
+				cfgObj.Layers = make([]manifest.LayerDef, len(cfg.Layers))
+				for i, l := range cfg.Layers {
+					cfgObj.Layers[i] = manifest.LayerDef{
+						Name:     l.Name,
+						Patterns: l.Patterns,
+						CatchAll: l.CatchAll,
+					}
+				}
+			}
+
+			// Hooks
+			cfgHooks := cfg.Hooks
+			if cfgHooks.PreSave != "" || cfgHooks.PostSave != "" || cfgHooks.PostRestore != "" || cfgHooks.PrePush != "" || cfgHooks.PostPush != "" || cfgHooks.PostFork != "" || cfgHooks.Timeout != 0 {
+				cfgObj.Hooks = &manifest.HooksDef{
+					PreSave:     cfgHooks.PreSave,
+					PostSave:    cfgHooks.PostSave,
+					PostRestore: cfgHooks.PostRestore,
+					PrePush:     cfgHooks.PrePush,
+					PostPush:    cfgHooks.PostPush,
+					PostFork:    cfgHooks.PostFork,
+					Timeout:     cfgHooks.Timeout,
+				}
+			}
+
+			// Ignore patterns (merge bento.yaml ignore + .bentoignore)
+			allIgnore := append([]string{}, cfg.Ignore...)
+			if bentoIgnorePatterns, err := workspace.LoadBentoIgnore(dir); err == nil {
+				allIgnore = append(allIgnore, bentoIgnorePatterns...)
+			}
+			if len(allIgnore) > 0 {
+				cfgObj.Ignore = allIgnore
+			}
+
+			// Retention policy
+			if cfg.Retention.KeepLast != 0 || cfg.Retention.KeepTagged {
+				cfgObj.Retention = &manifest.RetentionDef{
+					KeepLast:   cfg.Retention.KeepLast,
+					KeepTagged: cfg.Retention.KeepTagged,
+				}
+			}
+
 			manifestBytes, configBytes, err := manifest.BuildManifest(cfgObj, layerInfos)
 			if err != nil {
 				return fmt.Errorf("building manifest: %w", err)

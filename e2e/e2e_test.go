@@ -302,28 +302,20 @@ func TestIntegrityCheck(t *testing.T) {
 	src := makeWorkspace(t)
 	run(t, src, "save", "--skip-secret-scan", "-m", "integrity test")
 
-	// Find the OCI store path from bento.yaml
+	// Find the OCI store path from bento.yaml (re-read after save since
+	// save may have generated a workspace ID via migration).
 	data, err := os.ReadFile(filepath.Join(src, "bento.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var cfg struct {
-		Store string `yaml:"store"`
-	}
-	// Simple YAML parsing (store is first line "store: <path>")
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "store:") {
-			cfg.Store = strings.TrimSpace(strings.TrimPrefix(line, "store:"))
-			break
-		}
-	}
-	if cfg.Store == "" {
-		t.Fatal("could not parse store path from bento.yaml")
+	storeRoot := extractYAMLField(string(data), "store")
+	wsID := extractYAMLField(string(data), "id")
+	if storeRoot == "" || wsID == "" {
+		t.Fatalf("could not parse store/id from bento.yaml:\n%s", data)
 	}
 
-	projectName := filepath.Base(src)
-	storePath := filepath.Join(cfg.Store, projectName, "blobs", "sha256")
+	storePath := filepath.Join(storeRoot, wsID, "blobs", "sha256")
 
 	entries, err := os.ReadDir(storePath)
 	if err != nil {
@@ -445,18 +437,13 @@ func TestManifestContents(t *testing.T) {
 	dir := makeWorkspace(t)
 	run(t, dir, "save", "--skip-secret-scan", "-m", "manifest check")
 
-	// Parse bento.yaml store path
+	// Parse bento.yaml store path and workspace ID (re-read after save
+	// since save may have generated a workspace ID via migration).
 	data, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
-	storeDir := ""
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "store:") {
-			storeDir = strings.TrimSpace(strings.TrimPrefix(line, "store:"))
-			break
-		}
-	}
+	storeRoot := extractYAMLField(string(data), "store")
+	wsID := extractYAMLField(string(data), "id")
 
-	projectName := filepath.Base(dir)
-	indexPath := filepath.Join(storeDir, projectName, "index.json")
+	indexPath := filepath.Join(storeRoot, wsID, "index.json")
 
 	indexData, err := os.ReadFile(indexPath)
 	if err != nil {
@@ -481,7 +468,7 @@ func TestManifestContents(t *testing.T) {
 	if len(digestParts) != 2 {
 		t.Fatalf("unexpected digest format: %q", idx.Manifests[0].Digest)
 	}
-	blobPath := filepath.Join(storeDir, projectName, "blobs", digestParts[0], digestParts[1])
+	blobPath := filepath.Join(storeRoot, wsID, "blobs", digestParts[0], digestParts[1])
 	blobData, err := os.ReadFile(blobPath)
 	if err != nil {
 		t.Fatalf("reading manifest blob: %v", err)
@@ -504,4 +491,278 @@ func TestManifestContents(t *testing.T) {
 	if artifactType != "application/vnd.bento.workspace.v1" {
 		t.Errorf("artifactType: got %q, want application/vnd.bento.workspace.v1", artifactType)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// TestOpenGeneratesBentoYAML: open into empty dir generates bento.yaml
+// ---------------------------------------------------------------------------
+
+func TestOpenGeneratesBentoYAML(t *testing.T) {
+	src := makeWorkspace(t)
+	run(t, src, "save", "--skip-secret-scan", "-m", "portable")
+
+	// Open into a fresh dir with no bento.yaml
+	dst := t.TempDir()
+	out := run(t, src, "open", "cp-1", dst)
+
+	if !strings.Contains(out, "Generated bento.yaml") {
+		t.Errorf("open should report generating bento.yaml, got:\n%s", out)
+	}
+
+	// bento.yaml must exist in the target
+	bentoYAML, err := os.ReadFile(filepath.Join(dst, "bento.yaml"))
+	if err != nil {
+		t.Fatalf("bento.yaml not generated in target dir: %v", err)
+	}
+
+	content := string(bentoYAML)
+
+	// Must have a workspace ID
+	if !strings.Contains(content, "id: ws-") {
+		t.Errorf("generated bento.yaml should have a workspace id, got:\n%s", content)
+	}
+
+	// Must have a store path
+	if !strings.Contains(content, "store:") {
+		t.Errorf("generated bento.yaml should have a store path, got:\n%s", content)
+	}
+
+	// Workspace ID must differ from the source
+	srcYAML, _ := os.ReadFile(filepath.Join(src, "bento.yaml"))
+	srcID := extractYAMLField(string(srcYAML), "id")
+	dstID := extractYAMLField(content, "id")
+	if srcID != "" && srcID == dstID {
+		t.Errorf("generated bento.yaml should have a NEW workspace id, but got same as source: %s", srcID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestOpenGeneratesBentoIgnore: open into empty dir generates .bentoignore
+// ---------------------------------------------------------------------------
+
+func TestOpenGeneratesBentoIgnore(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := t.TempDir()
+
+	// Write bento.yaml with ignore patterns
+	bentoYAML := "store: " + storeDir + "\nagent: custom\nignore:\n    - \"*.log\"\n    - tmp/\n"
+	writeFile(t, dir, "bento.yaml", bentoYAML)
+	writeFile(t, dir, "main.go", "package main\n")
+
+	run(t, dir, "save", "--skip-secret-scan")
+
+	dst := t.TempDir()
+	run(t, dir, "open", "cp-1", dst)
+
+	ignoreData, err := os.ReadFile(filepath.Join(dst, ".bentoignore"))
+	if err != nil {
+		t.Fatalf(".bentoignore not generated in target dir: %v", err)
+	}
+
+	content := string(ignoreData)
+
+	// Should contain the ignore patterns from bento.yaml
+	for _, pattern := range []string{"*.log", "tmp/"} {
+		if !strings.Contains(content, pattern) {
+			t.Errorf(".bentoignore should contain %q, got:\n%s", pattern, content)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestOpenSkipsBentoYAMLWhenExists: open preserves existing bento.yaml
+// ---------------------------------------------------------------------------
+
+func TestOpenSkipsBentoYAMLWhenExists(t *testing.T) {
+	src := makeWorkspace(t)
+	run(t, src, "save", "--skip-secret-scan")
+
+	// Create target dir with its own bento.yaml
+	dst := t.TempDir()
+	existingYAML := "store: /custom/store\nagent: custom\nid: ws-existing\n"
+	writeFile(t, dst, "bento.yaml", existingYAML)
+
+	run(t, src, "open", "cp-1", dst)
+
+	// bento.yaml should be unchanged
+	data, err := os.ReadFile(filepath.Join(dst, "bento.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != existingYAML {
+		t.Errorf("open should not overwrite existing bento.yaml\nexpected: %q\ngot: %q", existingYAML, string(data))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestOpenThenSave: restored workspace can save immediately
+// ---------------------------------------------------------------------------
+
+func TestOpenThenSave(t *testing.T) {
+	src := makeWorkspace(t)
+	run(t, src, "save", "--skip-secret-scan", "-m", "original")
+
+	// Open into fresh dir (generates bento.yaml)
+	dst := t.TempDir()
+	run(t, src, "open", "cp-1", dst)
+
+	// Add a file and save from the restored workspace
+	writeFile(t, dst, "newfile.txt", "added after restore\n")
+	out := run(t, dst, "save", "--skip-secret-scan", "-m", "continued")
+
+	if !strings.Contains(out, "cp-1") {
+		t.Errorf("save in restored workspace should produce cp-1, got:\n%s", out)
+	}
+
+	// List should work too
+	listOut := run(t, dst, "list")
+	if !strings.Contains(listOut, "continued") {
+		t.Errorf("list should show the new checkpoint message, got:\n%s", listOut)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestPortableConfigRoundtrip: hooks, ignore, retention survive save→open
+// ---------------------------------------------------------------------------
+
+func TestPortableConfigRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := t.TempDir()
+
+	// Write a bento.yaml with hooks, ignore, and retention
+	bentoYAML := strings.Join([]string{
+		"store: " + storeDir,
+		"agent: custom",
+		"task: test portable config",
+		"ignore:",
+		"    - \"*.log\"",
+		"    - tmp/",
+		"hooks:",
+		"    post_restore: echo restored",
+		"retention:",
+		"    keep_last: 5",
+		"    keep_tagged: true",
+		"",
+	}, "\n")
+	writeFile(t, dir, "bento.yaml", bentoYAML)
+	writeFile(t, dir, "main.go", "package main\n")
+
+	run(t, dir, "save", "--skip-secret-scan", "-m", "with config")
+
+	// Open into fresh dir
+	dst := t.TempDir()
+	run(t, dir, "open", "cp-1", dst)
+
+	data, err := os.ReadFile(filepath.Join(dst, "bento.yaml"))
+	if err != nil {
+		t.Fatalf("bento.yaml not generated: %v", err)
+	}
+	content := string(data)
+
+	// Task should be preserved
+	if !strings.Contains(content, "test portable config") {
+		t.Errorf("task not preserved in generated bento.yaml:\n%s", content)
+	}
+
+	// Hooks should be preserved
+	if !strings.Contains(content, "echo restored") {
+		t.Errorf("post_restore hook not preserved in generated bento.yaml:\n%s", content)
+	}
+
+	// Ignore patterns should be preserved
+	if !strings.Contains(content, "*.log") {
+		t.Errorf("ignore pattern '*.log' not preserved in generated bento.yaml:\n%s", content)
+	}
+
+	// Retention should be preserved
+	if !strings.Contains(content, "keep_last") || !strings.Contains(content, "5") {
+		t.Errorf("retention keep_last not preserved in generated bento.yaml:\n%s", content)
+	}
+	if !strings.Contains(content, "keep_tagged") {
+		t.Errorf("retention keep_tagged not preserved in generated bento.yaml:\n%s", content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestPortableConfigRemote: remote field survives save→open
+// ---------------------------------------------------------------------------
+
+func TestPortableConfigRemote(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := t.TempDir()
+
+	bentoYAML := "store: " + storeDir + "\nagent: custom\nremote: ghcr.io/testorg/testrepo\n"
+	writeFile(t, dir, "bento.yaml", bentoYAML)
+	writeFile(t, dir, "main.go", "package main\n")
+
+	run(t, dir, "save", "--skip-secret-scan")
+
+	dst := t.TempDir()
+	run(t, dir, "open", "cp-1", dst)
+
+	data, err := os.ReadFile(filepath.Join(dst, "bento.yaml"))
+	if err != nil {
+		t.Fatalf("bento.yaml not generated: %v", err)
+	}
+
+	if !strings.Contains(string(data), "ghcr.io/testorg/testrepo") {
+		t.Errorf("remote not preserved in generated bento.yaml:\n%s", string(data))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestOpenThenSaveThenOpen: full round-trip chain
+// ---------------------------------------------------------------------------
+
+func TestOpenThenSaveThenOpen(t *testing.T) {
+	// Create original workspace and save
+	src := makeWorkspace(t)
+	run(t, src, "save", "--skip-secret-scan", "-m", "original")
+
+	// Open into workspace B
+	wsB := t.TempDir()
+	run(t, src, "open", "cp-1", wsB)
+
+	// Modify and save in workspace B
+	writeFile(t, wsB, "main.go", "package main\n// modified in B\nfunc main() {}\n")
+	run(t, wsB, "save", "--skip-secret-scan", "-m", "modified in B")
+
+	// Open workspace B's checkpoint into workspace C
+	wsC := t.TempDir()
+	run(t, wsB, "open", "cp-1", wsC)
+
+	// Verify the modification made it through
+	content, err := os.ReadFile(filepath.Join(wsC, "main.go"))
+	if err != nil {
+		t.Fatalf("reading main.go from wsC: %v", err)
+	}
+	if !strings.Contains(string(content), "// modified in B") {
+		t.Errorf("wsC should have wsB's modification, got: %q", content)
+	}
+
+	// Verify wsC has its own bento.yaml with a unique ID
+	dataB, _ := os.ReadFile(filepath.Join(wsB, "bento.yaml"))
+	dataC, _ := os.ReadFile(filepath.Join(wsC, "bento.yaml"))
+	idB := extractYAMLField(string(dataB), "id")
+	idC := extractYAMLField(string(dataC), "id")
+	if idB == idC {
+		t.Errorf("workspace C should have a different ID than B, both have: %s", idB)
+	}
+
+	// Verify wsC can save
+	writeFile(t, wsC, "extra.txt", "from C\n")
+	out := run(t, wsC, "save", "--skip-secret-scan", "-m", "from C")
+	if !strings.Contains(out, "cp-") {
+		t.Errorf("save in wsC should produce a checkpoint, got:\n%s", out)
+	}
+}
+
+// extractYAMLField does a simple line-based extraction of a top-level YAML field.
+func extractYAMLField(yaml, field string) string {
+	for _, line := range strings.Split(yaml, "\n") {
+		if strings.HasPrefix(line, field+":") {
+			return strings.TrimSpace(strings.TrimPrefix(line, field+":"))
+		}
+	}
+	return ""
 }

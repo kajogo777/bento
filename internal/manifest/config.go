@@ -30,6 +30,40 @@ type BentoConfigObj struct {
 	EnvFiles map[string]EnvFileRef `json:"envFiles,omitempty"`
 	Metrics  *Metrics              `json:"metrics,omitempty"`
 	Environment *Environment       `json:"environment,omitempty"`
+
+	// Portable workspace configuration embedded for "open anywhere" support.
+	// These fields allow `bento open` to regenerate a working bento.yaml
+	// in a fresh directory without requiring `bento init`.
+	// See specs/portable-config.md for the full specification.
+	Remote    string          `json:"remote,omitempty"`
+	Layers    []LayerDef      `json:"layers,omitempty"`
+	Hooks     *HooksDef       `json:"hooks,omitempty"`
+	Ignore    []string        `json:"ignore,omitempty"`
+	Retention *RetentionDef   `json:"retention,omitempty"`
+}
+
+// LayerDef describes a custom layer definition for embedding in the OCI config.
+type LayerDef struct {
+	Name     string   `json:"name"`
+	Patterns []string `json:"patterns,omitempty"`
+	CatchAll bool     `json:"catchAll,omitempty"`
+}
+
+// HooksDef describes lifecycle hooks for embedding in the OCI config.
+type HooksDef struct {
+	PreSave     string `json:"preSave,omitempty"`
+	PostSave    string `json:"postSave,omitempty"`
+	PostRestore string `json:"postRestore,omitempty"`
+	PrePush     string `json:"prePush,omitempty"`
+	PostPush    string `json:"postPush,omitempty"`
+	PostFork    string `json:"postFork,omitempty"`
+	Timeout     int    `json:"timeout,omitempty"`
+}
+
+// RetentionDef describes GC retention policy for embedding in the OCI config.
+type RetentionDef struct {
+	KeepLast   int  `json:"keepLast,omitempty"`
+	KeepTagged bool `json:"keepTagged,omitempty"`
 }
 
 // SecretRef describes how to resolve a secret at restore time.
