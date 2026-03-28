@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/kajogo777/bento/internal/config"
@@ -41,17 +42,25 @@ func init() {
 }
 
 func newDiffCmd() *cobra.Command {
+	var flagFile string
+
 	cmd := &cobra.Command{
 		Use:   "diff [ref1] [ref2]",
 		Short: "Show changes since last checkpoint, or compare two checkpoints",
 		Long: `With no arguments, shows what changed in the workspace since the last save.
 With one argument, compares that checkpoint to the current workspace.
-With two arguments, compares two checkpoints.`,
+With two arguments, compares two checkpoints.
+
+Use --file to show a unified diff for a specific file.`,
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir, err := filepath.Abs(flagDir)
 			if err != nil {
 				return err
+			}
+
+			if flagFile != "" {
+				return diffFile(dir, args, flagFile)
 			}
 
 			if len(args) <= 1 {
@@ -61,6 +70,7 @@ With two arguments, compares two checkpoints.`,
 		},
 	}
 
+	cmd.Flags().StringVar(&flagFile, "file", "", "show unified diff for a specific file")
 	return cmd
 }
 
@@ -358,6 +368,195 @@ func diffCheckpoints(dir string, args []string) error {
 	return nil
 }
 
+// maxFileDiffBytes is the per-file content cap for unified diff extraction.
+const maxFileDiffBytes = 10 << 20 // 10 MiB
+
+// diffFile shows a unified diff for a single file.
+// With 0 or 1 args: workspace vs checkpoint. With 2 args: checkpoint vs checkpoint.
+func diffFile(dir string, args []string, filePath string) error {
+	filePath = workspace.NormalizePath(filePath)
+
+	cfg, store, err := loadConfigAndStore(dir)
+	if err != nil {
+		return err
+	}
+
+	if len(args) <= 1 {
+		return diffFileWorkspace(dir, args, filePath, cfg, store)
+	}
+	return diffFileCheckpoints(dir, args, filePath, store)
+}
+
+func diffFileWorkspace(dir string, args []string, filePath string, cfg *config.BentoConfig, store registry.Store) error {
+	ref := "latest"
+	if len(args) == 1 {
+		ref = args[0]
+	}
+	_, tag, _ := registry.ParseRef(ref)
+
+	_, _, layers, err := store.LoadCheckpoint(tag)
+	if err != nil {
+		return fmt.Errorf("no checkpoints found. Run `bento save` first")
+	}
+	defer func() {
+		for i := range layers {
+			layers[i].Cleanup()
+		}
+	}()
+
+	// Find the file in one of the checkpoint layers
+	var oldContent []byte
+	for _, layer := range layers {
+		r, err := layer.NewReader()
+		if err != nil {
+			continue
+		}
+		data, err := workspace.ExtractFileContentFromLayer(r, filePath, maxFileDiffBytes)
+		_ = r.Close()
+		if err == nil {
+			oldContent = data
+			break
+		}
+	}
+
+	// Read current workspace file
+	h := resolveHarness(dir, cfg)
+	_ = h // harness resolved for consistency but file is read directly
+
+	var newContent []byte
+	wsPath := filepath.Join(dir, filepath.FromSlash(filePath))
+	if data, err := os.ReadFile(wsPath); err == nil {
+		newContent = data
+	}
+
+	if oldContent == nil && newContent == nil {
+		return fmt.Errorf("file %s not found in checkpoint or workspace", filePath)
+	}
+
+	oldLines := splitLines(oldContent)
+	newLines := splitLines(newContent)
+
+	oldName := fmt.Sprintf("a/%s (%s)", filePath, tag)
+	newName := fmt.Sprintf("b/%s (workspace)", filePath)
+
+	diff := workspace.UnifiedDiff(oldName, newName, oldLines, newLines, 3)
+	if diff == "" {
+		fmt.Printf("No changes in %s\n", filePath)
+		return nil
+	}
+	printColorizedDiff(diff)
+	return nil
+}
+
+func diffFileCheckpoints(dir string, args []string, filePath string, store registry.Store) error {
+	_, tag1, _ := registry.ParseRef(args[0])
+	_, tag2, _ := registry.ParseRef(args[1])
+
+	_, _, layers1, err := store.LoadCheckpoint(tag1)
+	if err != nil {
+		return fmt.Errorf("loading %s: %w", args[0], err)
+	}
+	defer func() {
+		for i := range layers1 {
+			layers1[i].Cleanup()
+		}
+	}()
+
+	_, _, layers2, err := store.LoadCheckpoint(tag2)
+	if err != nil {
+		return fmt.Errorf("loading %s: %w", args[1], err)
+	}
+	defer func() {
+		for i := range layers2 {
+			layers2[i].Cleanup()
+		}
+	}()
+
+	// Extract file from both checkpoints
+	var oldContent, newContent []byte
+	for _, layer := range layers1 {
+		r, err := layer.NewReader()
+		if err != nil {
+			continue
+		}
+		data, err := workspace.ExtractFileContentFromLayer(r, filePath, maxFileDiffBytes)
+		_ = r.Close()
+		if err == nil {
+			oldContent = data
+			break
+		}
+	}
+	for _, layer := range layers2 {
+		r, err := layer.NewReader()
+		if err != nil {
+			continue
+		}
+		data, err := workspace.ExtractFileContentFromLayer(r, filePath, maxFileDiffBytes)
+		_ = r.Close()
+		if err == nil {
+			newContent = data
+			break
+		}
+	}
+
+	if oldContent == nil && newContent == nil {
+		return fmt.Errorf("file %s not found in either checkpoint", filePath)
+	}
+
+	oldLines := splitLines(oldContent)
+	newLines := splitLines(newContent)
+
+	oldName := fmt.Sprintf("a/%s (%s)", filePath, tag1)
+	newName := fmt.Sprintf("b/%s (%s)", filePath, tag2)
+
+	diff := workspace.UnifiedDiff(oldName, newName, oldLines, newLines, 3)
+	if diff == "" {
+		fmt.Printf("No changes in %s\n", filePath)
+		return nil
+	}
+	printColorizedDiff(diff)
+	return nil
+}
+
+// splitLines splits content into lines, handling both \n and \r\n.
+// Returns nil for nil input (represents non-existent file).
+func splitLines(data []byte) []string {
+	if data == nil {
+		return nil
+	}
+	s := string(data)
+	// Remove trailing newline to avoid extra empty line
+	s = strings.TrimSuffix(s, "\n")
+	s = strings.TrimSuffix(s, "\r")
+	if s == "" {
+		return []string{}
+	}
+	return strings.Split(s, "\n")
+}
+
+// printColorizedDiff prints a unified diff with ANSI colors:
+// red for removals, green for additions, cyan for hunk headers, bold for file headers.
+func printColorizedDiff(diff string) {
+	colorCyan := "\033[36m"
+	colorBold := "\033[1m"
+	for _, line := range strings.Split(diff, "\n") {
+		if line == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "---"), strings.HasPrefix(line, "+++"):
+			fmt.Printf("%s%s%s\n", colorBold, line, colorReset)
+		case strings.HasPrefix(line, "@@"):
+			fmt.Printf("%s%s%s\n", colorCyan, line, colorReset)
+		case strings.HasPrefix(line, "-"):
+			fmt.Printf("%s%s%s\n", colorRed, line, colorReset)
+		case strings.HasPrefix(line, "+"):
+			fmt.Printf("%s%s%s\n", colorGreen, line, colorReset)
+		default:
+			fmt.Println(line)
+		}
+	}
+}
 
 // computeWorkspaceLineCounts computes per-file line change counts for a
 // workspace diff (saved layer vs current workspace) using streaming line hashes.

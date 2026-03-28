@@ -258,6 +258,45 @@ func ExtractLineHashesFromLayer(r io.Reader, want map[string]bool, maxLineBytes 
 	return result, nil
 }
 
+// ExtractFileContentFromLayer streams a tar.gz archive from r and returns the
+// content of the file matching filePath (compared via DisplayPath). Files larger
+// than maxBytes are skipped. Returns os.ErrNotExist if the file is not found.
+func ExtractFileContentFromLayer(r io.Reader, filePath string, maxBytes int64) ([]byte, error) {
+	gr, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("gzip reader: %w", err)
+	}
+	defer func() { _ = gr.Close() }()
+
+	tr := tar.NewReader(gr)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("tar next: %w", err)
+		}
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+		key := DisplayPath(NormalizePath(header.Name))
+		if key != filePath {
+			_, _ = io.Copy(io.Discard, tr)
+			continue
+		}
+		if header.Size > maxBytes {
+			return nil, fmt.Errorf("file %s exceeds size limit (%d bytes)", filePath, maxBytes)
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", filePath, err)
+		}
+		return data, nil
+	}
+	return nil, os.ErrNotExist
+}
+
 // ListLayerFilesWithHashesFromReader returns file paths and their content SHA256
 // hashes by reading from r. This detects modifications even when file size is
 // unchanged. r must contain a valid gzip-compressed tar archive.

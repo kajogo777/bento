@@ -56,9 +56,13 @@ func LoadBentoIgnore(dir string) ([]string, error) {
 	return patterns, nil
 }
 
-// matchesPattern checks whether path matches a glob pattern, supporting **
+// MatchesPattern checks whether path matches a glob pattern, supporting **
 // globstar syntax. A pattern ending with "/**" matches any file under that
 // directory. A pattern containing "**/" matches any leading directory prefix.
+func MatchesPattern(pattern, p string) bool {
+	return matchesPattern(pattern, p)
+}
+
 func matchesPattern(pattern, p string) bool {
 	pattern = NormalizePath(pattern)
 
