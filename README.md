@@ -47,8 +47,11 @@ Bento artifacts are standard OCI artifacts. They work with any OCI-compatible re
 
 ```bash
 # macOS / Linux (Homebrew)
-brew tap kajogo777/bento https://github.com/kajogo777/bento
-brew install --cask kajogo777/bento/bento
+brew tap kajogo777/bento
+brew install kajogo777/bento/bento
+
+# Upgrade
+brew upgrade kajogo777/bento/bento
 
 # From source
 go install github.com/kajogo777/bento@latest
@@ -57,8 +60,7 @@ go install github.com/kajogo777/bento@latest
 # https://github.com/kajogo777/bento/releases
 ```
 
-> **macOS note:** If you see "bento Not Opened" from Gatekeeper, run:
-> `xattr -d com.apple.quarantine "$(which bento)"`
+> **Note:** A different `bento` package exists in homebrew-core. Always use the fully-qualified `kajogo777/bento/bento` to get the right one.
 
 ## Quick Start
 
