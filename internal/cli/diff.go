@@ -293,8 +293,11 @@ func computeWorkspaceLineCounts(
 	}
 	for _, f := range modified {
 		old := savedHashes[f]
+		if old == nil {
+			continue // file was too large or absent in checkpoint — skip workspace hash too
+		}
 		new, err := workspace.HashLinesFromFile(absPathFor(f))
-		if err != nil || old == nil {
+		if err != nil {
 			continue
 		}
 		a, r := countLineDiffFromSets(old, new)

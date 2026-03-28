@@ -29,3 +29,6 @@ Thumbs.db
 # Bento local store
 .bento/
 /main
+
+# Stakpak session files
+.stakpak/session*
