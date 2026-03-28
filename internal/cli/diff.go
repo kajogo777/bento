@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/kajogo777/bento/internal/config"
 	"github.com/kajogo777/bento/internal/manifest"
@@ -232,21 +231,19 @@ func diffCheckpoints(dir string, args []string) error {
 }
 
 
-// computeWorkspaceLineCounts extracts the content needed to compute per-file
-// line change counts for a workspace diff (saved layer vs current workspace).
+// computeWorkspaceLineCounts computes per-file line change counts for a
+// workspace diff (saved layer vs current workspace) using streaming line hashes.
 func computeWorkspaceLineCounts(
 	layer registry.LayerData,
 	added, removed, modified []string,
 	dir string,
 	sr *workspace.ScanResult,
 ) map[string]fileLineCounts {
-	// Build a reverse map from display-path → abs path for external files.
 	extAbsPath := make(map[string]string)
 	for _, ef := range sr.ExternalFiles {
 		extAbsPath[workspace.DisplayPath(ef.ArchivePath)] = ef.AbsPath
 	}
 
-	// Collect the set of files we need from the saved layer (removed + modified).
 	needFromLayer := make(map[string]bool)
 	for _, f := range removed {
 		needFromLayer[f] = true
@@ -255,12 +252,10 @@ func computeWorkspaceLineCounts(
 		needFromLayer[f] = true
 	}
 
-	// Extract those files from the saved layer in a single pass.
-	var savedContent map[string][]byte
+	var savedHashes map[string]workspace.LineHashSet
 	if len(needFromLayer) > 0 {
-		r, err := layer.NewReader()
-		if err == nil {
-			savedContent, _ = workspace.ExtractFilesFromLayer(r, needFromLayer, maxLineDiffBytes)
+		if r, err := layer.NewReader(); err == nil {
+			savedHashes, _ = workspace.ExtractLineHashesFromLayer(r, needFromLayer, maxLineDiffBytes)
 			_ = r.Close()
 		}
 	}
@@ -274,46 +269,46 @@ func computeWorkspaceLineCounts(
 		return filepath.Join(dir, f)
 	}
 
-	readWorkspace := func(f string) []byte {
-		data, _ := os.ReadFile(absPathFor(f))
-		return data
-	}
-
 	for _, f := range added {
-		data := readWorkspace(f)
-		if !looksLikeText(data) {
+		set, err := workspace.HashLinesFromFile(absPathFor(f))
+		if err != nil {
 			continue
 		}
-		lines := len(splitLines(data))
-		result[f] = fileLineCounts{added: lines}
+		total := 0
+		for _, c := range set {
+			total += c
+		}
+		result[f] = fileLineCounts{added: total}
 	}
 	for _, f := range removed {
-		data := savedContent[f]
-		if !looksLikeText(data) {
+		set := savedHashes[f]
+		if set == nil {
 			continue
 		}
-		lines := len(splitLines(data))
-		result[f] = fileLineCounts{removed: lines}
+		total := 0
+		for _, c := range set {
+			total += c
+		}
+		result[f] = fileLineCounts{removed: total}
 	}
 	for _, f := range modified {
-		oldData := savedContent[f]
-		newData := readWorkspace(f)
-		if !looksLikeText(oldData) || !looksLikeText(newData) {
+		old := savedHashes[f]
+		new, err := workspace.HashLinesFromFile(absPathFor(f))
+		if err != nil || old == nil {
 			continue
 		}
-		a, r := countLineDiff(oldData, newData)
+		a, r := countLineDiffFromSets(old, new)
 		result[f] = fileLineCounts{added: a, removed: r}
 	}
 	return result
 }
 
 // computeCheckpointLineCounts computes per-file line counts when comparing two
-// saved checkpoints. Both layers are re-read once each.
+// saved checkpoints using streaming line hashes.
 func computeCheckpointLineCounts(
 	layer1, layer2 registry.LayerData,
 	added, removed, modified []string,
 ) map[string]fileLineCounts {
-	// Files needed from layer1 (the "old" side): removed + modified.
 	needFrom1 := make(map[string]bool)
 	for _, f := range removed {
 		needFrom1[f] = true
@@ -321,7 +316,7 @@ func computeCheckpointLineCounts(
 	for _, f := range modified {
 		needFrom1[f] = true
 	}
-	// Files needed from layer2 (the "new" side): added + modified.
+
 	needFrom2 := make(map[string]bool)
 	for _, f := range added {
 		needFrom2[f] = true
@@ -330,53 +325,52 @@ func computeCheckpointLineCounts(
 		needFrom2[f] = true
 	}
 
-	var content1, content2 map[string][]byte
+	var hashes1, hashes2 map[string]workspace.LineHashSet
 	if len(needFrom1) > 0 {
 		if r, err := layer1.NewReader(); err == nil {
-			content1, _ = workspace.ExtractFilesFromLayer(r, needFrom1, maxLineDiffBytes)
+			hashes1, _ = workspace.ExtractLineHashesFromLayer(r, needFrom1, maxLineDiffBytes)
 			_ = r.Close()
 		}
 	}
 	if len(needFrom2) > 0 {
 		if r, err := layer2.NewReader(); err == nil {
-			content2, _ = workspace.ExtractFilesFromLayer(r, needFrom2, maxLineDiffBytes)
+			hashes2, _ = workspace.ExtractLineHashesFromLayer(r, needFrom2, maxLineDiffBytes)
 			_ = r.Close()
 		}
 	}
 
 	result := make(map[string]fileLineCounts)
 	for _, f := range added {
-		data := content2[f]
-		if !looksLikeText(data) {
+		set := hashes2[f]
+		if set == nil {
 			continue
 		}
-		result[f] = fileLineCounts{added: len(splitLines(data))}
+		total := 0
+		for _, c := range set {
+			total += c
+		}
+		result[f] = fileLineCounts{added: total}
 	}
 	for _, f := range removed {
-		data := content1[f]
-		if !looksLikeText(data) {
+		set := hashes1[f]
+		if set == nil {
 			continue
 		}
-		result[f] = fileLineCounts{removed: len(splitLines(data))}
+		total := 0
+		for _, c := range set {
+			total += c
+		}
+		result[f] = fileLineCounts{removed: total}
 	}
 	for _, f := range modified {
-		old, new := content1[f], content2[f]
-		if !looksLikeText(old) || !looksLikeText(new) {
+		old, new := hashes1[f], hashes2[f]
+		if old == nil || new == nil {
 			continue
 		}
-		a, r := countLineDiff(old, new)
+		a, r := countLineDiffFromSets(old, new)
 		result[f] = fileLineCounts{added: a, removed: r}
 	}
 	return result
-}
-
-// splitLines splits content into lines, trimming a trailing newline first.
-func splitLines(b []byte) []string {
-	s := strings.TrimRight(string(b), "\n")
-	if s == "" {
-		return nil
-	}
-	return strings.Split(s, "\n")
 }
 
 func truncateDigest(d string) string {

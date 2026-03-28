@@ -9,6 +9,7 @@ import (
 	"github.com/kajogo777/bento/internal/config"
 	"github.com/kajogo777/bento/internal/harness"
 	"github.com/kajogo777/bento/internal/registry"
+	"github.com/kajogo777/bento/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -67,61 +68,21 @@ func diffFileMaps(old, new map[string]string) (added, removed, modified []string
 // fileLineCounts holds the number of added and removed lines for a single file.
 type fileLineCounts struct{ added, removed int }
 
-// countLineDiff computes the number of added and removed lines between old and
-// new content using an LCS-based diff. Files larger than 50 000 lines fall back
-// to a raw line-count delta to keep the operation fast.
-func countLineDiff(oldContent, newContent []byte) (added, removed int) {
-	splitLines := func(b []byte) []string {
-		s := strings.TrimRight(string(b), "\n")
-		if s == "" {
-			return nil
-		}
-		return strings.Split(s, "\n")
-	}
-	oldLines := splitLines(oldContent)
-	newLines := splitLines(newContent)
-	n, m := len(oldLines), len(newLines)
-	if n == 0 {
-		return m, 0
-	}
-	if m == 0 {
-		return 0, n
-	}
-	// For very large files, use a fast approximation.
-	if n > 50000 || m > 50000 {
-		delta := m - n
-		if delta > 0 {
-			return delta, 0
-		}
-		return 0, -delta
-	}
-	// Standard O(n*m) space-optimised LCS DP.
-	dp := make([]int, m+1)
-	for i := 0; i < n; i++ {
-		prev := 0
-		for j := 0; j < m; j++ {
-			temp := dp[j+1]
-			if oldLines[i] == newLines[j] {
-				dp[j+1] = prev + 1
-			} else if dp[j] > dp[j+1] {
-				dp[j+1] = dp[j]
-			}
-			prev = temp
+// countLineDiffFromSets computes added and removed line counts by comparing two
+// LineHashSets. It counts how many lines were added or removed using hash-based
+// multiset subtraction, which avoids loading file content into memory.
+func countLineDiffFromSets(old, new workspace.LineHashSet) (added, removed int) {
+	for h, newCount := range new {
+		if oldCount := old[h]; newCount > oldCount {
+			added += newCount - oldCount
 		}
 	}
-	lcs := dp[m]
-	return m - lcs, n - lcs
-}
-
-// looksLikeText returns false when content contains a null byte, which is a
-// reliable indicator of binary data.
-func looksLikeText(b []byte) bool {
-	// Only scan the first 8 KiB for speed.
-	probe := b
-	if len(probe) > 8192 {
-		probe = probe[:8192]
+	for h, oldCount := range old {
+		if newCount := new[h]; oldCount > newCount {
+			removed += oldCount - newCount
+		}
 	}
-	return !strings.ContainsRune(string(probe), 0)
+	return
 }
 
 // lineCountAnnotation formats a per-file line change annotation such as

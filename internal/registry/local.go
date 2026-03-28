@@ -53,13 +53,18 @@ func (s *LocalStore) SaveCheckpoint(ref string, manifestBytes, configBytes []byt
 
 	// Push layer blobs
 	for _, ld := range layers {
-		layerDigest := digest.FromBytes(ld.Data)
+		var layerDigest digest.Digest
+		if ld.Digest != "" {
+			layerDigest = digest.Digest(ld.Digest)
+		} else {
+			layerDigest = digest.FromBytes(ld.Data)
+		}
 		layerDesc := ocispec.Descriptor{
 			MediaType: ld.MediaType,
 			Digest:    layerDigest,
-			Size:      int64(len(ld.Data)),
+			Size:      ld.BlobSize(),
 		}
-		if err := s.pushIfNotExists(layerDesc, ld.Data); err != nil {
+		if err := s.pushLayerIfNotExists(layerDesc, ld); err != nil {
 			return "", fmt.Errorf("pushing layer: %w", err)
 		}
 	}
@@ -253,6 +258,24 @@ func (s *LocalStore) pushIfNotExists(desc ocispec.Descriptor, data []byte) error
 		return nil
 	}
 	return s.oci.Push(s.ctx, desc, bytes.NewReader(data))
+}
+
+// pushLayerIfNotExists pushes a layer blob only if it doesn't already exist.
+// Streams from a temp file (Path) or in-memory data (Data).
+func (s *LocalStore) pushLayerIfNotExists(desc ocispec.Descriptor, ld LayerData) error {
+	exists, err := s.oci.Exists(s.ctx, desc)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	rc, err := ld.NewReader()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	return s.oci.Push(s.ctx, desc, rc)
 }
 
 // fetchBlob reads a complete blob by descriptor into memory and verifies its

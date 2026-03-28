@@ -4,7 +4,10 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"testing"
 )
 
@@ -18,6 +21,27 @@ func makeGzipLayer(content string) []byte {
 	_ = tw.Close()
 	_ = gw.Close()
 	return buf.Bytes()
+}
+
+// makeLayerInfo creates a LayerInfo from gzip-compressed bytes, computing
+// GzipDigest and DiffID as required by the new streaming API.
+func makeLayerInfo(name, mediaType string, data []byte, fileCount int) LayerInfo {
+	gzipSum := sha256.Sum256(data)
+	gzipDigest := "sha256:" + hex.EncodeToString(gzipSum[:])
+	// Decompress to get uncompressed tar digest
+	gr, _ := gzip.NewReader(bytes.NewReader(data))
+	h := sha256.New()
+	_, _ = io.Copy(h, gr)
+	_ = gr.Close()
+	diffID := "sha256:" + hex.EncodeToString(h.Sum(nil))
+	return LayerInfo{
+		Name:       name,
+		MediaType:  mediaType,
+		GzipDigest: gzipDigest,
+		DiffID:     diffID,
+		Size:       int64(len(data)),
+		FileCount:  fileCount,
+	}
 }
 
 func TestBuildManifest(t *testing.T) {
@@ -35,17 +59,8 @@ func TestBuildManifest(t *testing.T) {
 	}
 
 	layers := []LayerInfo{
-		{
-			Name:      "project",
-			MediaType: MediaTypeProject,
-			Data:      makeGzipLayer("project-data"),
-			FileCount: 42,
-		},
-		{
-			Name:      "deps",
-			MediaType: MediaTypeDeps,
-			Data:      makeGzipLayer("deps-data"),
-		},
+		makeLayerInfo("project", MediaTypeProject, makeGzipLayer("project-data"), 42),
+		makeLayerInfo("deps", MediaTypeDeps, makeGzipLayer("deps-data"), 0),
 	}
 
 	manifestBytes, configBytes, err := BuildManifest(cfg, layers)
@@ -166,12 +181,7 @@ func TestBuildManifest_LayerAnnotations(t *testing.T) {
 	}
 
 	layers := []LayerInfo{
-		{
-			Name:      "project",
-			MediaType: MediaTypeProject,
-			Data:      makeGzipLayer("data"),
-			FileCount: 10,
-		},
+		makeLayerInfo("project", MediaTypeProject, makeGzipLayer("data"), 10),
 	}
 
 	manifestBytes, _, err := BuildManifest(cfg, layers)

@@ -1,12 +1,8 @@
 package manifest
 
 import (
-	"bytes"
-	"compress/gzip"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strconv"
 	"time"
 
@@ -19,7 +15,10 @@ import (
 type LayerInfo struct {
 	Name        string
 	MediaType   string
-	Data        []byte
+	Path        string // temp file path to .tar.gz
+	Size        int64
+	GzipDigest  string // "sha256:<hex>" — compressed digest
+	DiffID      string // "sha256:<hex>" — uncompressed tar digest
 	FileCount   int
 	Annotations map[string]string // extra annotations merged into the layer descriptor
 }
@@ -29,15 +28,10 @@ type LayerInfo struct {
 // Layers use the standard OCI layer media type for Docker/containerd compatibility.
 func BuildManifest(cfg *BentoConfigObj, layers []LayerInfo) (manifestBytes []byte, configBytes []byte, err error) {
 	// Build diff_ids: OCI requires the digest of the UNCOMPRESSED layer content.
-	// We decompress each layer to compute the correct uncompressed digest.
-	// Docker uses diff_ids for layer deduplication and verification.
+	// The DiffID field already holds the pre-computed uncompressed tar digest.
 	diffIDs := make([]digest.Digest, len(layers))
 	for i, l := range layers {
-		id, err := uncompressedLayerDigest(l.Data)
-		if err != nil {
-			return nil, nil, fmt.Errorf("computing diff_id for layer %s: %w", l.Name, err)
-		}
-		diffIDs[i] = id
+		diffIDs[i] = digest.Digest(l.DiffID)
 	}
 
 	// Build OCI image config with bento metadata in Labels.
@@ -119,8 +113,8 @@ func BuildManifest(cfg *BentoConfigObj, layers []LayerInfo) (manifestBytes []byt
 
 		layerDescs = append(layerDescs, ocispec.Descriptor{
 			MediaType:   LayerMediaType,
-			Digest:      digest.FromBytes(l.Data),
-			Size:        int64(len(l.Data)),
+			Digest:      digest.Digest(l.GzipDigest),
+			Size:        l.Size,
 			Annotations: annotations,
 		})
 	}
@@ -168,20 +162,3 @@ func BuildManifest(cfg *BentoConfigObj, layers []LayerInfo) (manifestBytes []byt
 	return manifestBytes, configBytes, nil
 }
 
-// uncompressedLayerDigest decompresses a gzip-compressed layer and returns the
-// SHA256 digest of the uncompressed content. This is required by the OCI image
-// spec: diff_ids must be digests of uncompressed layer tar archives.
-func uncompressedLayerDigest(compressedData []byte) (digest.Digest, error) {
-	gr, err := gzip.NewReader(bytes.NewReader(compressedData))
-	if err != nil {
-		return "", fmt.Errorf("gzip reader: %w", err)
-	}
-	defer func() { _ = gr.Close() }()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, gr); err != nil {
-		return "", fmt.Errorf("decompressing layer: %w", err)
-	}
-
-	return digest.NewDigestFromHex("sha256", fmt.Sprintf("%x", h.Sum(nil))), nil
-}

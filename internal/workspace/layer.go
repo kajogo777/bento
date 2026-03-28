@@ -2,9 +2,11 @@ package workspace
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -32,55 +34,143 @@ func DisplayPath(archiveName string) string {
 // be relative to workDir. Files are stored in the archive with forward-slash
 // paths relative to the workspace root.
 func PackLayer(workDir string, files []string) ([]byte, error) {
-	var buf bytes.Buffer
-	gw, _ := gzip.NewWriterLevel(&buf, gzip.DefaultCompression)
-	gw.OS = 0xFF // unknown OS - avoid platform-dependent header
-	tw := tar.NewWriter(gw)
+	return PackLayerWithExternal(workDir, files, nil, false)
+}
 
-	for _, file := range files {
-		normalized := NormalizePath(file)
-		absPath := filepath.Join(workDir, filepath.FromSlash(normalized))
+// PackResult holds the result of PackLayerWithExternalToTemp.
+type PackResult struct {
+	Path       string // absolute path to temp .tar.gz file
+	Size       int64  // compressed size in bytes
+	GzipDigest string // "sha256:<hex>" of compressed bytes (OCI descriptor digest)
+	DiffID     string // "sha256:<hex>" of uncompressed tar bytes (OCI config diff_id)
+}
 
-		info, err := os.Stat(absPath)
-		if err != nil {
-			return nil, fmt.Errorf("stat %s: %w", normalized, err)
-		}
+// PackLayerWithExternalToTemp creates a tar.gz archive combining workspace
+// files and external files, writing the output to a temp file rather than
+// loading the result into memory. It computes both the gzip digest (for OCI
+// descriptor) and the uncompressed tar digest (for OCI config diff_id) in a
+// single streaming pass.
+func PackLayerWithExternalToTemp(workDir string, files []string, extFiles []ExternalFile, allowMissingExternal bool) (*PackResult, error) {
+	tmpFile, err := os.CreateTemp("", "bento-layer-*.tar.gz")
+	if err != nil {
+		return nil, fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
 
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return nil, fmt.Errorf("header %s: %w", normalized, err)
-		}
-		header.Name = normalized
-		// Zero out timestamps so identical file content produces identical
-		// archives regardless of when the file was last modified. This
-		// ensures round-trip idempotency: save → restore → save yields
-		// the same layer digests.
-		header.ModTime = time.Time{}
-		header.AccessTime = time.Time{}
-		header.ChangeTime = time.Time{}
+	gzipHasher := sha256.New()
+	mw := io.MultiWriter(tmpFile, gzipHasher)
 
-		if err := tw.WriteHeader(header); err != nil {
-			return nil, fmt.Errorf("write header %s: %w", normalized, err)
-		}
+	gw, err := gzip.NewWriterLevel(mw, gzip.DefaultCompression)
+	if err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("gzip writer: %w", err)
+	}
+	gw.OS = 0xFF
 
-		f, err := os.Open(absPath)
-		if err != nil {
-			return nil, fmt.Errorf("open %s: %w", normalized, err)
-		}
-		if _, err := io.Copy(tw, f); err != nil {
+	uncompHasher := sha256.New()
+	tw := tar.NewWriter(io.MultiWriter(gw, uncompHasher))
+
+	packErr := func() error {
+		// Pack workspace files
+		for _, file := range files {
+			normalized := NormalizePath(file)
+			absPath := filepath.Join(workDir, filepath.FromSlash(normalized))
+
+			info, err := os.Stat(absPath)
+			if err != nil {
+				return fmt.Errorf("stat %s: %w", normalized, err)
+			}
+
+			header, err := tar.FileInfoHeader(info, "")
+			if err != nil {
+				return fmt.Errorf("header %s: %w", normalized, err)
+			}
+			header.Name = normalized
+			header.ModTime = time.Time{}
+			header.AccessTime = time.Time{}
+			header.ChangeTime = time.Time{}
+
+			if err := tw.WriteHeader(header); err != nil {
+				return fmt.Errorf("write header %s: %w", normalized, err)
+			}
+
+			f, err := os.Open(absPath)
+			if err != nil {
+				return fmt.Errorf("open %s: %w", normalized, err)
+			}
+			if _, err := io.Copy(tw, f); err != nil {
+				_ = f.Close()
+				return fmt.Errorf("copy %s: %w", normalized, err)
+			}
 			_ = f.Close()
-			return nil, fmt.Errorf("copy %s: %w", normalized, err)
 		}
-		_ = f.Close()
+
+		// Pack external files (stream directly, no full-file reads into memory)
+		for _, ef := range extFiles {
+			info, err := os.Stat(ef.AbsPath)
+			if err != nil || info.IsDir() {
+				if allowMissingExternal {
+					fmt.Printf("Warning: external file not found, skipping: %s\n", ef.AbsPath)
+					continue
+				}
+				return fmt.Errorf("external file inaccessible: %s (use --allow-missing-external to skip)", ef.AbsPath)
+			}
+
+			hdr := &tar.Header{
+				Name:    ef.ArchivePath,
+				Size:    info.Size(),
+				Mode:    int64(DefaultFileMode(ef.ArchivePath)),
+				ModTime: time.Time{},
+			}
+			if err := tw.WriteHeader(hdr); err != nil {
+				return fmt.Errorf("writing header for %s: %w", ef.ArchivePath, err)
+			}
+
+			f, err := os.Open(ef.AbsPath)
+			if err != nil {
+				if allowMissingExternal {
+					fmt.Printf("Warning: cannot read external file, skipping: %s\n", ef.AbsPath)
+					continue
+				}
+				return fmt.Errorf("reading external file %s: %w", ef.AbsPath, err)
+			}
+			if _, err := io.Copy(tw, f); err != nil {
+				_ = f.Close()
+				return fmt.Errorf("copying external file %s: %w", ef.ArchivePath, err)
+			}
+			_ = f.Close()
+		}
+
+		if err := tw.Close(); err != nil {
+			return err
+		}
+		return gw.Close()
+	}()
+
+	if packErr != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return nil, packErr
 	}
 
-	if err := tw.Close(); err != nil {
-		return nil, err
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("closing temp file: %w", err)
 	}
-	if err := gw.Close(); err != nil {
-		return nil, err
+
+	info, err := os.Stat(tmpPath)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("stat temp file: %w", err)
 	}
-	return buf.Bytes(), nil
+
+	return &PackResult{
+		Path:       tmpPath,
+		Size:       info.Size(),
+		GzipDigest: "sha256:" + hex.EncodeToString(gzipHasher.Sum(nil)),
+		DiffID:     "sha256:" + hex.EncodeToString(uncompHasher.Sum(nil)),
+	}, nil
 }
 
 // PackLayerWithExternal creates a tar.gz archive combining workspace files and
@@ -88,103 +178,56 @@ func PackLayer(workDir string, files []string) ([]byte, error) {
 // their ArchivePath. If allowMissingExternal is false, inaccessible external
 // files are returned as errors instead of silently skipped.
 func PackLayerWithExternal(workDir string, files []string, extFiles []ExternalFile, allowMissingExternal bool) ([]byte, error) {
-	var buf bytes.Buffer
-	gw, _ := gzip.NewWriterLevel(&buf, gzip.DefaultCompression)
-	gw.OS = 0xFF
-	tw := tar.NewWriter(gw)
-
-	// Pack workspace files
-	for _, file := range files {
-		normalized := NormalizePath(file)
-		absPath := filepath.Join(workDir, filepath.FromSlash(normalized))
-
-		info, err := os.Stat(absPath)
-		if err != nil {
-			return nil, fmt.Errorf("stat %s: %w", normalized, err)
-		}
-
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return nil, fmt.Errorf("header %s: %w", normalized, err)
-		}
-		header.Name = normalized
-		header.ModTime = time.Time{}
-		header.AccessTime = time.Time{}
-		header.ChangeTime = time.Time{}
-
-		if err := tw.WriteHeader(header); err != nil {
-			return nil, fmt.Errorf("write header %s: %w", normalized, err)
-		}
-
-		f, err := os.Open(absPath)
-		if err != nil {
-			return nil, fmt.Errorf("open %s: %w", normalized, err)
-		}
-		if _, err := io.Copy(tw, f); err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("copy %s: %w", normalized, err)
-		}
-		_ = f.Close()
-	}
-
-	// Pack external files (stream directly, no full-file reads into memory)
-	for _, ef := range extFiles {
-		info, err := os.Stat(ef.AbsPath)
-		if err != nil || info.IsDir() {
-			if allowMissingExternal {
-				fmt.Printf("Warning: external file not found, skipping: %s\n", ef.AbsPath)
-				continue
-			}
-			return nil, fmt.Errorf("external file inaccessible: %s (use --allow-missing-external to skip)", ef.AbsPath)
-		}
-
-		hdr := &tar.Header{
-			Name:    ef.ArchivePath,
-			Size:    info.Size(),
-			Mode:    int64(DefaultFileMode(ef.ArchivePath)),
-			ModTime: time.Time{},
-		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			return nil, fmt.Errorf("writing header for %s: %w", ef.ArchivePath, err)
-		}
-
-		f, err := os.Open(ef.AbsPath)
-		if err != nil {
-			if allowMissingExternal {
-				fmt.Printf("Warning: cannot read external file, skipping: %s\n", ef.AbsPath)
-				continue
-			}
-			return nil, fmt.Errorf("reading external file %s: %w", ef.AbsPath, err)
-		}
-		if _, err := io.Copy(tw, f); err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("copying external file %s: %w", ef.ArchivePath, err)
-		}
-		_ = f.Close()
-	}
-
-	if err := tw.Close(); err != nil {
+	packed, err := PackLayerWithExternalToTemp(workDir, files, extFiles, allowMissingExternal)
+	if err != nil {
 		return nil, err
 	}
-	if err := gw.Close(); err != nil {
-		return nil, err
+	defer func() { _ = os.Remove(packed.Path) }()
+
+	data, err := os.ReadFile(packed.Path)
+	if err != nil {
+		return nil, fmt.Errorf("reading temp file: %w", err)
 	}
-	return buf.Bytes(), nil
+	return data, nil
 }
 
-// ExtractFilesFromLayer reads a gzip-compressed tar archive from r and returns
-// the content of every file whose DisplayPath key is in the want set. Files not
-// in want are skipped. Content is capped at maxBytes per file to guard against
-// accidentally loading huge binaries into memory; if a file exceeds the cap its
-// entry is omitted from the result.
-func ExtractFilesFromLayer(r io.Reader, want map[string]bool, maxBytes int64) (map[string][]byte, error) {
+// LineHashSet maps the SHA256 hash of each line to the count of occurrences.
+type LineHashSet map[[32]byte]int
+
+// HashLinesFromReader streams r line by line, hashes each line with
+// sha256.Sum256, and returns a LineHashSet with occurrence counts.
+func HashLinesFromReader(r io.Reader) (LineHashSet, error) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	set := make(LineHashSet)
+	for scanner.Scan() {
+		h := sha256.Sum256(scanner.Bytes())
+		set[h]++
+	}
+	return set, scanner.Err()
+}
+
+// HashLinesFromFile opens path and calls HashLinesFromReader.
+func HashLinesFromFile(path string) (LineHashSet, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return HashLinesFromReader(f)
+}
+
+// ExtractLineHashesFromLayer does a single streaming pass through a tar.gz
+// archive, returning LineHashSets for all files whose display-path key is in
+// want. Entries larger than maxLineBytes are skipped.
+func ExtractLineHashesFromLayer(r io.Reader, want map[string]bool, maxLineBytes int64) (map[string]LineHashSet, error) {
 	gr, err := gzip.NewReader(r)
 	if err != nil {
 		return nil, fmt.Errorf("gzip reader: %w", err)
 	}
 	defer func() { _ = gr.Close() }()
 
-	result := make(map[string][]byte, len(want))
+	result := make(map[string]LineHashSet, len(want))
 	tr := tar.NewReader(gr)
 	for {
 		header, err := tr.Next()
@@ -202,16 +245,15 @@ func ExtractFilesFromLayer(r io.Reader, want map[string]bool, maxBytes int64) (m
 			_, _ = io.Copy(io.Discard, tr)
 			continue
 		}
-		if header.Size > maxBytes {
+		if header.Size > maxLineBytes {
 			_, _ = io.Copy(io.Discard, tr)
 			continue
 		}
-		buf := make([]byte, 0, header.Size)
-		data, err := io.ReadAll(io.LimitReader(tr, maxBytes))
+		set, err := HashLinesFromReader(tr)
 		if err != nil {
-			return nil, fmt.Errorf("reading %s: %w", key, err)
+			return nil, fmt.Errorf("hashing lines in %s: %w", key, err)
 		}
-		result[key] = append(buf, data...)
+		result[key] = set
 	}
 	return result, nil
 }

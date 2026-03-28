@@ -47,6 +47,16 @@ type LayerData struct {
 	// Mutually exclusive with Data. Call Cleanup() to remove the temp file.
 	Path   string
 	Digest string
+	Size   int64 // byte size, required when Digest is pre-computed
+}
+
+// BlobSize returns the size of the layer content.
+// If Size is set it is returned directly; otherwise len(Data) is used.
+func (ld *LayerData) BlobSize() int64 {
+	if ld.Size > 0 {
+		return ld.Size
+	}
+	return int64(len(ld.Data))
 }
 
 // NewReader returns an io.ReadCloser over the layer content.

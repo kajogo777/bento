@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"strings"
 	"testing"
@@ -21,6 +23,25 @@ func makeGzipLayer(content string) []byte {
 	_ = tw.Close()
 	_ = gw.Close()
 	return buf.Bytes()
+}
+
+// makeManifestLayerInfo creates a manifest.LayerInfo from gzip bytes.
+func makeManifestLayerInfo(name, mediaType string, data []byte, fileCount int) manifest.LayerInfo {
+	gzipSum := sha256.Sum256(data)
+	gzipDigest := "sha256:" + hex.EncodeToString(gzipSum[:])
+	gr, _ := gzip.NewReader(bytes.NewReader(data))
+	h := sha256.New()
+	_, _ = io.Copy(h, gr)
+	_ = gr.Close()
+	diffID := "sha256:" + hex.EncodeToString(h.Sum(nil))
+	return manifest.LayerInfo{
+		Name:       name,
+		MediaType:  mediaType,
+		GzipDigest: gzipDigest,
+		DiffID:     diffID,
+		Size:       int64(len(data)),
+		FileCount:  fileCount,
+	}
 }
 
 func TestLocalStore_FullLifecycle(t *testing.T) {
@@ -41,14 +62,8 @@ func TestLocalStore_FullLifecycle(t *testing.T) {
 	}
 
 	layerData := makeGzipLayer("hello-layer-content")
-	layers := []manifest.LayerInfo{
-		{
-			Name:      "project",
-			MediaType: manifest.MediaTypeProject,
-			Data:      layerData,
-			FileCount: 5,
-		},
-	}
+	layerInfo := makeManifestLayerInfo("project", manifest.MediaTypeProject, layerData, 5)
+	layers := []manifest.LayerInfo{layerInfo}
 
 	manifestBytes, configBytes, err := manifest.BuildManifest(cfg, layers)
 	if err != nil {
@@ -59,6 +74,8 @@ func TestLocalStore_FullLifecycle(t *testing.T) {
 		{
 			MediaType: manifest.MediaTypeProject,
 			Data:      layerData,
+			Digest:    layerInfo.GzipDigest,
+			Size:      layerInfo.Size,
 		},
 	}
 

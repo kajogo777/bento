@@ -1,9 +1,9 @@
 package cli
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -151,7 +151,7 @@ func newSaveCmd() *cobra.Command {
 				wsFiles := sr.WorkspaceFiles
 				extFiles := sr.ExternalFiles
 
-				data, err := workspace.PackLayerWithExternal(dir, wsFiles, extFiles, flagAllowMissingExternal)
+				packed, err := workspace.PackLayerWithExternalToTemp(dir, wsFiles, extFiles, flagAllowMissingExternal)
 				if err != nil {
 					return fmt.Errorf("packing layer %s: %w", ld.Name, err)
 				}
@@ -166,28 +166,37 @@ func newSaveCmd() *cobra.Command {
 				if totalFiles == 0 {
 					status = "empty"
 				} else if parentDigest != "" {
-					newDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(data))
-					if prevDigest, ok := prevLayerDigests[ld.Name]; ok && prevDigest == newDigest {
+					if prevDigest, ok := prevLayerDigests[ld.Name]; ok && prevDigest == packed.GzipDigest {
 						status = "unchanged, reusing"
 					}
 				}
 
-
 				layerInfos = append(layerInfos, manifest.LayerInfo{
-					Name:        ld.Name,
-					MediaType:   mediaType,
-					Data:        data,
-					FileCount:   totalFiles,
-					
+					Name:       ld.Name,
+					MediaType:  mediaType,
+					Path:       packed.Path,
+					Size:       packed.Size,
+					GzipDigest: packed.GzipDigest,
+					DiffID:     packed.DiffID,
+					FileCount:  totalFiles,
 				})
 
 				extInfo := ""
 				if len(extFiles) > 0 {
 					extInfo = fmt.Sprintf(" (+%d external)", len(extFiles))
 				}
-				sizeStr := formatSize(len(data))
+				sizeStr := formatSize(int(packed.Size))
 				fmt.Printf("  %-10s %d files%s, %s (%s)\n", ld.Name+":", totalFiles, extInfo, sizeStr, status)
 			}
+
+			// Defer cleanup of temp layer files
+			defer func() {
+				for _, li := range layerInfos {
+					if li.Path != "" {
+						_ = os.Remove(li.Path)
+					}
+				}
+			}()
 
 			// Build config object — include env vars and secret refs so the
 			// checkpoint is self-describing when pushed to a remote registry.
@@ -250,11 +259,11 @@ func newSaveCmd() *cobra.Command {
 
 			var storeLayerData []registry.LayerData
 			for _, li := range layerInfos {
-				layerDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(li.Data))
 				storeLayerData = append(storeLayerData, registry.LayerData{
 					MediaType: li.MediaType,
-					Data:      li.Data,
-					Digest:    layerDigest,
+					Path:      li.Path,
+					Digest:    li.GzipDigest,
+					Size:      li.Size,
 				})
 			}
 
