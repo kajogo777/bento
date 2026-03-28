@@ -64,10 +64,91 @@ func diffFileMaps(old, new map[string]string) (added, removed, modified []string
 	return
 }
 
+// fileLineCounts holds the number of added and removed lines for a single file.
+type fileLineCounts struct{ added, removed int }
+
+// countLineDiff computes the number of added and removed lines between old and
+// new content using an LCS-based diff. Files larger than 50 000 lines fall back
+// to a raw line-count delta to keep the operation fast.
+func countLineDiff(oldContent, newContent []byte) (added, removed int) {
+	splitLines := func(b []byte) []string {
+		s := strings.TrimRight(string(b), "\n")
+		if s == "" {
+			return nil
+		}
+		return strings.Split(s, "\n")
+	}
+	oldLines := splitLines(oldContent)
+	newLines := splitLines(newContent)
+	n, m := len(oldLines), len(newLines)
+	if n == 0 {
+		return m, 0
+	}
+	if m == 0 {
+		return 0, n
+	}
+	// For very large files, use a fast approximation.
+	if n > 50000 || m > 50000 {
+		delta := m - n
+		if delta > 0 {
+			return delta, 0
+		}
+		return 0, -delta
+	}
+	// Standard O(n*m) space-optimised LCS DP.
+	dp := make([]int, m+1)
+	for i := 0; i < n; i++ {
+		prev := 0
+		for j := 0; j < m; j++ {
+			temp := dp[j+1]
+			if oldLines[i] == newLines[j] {
+				dp[j+1] = prev + 1
+			} else if dp[j] > dp[j+1] {
+				dp[j+1] = dp[j]
+			}
+			prev = temp
+		}
+	}
+	lcs := dp[m]
+	return m - lcs, n - lcs
+}
+
+// looksLikeText returns false when content contains a null byte, which is a
+// reliable indicator of binary data.
+func looksLikeText(b []byte) bool {
+	// Only scan the first 8 KiB for speed.
+	probe := b
+	if len(probe) > 8192 {
+		probe = probe[:8192]
+	}
+	return !strings.ContainsRune(string(probe), 0)
+}
+
+// lineCountAnnotation formats a per-file line change annotation such as
+// "(+12/-5 lines)" or "(+8 lines)".
+func lineCountAnnotation(lc fileLineCounts) string {
+	if lc.added == 0 && lc.removed == 0 {
+		return ""
+	}
+	var parts []string
+	if lc.added > 0 {
+		parts = append(parts, fmt.Sprintf("+%d", lc.added))
+	}
+	if lc.removed > 0 {
+		parts = append(parts, fmt.Sprintf("-%d", lc.removed))
+	}
+	word := "lines"
+	if lc.added+lc.removed == 1 {
+		word = "line"
+	}
+	return fmt.Sprintf("(%s %s)", strings.Join(parts, "/"), word)
+}
+
 // printLayerDiff prints the diff for a single layer.
-func printLayerDiff(name string, added, removed, modified []string, hasChanges *bool) {
+// lineCounts maps file path → line change counts; pass nil to omit annotations.
+func printLayerDiff(name string, added, removed, modified []string, lineCounts map[string]fileLineCounts, hasChanges *bool) {
 	if len(added) == 0 && len(removed) == 0 && len(modified) == 0 {
-		fmt.Printf("  %s%s: unchanged%s\n", colorDim, name, colorReset)
+		fmt.Printf("\n  %s%s: unchanged%s\n", colorDim, name, colorReset)
 		return
 	}
 	*hasChanges = true
@@ -88,16 +169,27 @@ func printLayerDiff(name string, added, removed, modified []string, hasChanges *
 	if total == 1 {
 		word = "change"
 	}
-	fmt.Printf("  %s: %d %s (%s)\n", name, total, word, strings.Join(parts, ", "))
+	fmt.Printf("\n  %s: %d %s (%s)\n", name, total, word, strings.Join(parts, ", "))
 
+	printFile := func(sigil, color, f string) {
+		ann := ""
+		if lineCounts != nil {
+			ann = lineCountAnnotation(lineCounts[f])
+		}
+		if ann != "" {
+			fmt.Printf("    %s%s %s  %s%s%s\n", color, sigil, f, colorDim, ann, colorReset)
+		} else {
+			fmt.Printf("    %s%s %s%s\n", color, sigil, f, colorReset)
+		}
+	}
 	for _, f := range added {
-		fmt.Printf("    %s+ %s%s\n", colorGreen, f, colorReset)
+		printFile("+", colorGreen, f)
 	}
 	for _, f := range removed {
-		fmt.Printf("    %s- %s%s\n", colorRed, f, colorReset)
+		printFile("-", colorRed, f)
 	}
 	for _, f := range modified {
-		fmt.Printf("    %s~ %s%s\n", colorYellow, f, colorReset)
+		printFile("~", colorYellow, f)
 	}
 }
 

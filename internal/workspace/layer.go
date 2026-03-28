@@ -172,6 +172,50 @@ func PackLayerWithExternal(workDir string, files []string, extFiles []ExternalFi
 	return buf.Bytes(), nil
 }
 
+// ExtractFilesFromLayer reads a gzip-compressed tar archive from r and returns
+// the content of every file whose DisplayPath key is in the want set. Files not
+// in want are skipped. Content is capped at maxBytes per file to guard against
+// accidentally loading huge binaries into memory; if a file exceeds the cap its
+// entry is omitted from the result.
+func ExtractFilesFromLayer(r io.Reader, want map[string]bool, maxBytes int64) (map[string][]byte, error) {
+	gr, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("gzip reader: %w", err)
+	}
+	defer func() { _ = gr.Close() }()
+
+	result := make(map[string][]byte, len(want))
+	tr := tar.NewReader(gr)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("tar next: %w", err)
+		}
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+		key := DisplayPath(NormalizePath(header.Name))
+		if !want[key] {
+			_, _ = io.Copy(io.Discard, tr)
+			continue
+		}
+		if header.Size > maxBytes {
+			_, _ = io.Copy(io.Discard, tr)
+			continue
+		}
+		buf := make([]byte, 0, header.Size)
+		data, err := io.ReadAll(io.LimitReader(tr, maxBytes))
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", key, err)
+		}
+		result[key] = append(buf, data...)
+	}
+	return result, nil
+}
+
 // ListLayerFilesWithHashesFromReader returns file paths and their content SHA256
 // hashes by reading from r. This detects modifications even when file size is
 // unchanged. r must contain a valid gzip-compressed tar archive.

@@ -1,6 +1,2 @@
+agent: auto
 store: /Users/georgefahmy/.bento/store
-harness: default
-ignore:
-    - '*.log'
-    - tmp/
-    - .DS_Store
