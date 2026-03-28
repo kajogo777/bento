@@ -48,6 +48,12 @@ func newInitCmd() *cobra.Command {
 				Task:  flagTask,
 			}
 
+			id, err := config.GenerateWorkspaceID()
+			if err != nil {
+				return err
+			}
+			cfg.ID = id
+
 			if err := config.Save(dir, cfg); err != nil {
 				return fmt.Errorf("writing bento.yaml: %w", err)
 			}

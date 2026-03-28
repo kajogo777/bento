@@ -50,7 +50,7 @@ func TestBuildManifest(t *testing.T) {
 		Agent:            "claude",
 		AgentVersion:     "3.5",
 		Task:             "build-feature",
-		SessionID:        "sess-abc",
+		WorkspaceID:      "ws-abc123def456",
 		ParentCheckpoint: "sha256:parent",
 		Checkpoint:       3,
 		Created:          "2025-01-15T10:00:00Z",

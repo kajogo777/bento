@@ -66,16 +66,19 @@ func newOpenCmd() *cobra.Command {
 				if parseErr != nil {
 					return parseErr
 				}
-				if storeName == "" {
-					storeName = filepath.Base(sourceDir)
-				}
 			}
 
 			storePath := ""
 			cfg, cfgErr := config.Load(sourceDir)
 			if cfgErr == nil {
+				if storeName == "" {
+					storeName = cfg.ID
+				}
 				storePath = filepath.Join(cfg.Store, storeName)
 			} else {
+				if storeName == "" {
+					storeName = filepath.Base(sourceDir)
+				}
 				storePath = filepath.Join(config.DefaultStorePath(), storeName)
 			}
 

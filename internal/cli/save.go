@@ -104,9 +104,7 @@ func newSaveCmd() *cobra.Command {
 			sc, _ := h.SessionConfig(dir)
 
 			// Open store
-			projectName := filepath.Base(dir)
-			storePath := filepath.Join(cfg.Store, projectName)
-			store, err := registry.NewStore(storePath)
+			store, err := registry.NewStore(cfg.StorePath())
 			if err != nil {
 				return fmt.Errorf("opening store: %w", err)
 			}
@@ -244,6 +242,7 @@ func newSaveCmd() *cobra.Command {
 			// checkpoint is self-describing when pushed to a remote registry.
 			cfgObj := &manifest.BentoConfigObj{
 				SchemaVersion:    "1.0.0",
+				WorkspaceID:      cfg.ID,
 				Checkpoint:       seq,
 				Created:          time.Now().UTC().Format(time.RFC3339),
 				Status:           "paused",

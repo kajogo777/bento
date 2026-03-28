@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -26,9 +25,7 @@ func loadConfigAndStore(dir string) (*config.BentoConfig, registry.Store, error)
 	if err != nil {
 		return nil, nil, fmt.Errorf("no bento.yaml found. Run `bento init` first")
 	}
-	projectName := filepath.Base(dir)
-	storePath := filepath.Join(cfg.Store, projectName)
-	store, err := registry.NewStore(storePath)
+	store, err := registry.NewStore(cfg.StorePath())
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening store: %w", err)
 	}

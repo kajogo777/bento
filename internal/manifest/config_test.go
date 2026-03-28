@@ -10,7 +10,7 @@ func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 		Agent:            "claude",
 		AgentVersion:     "3.5",
 		Task:             "build-feature",
-		SessionID:        "sess-abc123",
+		WorkspaceID:      "ws-abc123def456",
 		ParentCheckpoint: "sha256:aabbcc",
 		Checkpoint:       5,
 		Created:          "2025-01-15T10:00:00Z",
@@ -59,8 +59,8 @@ func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 	if got.Task != cfg.Task {
 		t.Errorf("Task: got %q, want %q", got.Task, cfg.Task)
 	}
-	if got.SessionID != cfg.SessionID {
-		t.Errorf("SessionID: got %q, want %q", got.SessionID, cfg.SessionID)
+	if got.WorkspaceID != cfg.WorkspaceID {
+		t.Errorf("WorkspaceID: got %q, want %q", got.WorkspaceID, cfg.WorkspaceID)
 	}
 	if got.ParentCheckpoint != cfg.ParentCheckpoint {
 		t.Errorf("ParentCheckpoint: got %q, want %q", got.ParentCheckpoint, cfg.ParentCheckpoint)
@@ -165,8 +165,8 @@ func TestMarshalUnmarshalRoundtrip_OptionalFieldsEmpty(t *testing.T) {
 	if got.Task != "" {
 		t.Errorf("Task should be empty, got %q", got.Task)
 	}
-	if got.SessionID != "" {
-		t.Errorf("SessionID should be empty, got %q", got.SessionID)
+	if got.WorkspaceID != "" {
+		t.Errorf("WorkspaceID should be empty, got %q", got.WorkspaceID)
 	}
 	if got.ParentCheckpoint != "" {
 		t.Errorf("ParentCheckpoint should be empty, got %q", got.ParentCheckpoint)

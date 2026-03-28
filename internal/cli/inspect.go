@@ -92,7 +92,7 @@ func newInspectCmd() *cobra.Command {
 				return err
 			}
 			if storeName == "" {
-				storeName = filepath.Base(dir)
+				storeName = cfg.ID
 			}
 
 			storePath := filepath.Join(cfg.Store, storeName)

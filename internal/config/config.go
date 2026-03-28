@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 
 // BentoConfig represents the bento.yaml configuration file.
 type BentoConfig struct {
+	ID        string             `yaml:"id,omitempty"`
 	Agent     string             `yaml:"agent,omitempty"`
 	Task      string             `yaml:"task,omitempty"`
 	Store     string             `yaml:"store,omitempty"`
@@ -90,6 +93,21 @@ var DefaultIgnorePatterns = []string{
 	"bin/**",
 }
 
+// GenerateWorkspaceID creates a new workspace identifier in the format ws-<random>.
+func GenerateWorkspaceID() (string, error) {
+	b := make([]byte, 8) // 16 hex chars
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generating workspace id: %w", err)
+	}
+	return "ws-" + hex.EncodeToString(b), nil
+}
+
+// StorePath returns the full path to this workspace's OCI store directory.
+// It joins the configured store root with the workspace ID.
+func (c *BentoConfig) StorePath() string {
+	return filepath.Join(c.Store, c.ID)
+}
+
 // Validate checks the configuration for errors that would cause silent data
 // loss or corrupt checkpoints. Returns the first hard error found.
 func (c *BentoConfig) Validate() error {
@@ -154,7 +172,49 @@ func Load(dir string) (*BentoConfig, error) {
 		return nil, fmt.Errorf("bento.yaml: %w", err)
 	}
 
+	// Migrate: assign a workspace ID if missing (pre-v0.4 workspaces).
+	if cfg.ID == "" {
+		if err := migrateWorkspaceID(dir, cfg); err != nil {
+			return nil, fmt.Errorf("migrating workspace id: %w", err)
+		}
+	}
+
 	return cfg, nil
+}
+
+// migrateWorkspaceID generates a new workspace ID for a pre-v0.4 workspace,
+// renames the old basename-keyed store to the new ID, and persists the updated
+// bento.yaml so the migration is a one-time operation.
+func migrateWorkspaceID(dir string, cfg *BentoConfig) error {
+	id, err := GenerateWorkspaceID()
+	if err != nil {
+		return err
+	}
+	cfg.ID = id
+
+	// If an old store exists under the basename convention, rename it.
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	oldStorePath := filepath.Join(cfg.Store, filepath.Base(absDir))
+	newStorePath := cfg.StorePath()
+
+	if info, statErr := os.Stat(oldStorePath); statErr == nil && info.IsDir() {
+		// Only rename if the new path doesn't already exist.
+		if _, statErr := os.Stat(newStorePath); os.IsNotExist(statErr) {
+			if err := os.Rename(oldStorePath, newStorePath); err != nil {
+				return fmt.Errorf("renaming store %s → %s: %w", oldStorePath, newStorePath, err)
+			}
+		}
+	}
+
+	// Persist the ID back to bento.yaml.
+	if err := Save(dir, cfg); err != nil {
+		return fmt.Errorf("saving migrated bento.yaml: %w", err)
+	}
+
+	return nil
 }
 
 // Save writes a BentoConfig to bento.yaml in the given directory.

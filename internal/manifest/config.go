@@ -9,10 +9,10 @@ import (
 // BentoConfigObj holds bento-specific metadata for a checkpoint.
 type BentoConfigObj struct {
 	SchemaVersion    string                `json:"schemaVersion"`
+	WorkspaceID      string                `json:"workspaceId,omitempty"`
 	Agent            string                `json:"agent,omitempty"`
 	AgentVersion     string                `json:"agentVersion,omitempty"`
 	Task             string                `json:"task,omitempty"`
-	SessionID        string                `json:"sessionId,omitempty"`
 	ParentCheckpoint string                `json:"parentCheckpoint,omitempty"`
 	Checkpoint       int                   `json:"checkpoint"`
 	Created          string                `json:"created"`

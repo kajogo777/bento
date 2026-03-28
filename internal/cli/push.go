@@ -44,9 +44,7 @@ Examples:
 			}
 
 			// Open local store
-			projectName := filepath.Base(dir)
-			storePath := filepath.Join(cfg.Store, projectName)
-			store, err := registry.NewStore(storePath)
+			store, err := registry.NewStore(cfg.StorePath())
 			if err != nil {
 				return fmt.Errorf("opening local store: %w", err)
 			}
@@ -57,11 +55,10 @@ Examples:
 				tags = []string{flagTag}
 			}
 
-			remoteRef := remote + "/" + projectName
-			fmt.Printf("Pushing to %s...\n", remoteRef)
+			fmt.Printf("Pushing to %s...\n", remote)
 
 			ctx := context.Background()
-			if err := registry.PushToRemote(ctx, store, remoteRef, tags); err != nil {
+			if err := registry.PushToRemote(ctx, store, remote, tags); err != nil {
 				return fmt.Errorf("push failed: %w", err)
 			}
 
