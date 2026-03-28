@@ -2,9 +2,13 @@ package registry
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/registry/remote"
@@ -87,12 +91,30 @@ func newRemoteRepo(ref string) (*remote.Repository, error) {
 		repo.PlainHTTP = true
 	}
 
+	// Use a custom HTTP transport with connection-level timeouts.
+	// Note: no ReadTimeout or WriteTimeout here — layer blobs can be gigabytes
+	// and we must not interrupt a legitimate in-progress transfer.
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		TLSClientConfig:       &tls.Config{},
+		ForceAttemptHTTP2:     true,
+	}
+	httpClient := &http.Client{Transport: transport}
+
 	// Use Docker credential store for auth
 	credStore, err := credentials.NewStoreFromDocker(credentials.StoreOptions{})
 	if err == nil {
 		repo.Client = &auth.Client{
+			Client:     httpClient,
 			Credential: credentials.Credential(credStore),
 		}
+	} else {
+		repo.Client = &auth.Client{Client: httpClient}
 	}
 
 	return repo, nil

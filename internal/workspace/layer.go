@@ -13,6 +13,21 @@ import (
 	"time"
 )
 
+// DisplayPath converts an archive entry name to a human-readable path.
+// External files stored as "__external__/~/..." are shown as "~/.../..."
+// and external absolute paths as "/...".
+func DisplayPath(archiveName string) string {
+	if strings.HasPrefix(archiveName, "__external__") {
+		p := archiveName[len("__external__"):]
+		// /~/ prefix → ~/
+		if strings.HasPrefix(p, "/~/") {
+			return "~/" + p[3:]
+		}
+		return p
+	}
+	return archiveName
+}
+
 // PackLayer creates a tar.gz archive from the given files. The file paths must
 // be relative to workDir. Files are stored in the archive with forward-slash
 // paths relative to the workspace root.
@@ -68,9 +83,11 @@ func PackLayer(workDir string, files []string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// PackLayerWithExternal creates a tar.gz archive combining workspace files and external files.
-// Workspace files are relative to workDir, external files use their ArchivePath.
-func PackLayerWithExternal(workDir string, files []string, extFiles []ExternalFile) ([]byte, error) {
+// PackLayerWithExternal creates a tar.gz archive combining workspace files and
+// external files. Workspace files are relative to workDir; external files use
+// their ArchivePath. If allowMissingExternal is false, inaccessible external
+// files are returned as errors instead of silently skipped.
+func PackLayerWithExternal(workDir string, files []string, extFiles []ExternalFile, allowMissingExternal bool) ([]byte, error) {
 	var buf bytes.Buffer
 	gw, _ := gzip.NewWriterLevel(&buf, gzip.DefaultCompression)
 	gw.OS = 0xFF
@@ -110,16 +127,15 @@ func PackLayerWithExternal(workDir string, files []string, extFiles []ExternalFi
 		_ = f.Close()
 	}
 
-	// Pack external files
+	// Pack external files (stream directly, no full-file reads into memory)
 	for _, ef := range extFiles {
 		info, err := os.Stat(ef.AbsPath)
 		if err != nil || info.IsDir() {
-			continue
-		}
-
-		data, err := os.ReadFile(ef.AbsPath)
-		if err != nil {
-			continue
+			if allowMissingExternal {
+				fmt.Printf("Warning: external file not found, skipping: %s\n", ef.AbsPath)
+				continue
+			}
+			return nil, fmt.Errorf("external file inaccessible: %s (use --allow-missing-external to skip)", ef.AbsPath)
 		}
 
 		hdr := &tar.Header{
@@ -131,9 +147,20 @@ func PackLayerWithExternal(workDir string, files []string, extFiles []ExternalFi
 		if err := tw.WriteHeader(hdr); err != nil {
 			return nil, fmt.Errorf("writing header for %s: %w", ef.ArchivePath, err)
 		}
-		if _, err := tw.Write(data); err != nil {
-			return nil, fmt.Errorf("writing data for %s: %w", ef.ArchivePath, err)
+
+		f, err := os.Open(ef.AbsPath)
+		if err != nil {
+			if allowMissingExternal {
+				fmt.Printf("Warning: cannot read external file, skipping: %s\n", ef.AbsPath)
+				continue
+			}
+			return nil, fmt.Errorf("reading external file %s: %w", ef.AbsPath, err)
 		}
+		if _, err := io.Copy(tw, f); err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("copying external file %s: %w", ef.ArchivePath, err)
+		}
+		_ = f.Close()
 	}
 
 	if err := tw.Close(); err != nil {
@@ -145,35 +172,11 @@ func PackLayerWithExternal(workDir string, files []string, extFiles []ExternalFi
 	return buf.Bytes(), nil
 }
 
-// ListLayerFilesWithSizes returns file paths and their content sizes from a tar.gz archive.
-func ListLayerFilesWithSizes(data []byte) (map[string]int64, error) {
-	gr, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("gzip reader: %w", err)
-	}
-	defer func() { _ = gr.Close() }()
-
-	files := make(map[string]int64)
-	tr := tar.NewReader(gr)
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("tar next: %w", err)
-		}
-		if header.Typeflag == tar.TypeReg {
-			files[NormalizePath(header.Name)] = header.Size
-		}
-	}
-	return files, nil
-}
-
-// ListLayerFilesWithHashes returns file paths and their content SHA256 hashes.
-// This detects modifications even when file size is unchanged.
-func ListLayerFilesWithHashes(data []byte) (map[string]string, error) {
-	gr, err := gzip.NewReader(bytes.NewReader(data))
+// ListLayerFilesWithHashesFromReader returns file paths and their content SHA256
+// hashes by reading from r. This detects modifications even when file size is
+// unchanged. r must contain a valid gzip-compressed tar archive.
+func ListLayerFilesWithHashesFromReader(r io.Reader) (map[string]string, error) {
+	gr, err := gzip.NewReader(r)
 	if err != nil {
 		return nil, fmt.Errorf("gzip reader: %w", err)
 	}
@@ -192,16 +195,26 @@ func ListLayerFilesWithHashes(data []byte) (map[string]string, error) {
 		}
 		if header.Typeflag == tar.TypeReg {
 			h.Reset()
-			io.Copy(h, tr)
-			files[NormalizePath(header.Name)] = fmt.Sprintf("%x", h.Sum(nil))
+			if _, err := io.Copy(h, tr); err != nil {
+				return nil, fmt.Errorf("hashing %s: %w", header.Name, err)
+			}
+			files[DisplayPath(NormalizePath(header.Name))] = fmt.Sprintf("%x", h.Sum(nil))
 		}
 	}
 	return files, nil
 }
 
-// ListLayerFiles returns the list of file paths contained in a tar.gz archive.
-func ListLayerFiles(data []byte) ([]string, error) {
-	gr, err := gzip.NewReader(bytes.NewReader(data))
+// ListLayerFilesWithHashes returns file paths and their content SHA256 hashes
+// from a tar.gz archive in memory. For large layers prefer
+// ListLayerFilesWithHashesFromReader with an os.File.
+func ListLayerFilesWithHashes(data []byte) (map[string]string, error) {
+	return ListLayerFilesWithHashesFromReader(bytes.NewReader(data))
+}
+
+// ListLayerFilesFromReader returns the list of file paths in a tar.gz archive
+// read from r.
+func ListLayerFilesFromReader(r io.Reader) ([]string, error) {
+	gr, err := gzip.NewReader(r)
 	if err != nil {
 		return nil, fmt.Errorf("gzip reader: %w", err)
 	}
@@ -218,10 +231,16 @@ func ListLayerFiles(data []byte) ([]string, error) {
 			return nil, fmt.Errorf("tar next: %w", err)
 		}
 		if header.Typeflag == tar.TypeReg {
-			files = append(files, NormalizePath(header.Name))
+			files = append(files, DisplayPath(NormalizePath(header.Name)))
 		}
 	}
 	return files, nil
+}
+
+// ListLayerFiles returns the list of file paths contained in a tar.gz archive.
+// For large layers prefer ListLayerFilesFromReader with an os.File.
+func ListLayerFiles(data []byte) ([]string, error) {
+	return ListLayerFilesFromReader(bytes.NewReader(data))
 }
 
 // CleanStaleFiles removes files in targetDir that are not in the keepFiles set.
@@ -306,11 +325,14 @@ func CleanStaleFiles(targetDir string, keepFiles map[string]bool) error {
 	return nil
 }
 
-// UnpackLayerWithExternal extracts a tar.gz archive to targetDir. Files with
-// __external__/ prefixes are routed to their original locations using the pathMap.
-// If pathMap is nil, external-prefixed files are skipped.
-func UnpackLayerWithExternal(data []byte, targetDir string, pathMap map[string]string) error {
-	gr, err := gzip.NewReader(bytes.NewReader(data))
+// UnpackLayerWithExternalFromReader extracts a tar.gz archive read from r to
+// targetDir. Files with the "__external__" sentinel are routed to their
+// original absolute locations; the target path is encoded in the entry name
+// itself (see portablePath / absFromArchivePath in scanner.go).
+// All file content is streamed directly to disk without loading full files
+// into memory.
+func UnpackLayerWithExternalFromReader(r io.Reader, targetDir string) error {
+	gr, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("gzip reader: %w", err)
 	}
@@ -328,23 +350,11 @@ func UnpackLayerWithExternal(data []byte, targetDir string, pathMap map[string]s
 
 		name := NormalizePath(header.Name)
 
-		// Route __external__/ prefixed files to original locations
-		if strings.HasPrefix(name, "__external__/") {
-			if pathMap == nil {
-				continue // skip if no path map
-			}
-			var targetPath string
-			for prefix, dir := range pathMap {
-				if strings.HasPrefix(name, prefix) {
-					relPath := name[len(prefix):]
-					if filepath.IsAbs(relPath) || strings.Contains(relPath, "..") {
-						continue
-					}
-					targetPath = filepath.Join(dir, filepath.FromSlash(relPath))
-					break
-				}
-			}
-			if targetPath == "" {
+		// Route __external__ files back to their original absolute locations.
+		if strings.HasPrefix(name, "__external__") {
+			targetPath := absFromArchivePath(name)
+			if targetPath == "" || strings.Contains(targetPath, "..") {
+				_, _ = io.Copy(io.Discard, tr)
 				continue
 			}
 			switch header.Typeflag {
@@ -352,15 +362,19 @@ func UnpackLayerWithExternal(data []byte, targetDir string, pathMap map[string]s
 				_ = os.MkdirAll(targetPath, 0o755)
 			case tar.TypeReg:
 				_ = os.MkdirAll(filepath.Dir(targetPath), 0o755)
-				content, err := io.ReadAll(tr)
-				if err != nil {
-					return fmt.Errorf("reading %s: %w", name, err)
-				}
 				mode := os.FileMode(header.Mode)
 				if mode == 0 {
 					mode = DefaultFileMode(name)
 				}
-				_ = os.WriteFile(targetPath, content, mode)
+				f, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+				if err != nil {
+					return fmt.Errorf("create %s: %w", targetPath, err)
+				}
+				if _, err := io.Copy(f, tr); err != nil {
+					_ = f.Close()
+					return fmt.Errorf("write %s: %w", targetPath, err)
+				}
+				_ = f.Close()
 			}
 			continue
 		}
@@ -402,8 +416,29 @@ func UnpackLayerWithExternal(data []byte, targetDir string, pathMap map[string]s
 	return nil
 }
 
+// UnpackLayerWithExternal extracts a tar.gz archive to targetDir.
+// For large layers prefer UnpackLayerWithExternalFromReader with an os.File.
+func UnpackLayerWithExternal(data []byte, targetDir string) error {
+	return UnpackLayerWithExternalFromReader(bytes.NewReader(data), targetDir)
+}
+
 // UnpackLayer extracts a tar.gz archive to targetDir.
 // External-prefixed files are skipped (use UnpackLayerWithExternal for those).
 func UnpackLayer(data []byte, targetDir string) error {
-	return UnpackLayerWithExternal(data, targetDir, nil)
+	return UnpackLayerWithExternal(data, targetDir)
+}
+
+// HashFileStreaming computes the SHA256 of a file by streaming it, without
+// loading the entire file into memory.
+func HashFileStreaming(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }

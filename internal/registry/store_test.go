@@ -1,11 +1,27 @@
 package registry
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/kajogo777/bento/internal/manifest"
 )
+
+// makeGzipLayer creates a minimal valid gzip-compressed tar archive for testing.
+func makeGzipLayer(content string) []byte {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	_ = tw.WriteHeader(&tar.Header{Name: "test.txt", Size: int64(len(content)), Mode: 0644})
+	_, _ = tw.Write([]byte(content))
+	_ = tw.Close()
+	_ = gw.Close()
+	return buf.Bytes()
+}
 
 func TestLocalStore_FullLifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -24,7 +40,7 @@ func TestLocalStore_FullLifecycle(t *testing.T) {
 		Message:       "first checkpoint",
 	}
 
-	layerData := []byte("hello-layer-content")
+	layerData := makeGzipLayer("hello-layer-content")
 	layers := []manifest.LayerInfo{
 		{
 			Name:      "project",
@@ -103,12 +119,22 @@ func TestLocalStore_FullLifecycle(t *testing.T) {
 		t.Errorf("loaded config checkpoint: got %d, want 1", loadedCfg.Checkpoint)
 	}
 
-	// Verify layer data roundtrip.
+	// Verify layer data roundtrip. Layers are file-backed; read via NewReader().
 	if len(loadedLayers) != 1 {
 		t.Fatalf("loaded layers count: got %d, want 1", len(loadedLayers))
 	}
-	if string(loadedLayers[0].Data) != string(layerData) {
-		t.Errorf("loaded layer data: got %q, want %q", string(loadedLayers[0].Data), string(layerData))
+	defer loadedLayers[0].Cleanup()
+	r, err := loadedLayers[0].NewReader()
+	if err != nil {
+		t.Fatalf("NewReader failed: %v", err)
+	}
+	loadedData, err := io.ReadAll(r)
+	_ = r.Close()
+	if err != nil {
+		t.Fatalf("reading layer: %v", err)
+	}
+	if string(loadedData) != string(layerData) {
+		t.Errorf("loaded layer data mismatch")
 	}
 	if loadedLayers[0].MediaType != manifest.MediaTypeProject {
 		t.Errorf("loaded layer mediaType: got %q, want %q", loadedLayers[0].MediaType, manifest.MediaTypeProject)

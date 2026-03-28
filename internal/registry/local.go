@@ -3,10 +3,14 @@ package registry
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 
+	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2/content/oci"
@@ -36,10 +40,10 @@ func (s *LocalStore) SaveCheckpoint(ref string, manifestBytes, configBytes []byt
 		return "", fmt.Errorf("parse ref: %w", err)
 	}
 
-	// Push config blob
+	// Push config blob using the standard OCI config media type
 	configDigest := digest.FromBytes(configBytes)
 	configDesc := ocispec.Descriptor{
-		MediaType: "application/vnd.bento.config.v1+json",
+		MediaType: manifest.ConfigMediaType,
 		Digest:    configDigest,
 		Size:      int64(len(configBytes)),
 	}
@@ -79,18 +83,40 @@ func (s *LocalStore) SaveCheckpoint(ref string, manifestBytes, configBytes []byt
 	return manifestDigest.String(), nil
 }
 
-// LoadCheckpoint reads a checkpoint by tag or digest.
-func (s *LocalStore) LoadCheckpoint(ref string) (manifestBytes, configBytes []byte, layers []LayerData, err error) {
-	// Resolve ref to descriptor
+// LoadManifest reads only the manifest and config for a checkpoint without
+// fetching layer blobs. Use this when layer content is not needed (e.g.
+// reading parent layer digests during save).
+func (s *LocalStore) LoadManifest(ref string) (manifestBytes []byte, configBytes []byte, err error) {
 	desc, err := s.oci.Resolve(s.ctx, ref)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("tag %q not found", ref)
+		return nil, nil, fmt.Errorf("tag %q not found", ref)
 	}
 
-	// Fetch manifest
 	manifestBytes, err = s.fetchBlob(desc)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("reading manifest: %w", err)
+		return nil, nil, fmt.Errorf("reading manifest: %w", err)
+	}
+
+	var m ocispec.Manifest
+	if err := json.Unmarshal(manifestBytes, &m); err != nil {
+		return nil, nil, fmt.Errorf("parsing manifest: %w", err)
+	}
+
+	configBytes, err = s.fetchBlob(m.Config)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading config: %w", err)
+	}
+
+	return manifestBytes, configBytes, nil
+}
+
+// LoadCheckpoint reads a checkpoint by tag or digest. Layer blobs are streamed
+// to temporary files rather than loaded into memory to support large layers.
+// Callers MUST call LayerData.Cleanup() on each returned layer when done.
+func (s *LocalStore) LoadCheckpoint(ref string) (manifestBytes, configBytes []byte, layers []LayerData, err error) {
+	manifestBytes, configBytes, err = s.LoadManifest(ref)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	var m ocispec.Manifest
@@ -98,22 +124,19 @@ func (s *LocalStore) LoadCheckpoint(ref string) (manifestBytes, configBytes []by
 		return nil, nil, nil, fmt.Errorf("parsing manifest: %w", err)
 	}
 
-	// Fetch config
-	configBytes, err = s.fetchBlob(m.Config)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("reading config: %w", err)
-	}
-
-	// Fetch layers
 	layers = make([]LayerData, 0, len(m.Layers))
 	for _, ld := range m.Layers {
-		data, err := s.fetchBlob(ld)
+		path, err := s.fetchBlobToTemp(ld)
 		if err != nil {
+			// Clean up already-created temp files before returning
+			for i := range layers {
+				layers[i].Cleanup()
+			}
 			return nil, nil, nil, fmt.Errorf("reading layer %s: %w", ld.Digest, err)
 		}
 		layers = append(layers, LayerData{
 			MediaType: ld.MediaType,
-			Data:      data,
+			Path:      path,
 			Digest:    ld.Digest.String(),
 		})
 	}
@@ -131,7 +154,7 @@ func (s *LocalStore) ListCheckpoints() ([]CheckpointEntry, error) {
 			if err != nil {
 				continue
 			}
-			// Fetch manifest to read annotations
+			// Fetch manifest to read annotations (manifests are small, OK in memory)
 			data, err := s.fetchBlob(desc)
 			if err != nil {
 				continue
@@ -169,14 +192,13 @@ func (s *LocalStore) ResolveTag(tag string) (string, error) {
 // Tag assigns a tag to an existing manifest digest.
 func (s *LocalStore) Tag(digestStr, tag string) error {
 	// Find the descriptor for this digest by resolving any existing tag that points to it
-	// We need to iterate tags to find one that matches
 	var found *ocispec.Descriptor
 	_ = s.oci.Tags(s.ctx, "", func(tags []string) error {
 		for _, t := range tags {
 			desc, err := s.oci.Resolve(s.ctx, t)
 			if err == nil && desc.Digest.String() == digestStr {
 				found = &desc
-				return fmt.Errorf("found") // break
+				return fmt.Errorf("found") // break out of callback
 			}
 		}
 		return nil
@@ -233,12 +255,61 @@ func (s *LocalStore) pushIfNotExists(desc ocispec.Descriptor, data []byte) error
 	return s.oci.Push(s.ctx, desc, bytes.NewReader(data))
 }
 
-// fetchBlob reads a complete blob by descriptor.
+// fetchBlob reads a complete blob by descriptor into memory and verifies its
+// digest. Only use for small blobs (manifest, config). For layer blobs use
+// fetchBlobToTemp.
 func (s *LocalStore) fetchBlob(desc ocispec.Descriptor) ([]byte, error) {
 	rc, err := s.oci.Fetch(s.ctx, desc)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rc.Close() }()
-	return io.ReadAll(rc)
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, err
+	}
+
+	// Verify integrity
+	if actual := digest.FromBytes(data); actual != desc.Digest {
+		return nil, fmt.Errorf("blob integrity check failed for %s: expected %s, got %s", desc.Digest, desc.Digest, actual)
+	}
+
+	return data, nil
+}
+
+// fetchBlobToTemp streams a blob to a temporary file and verifies its digest.
+// Returns the path to the temp file. Callers must remove it when done.
+func (s *LocalStore) fetchBlobToTemp(desc ocispec.Descriptor) (string, error) {
+	rc, err := s.oci.Fetch(s.ctx, desc)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = rc.Close() }()
+
+	tmpFile, err := os.CreateTemp("", "bento-layer-*.tar.gz")
+	if err != nil {
+		return "", fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmpFile, h), rc); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("streaming blob to temp: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("closing temp file: %w", err)
+	}
+
+	// Verify digest
+	actualDigest := "sha256:" + hex.EncodeToString(h.Sum(nil))
+	if actualDigest != desc.Digest.String() {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("blob integrity check failed: expected %s, got %s", desc.Digest, actualDigest)
+	}
+
+	return tmpPath, nil
 }

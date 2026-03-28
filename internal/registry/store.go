@@ -1,5 +1,11 @@
 package registry
 
+import (
+	"bytes"
+	"io"
+	"os"
+)
+
 // Store is the interface for persisting and retrieving checkpoint artifacts.
 type Store interface {
 	// SaveCheckpoint writes a checkpoint (manifest, config, and layers) to the store.
@@ -7,7 +13,14 @@ type Store interface {
 	SaveCheckpoint(ref string, manifestBytes, configBytes []byte, layers []LayerData) (string, error)
 
 	// LoadCheckpoint reads a checkpoint by reference (tag or digest).
+	// Layers are backed by temporary files on disk; callers must call
+	// LayerData.Cleanup() on each layer when done to remove temp files.
 	LoadCheckpoint(ref string) (manifestBytes, configBytes []byte, layers []LayerData, err error)
+
+	// LoadManifest reads only the manifest and config for a checkpoint, without
+	// fetching layer blobs. Use this when layer content is not needed (e.g.
+	// reading parent layer digests during save).
+	LoadManifest(ref string) (manifestBytes, configBytes []byte, err error)
 
 	// ListCheckpoints returns all tagged checkpoint entries.
 	ListCheckpoints() ([]CheckpointEntry, error)
@@ -23,11 +36,35 @@ type Store interface {
 	DeleteCheckpoint(digest string) error
 }
 
-// LayerData holds the raw bytes and metadata for a single layer blob.
+// LayerData holds metadata and content access for a single layer blob.
+// Content is either in-memory (Data != nil) or on disk (Path != "").
+// File-backed layers must be cleaned up with Cleanup() when no longer needed.
 type LayerData struct {
 	MediaType string
-	Data      []byte
-	Digest    string
+	// Data holds in-memory layer content. Nil for file-backed layers.
+	Data []byte
+	// Path is the path to a temp file holding the layer content.
+	// Mutually exclusive with Data. Call Cleanup() to remove the temp file.
+	Path   string
+	Digest string
+}
+
+// NewReader returns an io.ReadCloser over the layer content.
+// For file-backed layers (Path != ""), the caller must close the returned reader.
+// For in-memory layers (Data != nil), close is a no-op.
+func (ld *LayerData) NewReader() (io.ReadCloser, error) {
+	if ld.Path != "" {
+		return os.Open(ld.Path)
+	}
+	return io.NopCloser(bytes.NewReader(ld.Data)), nil
+}
+
+// Cleanup removes the temp file for file-backed layers.
+// Safe to call on in-memory layers (no-op).
+func (ld *LayerData) Cleanup() {
+	if ld.Path != "" {
+		_ = os.Remove(ld.Path)
+	}
 }
 
 // CheckpointEntry is a summary of a checkpoint as listed in the index.

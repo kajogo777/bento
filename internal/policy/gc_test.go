@@ -22,6 +22,10 @@ func (m *mockStore) LoadCheckpoint(ref string) ([]byte, []byte, []registry.Layer
 	return nil, nil, nil, nil
 }
 
+func (m *mockStore) LoadManifest(ref string) ([]byte, []byte, error) {
+	return nil, nil, nil
+}
+
 func (m *mockStore) ListCheckpoints() ([]registry.CheckpointEntry, error) {
 	return m.entries, nil
 }

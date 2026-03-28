@@ -1,9 +1,24 @@
 package manifest
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"testing"
 )
+
+// makeGzipLayer creates a minimal valid gzip-compressed tar archive for testing.
+func makeGzipLayer(content string) []byte {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	_ = tw.WriteHeader(&tar.Header{Name: "test.txt", Size: int64(len(content)), Mode: 0644})
+	_, _ = tw.Write([]byte(content))
+	_ = tw.Close()
+	_ = gw.Close()
+	return buf.Bytes()
+}
 
 func TestBuildManifest(t *testing.T) {
 	cfg := &BentoConfigObj{
@@ -23,13 +38,13 @@ func TestBuildManifest(t *testing.T) {
 		{
 			Name:      "project",
 			MediaType: MediaTypeProject,
-			Data:      []byte("project-data"),
+			Data:      makeGzipLayer("project-data"),
 			FileCount: 42,
 		},
 		{
 			Name:      "deps",
 			MediaType: MediaTypeDeps,
-			Data:      []byte("deps-data"),
+			Data:      makeGzipLayer("deps-data"),
 		},
 	}
 
@@ -154,7 +169,7 @@ func TestBuildManifest_LayerAnnotations(t *testing.T) {
 		{
 			Name:      "project",
 			MediaType: MediaTypeProject,
-			Data:      []byte("data"),
+			Data:      makeGzipLayer("data"),
 			FileCount: 10,
 		},
 	}

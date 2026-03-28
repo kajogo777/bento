@@ -1,9 +1,9 @@
 # Bento Artifact Format Specification
 
-**Version:** 0.2.0-draft
+**Version:** 0.3.0
 **Status:** Draft
 **Authors:** [TBD]
-**Repository:** github.com/bentoci/bento
+**Repository:** github.com/kajogo777/bento
 
 ## Abstract
 
@@ -60,8 +60,7 @@ A bento checkpoint is represented as an OCI image manifest. Bento uses **standar
       "size": 93323264,
       "annotations": {
         "org.opencontainers.image.title": "deps",
-        "dev.bento.layer.file-count": "1204",
-        "dev.bento.layer.change-frequency": "rarely"
+        "dev.bento.layer.file-count": "1204"
       }
     },
     {
@@ -202,7 +201,7 @@ Bento uses the `dev.bento.*` annotation namespace on both manifests and layer de
 | `dev.bento.agent` | RECOMMENDED | Agent framework identifier |
 | `dev.bento.task` | OPTIONAL | Task description |
 | `dev.bento.harness` | RECOMMENDED | Harness that produced this artifact |
-| `dev.bento.format.version` | RECOMMENDED | Spec version (e.g., "0.2.0") |
+| `dev.bento.format.version` | RECOMMENDED | Spec version (e.g., "0.3.0") |
 
 #### 3.4.2 Layer Annotations
 
@@ -210,7 +209,6 @@ Bento uses the `dev.bento.*` annotation namespace on both manifests and layer de
 |---|---|---|
 | `org.opencontainers.image.title` | REQUIRED | Layer name (project, agent, deps, etc.) |
 | `dev.bento.layer.file-count` | OPTIONAL | Number of files in layer |
-| `dev.bento.layer.change-frequency` | OPTIONAL | Hint: "often" or "rarely" |
 
 ## 4. Checkpoint DAG
 
@@ -332,6 +330,73 @@ credentials
 
 Additional patterns can be specified in `.bentoignore` and via the harness `Ignore()` method.
 
+## 6.5 Environment Variables and Secret References in Manifests
+
+Bento checkpoints are intended to be self-describing: a checkpoint pushed to a registry should carry enough information to restore the workspace on a new machine without requiring the original `bento.yaml`. To achieve this, env vars and secret references are embedded in the `dev.bento.config` label of the OCI image config.
+
+### 6.5.1 Plain Environment Variables
+
+Non-sensitive key-value environment variables are stored verbatim in the `env` field of the bento config object:
+
+```json
+{
+  "env": {
+    "NODE_ENV": "development",
+    "PORT": "3000",
+    "LOG_LEVEL": "debug"
+  }
+}
+```
+
+**Rule: never store secret values here.** Only non-sensitive configuration belongs in `env`.
+
+### 6.5.2 Secret References
+
+Secret references are stored in the `secrets` field. Only the reference (provider + path) is stored, never the value:
+
+```json
+{
+  "secrets": {
+    "DATABASE_URL": {
+      "source": "vault",
+      "path": "secret/data/myapp/db",
+      "key": "url"
+    },
+    "GITHUB_TOKEN": {
+      "source": "env",
+      "var": "GITHUB_TOKEN"
+    },
+    "AWS_ACCESS_KEY_ID": {
+      "source": "aws-sts",
+      "role": "arn:aws:iam::123:role/agent-role"
+    }
+  }
+}
+```
+
+Supported `source` values: `vault`, `env`, `aws-sts`, `1password`, `gcloud`, `azure`, `file`, `exec`.
+
+### 6.5.3 Env File Templates
+
+The `envFiles` field maps output `.env` file paths to their templates and the secrets that populate them:
+
+```json
+{
+  "envFiles": {
+    ".env": {
+      "template": ".env.example",
+      "secrets": ["DATABASE_URL", "GITHUB_TOKEN"]
+    }
+  }
+}
+```
+
+On restore, implementations populate each env file by resolving the listed secrets and substituting them into the template.
+
+### 6.5.4 Docker Compatibility
+
+Docker and containerd ignore unknown labels in the OCI image config. Storing env vars and secret refs in `dev.bento.config` is therefore fully Docker-compatible: `docker pull`, `COPY --from`, and containerd extraction all work unmodified.
+
 ## 7. Hooks
 
 Hooks are optional shell commands that run at lifecycle points. They allow users to integrate bento with their existing build systems, orchestration tools, and scripts without bento needing to understand or replicate that functionality.
@@ -368,6 +433,38 @@ If a `pre_*` hook exits with a non-zero status, the operation is aborted. If a `
 
 Harnesses MAY provide default hooks via the `DefaultHooks()` method. User-defined hooks in `bento.yaml` override harness defaults for the same lifecycle point.
 
+## 7.5 Watch Mode
+
+`bento watch` runs a background file-system watcher that automatically creates checkpoints as the workspace changes. It is intended for long-running agent sessions where the user wants passive checkpointing without calling `bento save` manually.
+
+### 7.5.1 Behavior
+
+- Starts watching the workspace directory for file-system events.
+- Debounces changes: waits until no file-system events have occurred for a configurable quiet period (default: 10 seconds) before triggering a checkpoint.
+- Creates a checkpoint using the same logic as `bento save`, including secret scanning, ignore patterns, and hooks.
+- Prints a one-line summary for each auto-checkpoint.
+- Runs until terminated (Ctrl-C or SIGTERM).
+
+### 7.5.2 Configuration
+
+```yaml
+watch:
+  debounce: 10          # seconds to wait after last change before saving (default: 10)
+  message: "auto-save"  # checkpoint message for auto-saves (default: "auto-save")
+  skip_secret_scan: false
+```
+
+All `bento watch` flags mirror the `bento save` flags.
+
+### 7.5.3 Interaction with Hooks
+
+`bento watch` fires the same lifecycle hooks as `bento save` (`pre_save`, `post_save`). A `pre_save` hook failure aborts the auto-checkpoint and prints a warning, but does not stop the watcher.
+
+### 7.5.4 Limitations
+
+- Watch mode is not safe for concurrent access from multiple processes. Run one watcher per workspace.
+- Events from dependency directories (e.g. `node_modules`) are ignored via the normal ignore pattern rules.
+
 ## 8. Harness Interface
 
 A harness maps an agent framework's workspace layout to bento's layer taxonomy.
@@ -383,7 +480,10 @@ type Harness interface {
     Detect(workDir string) bool
 
     // Layers returns the layer definitions for this harness.
-    Layers() []LayerDef
+    // workDir is the absolute path to the workspace root; harnesses that
+    // capture external paths (e.g. agent session dirs) need it to resolve
+    // workspace-specific locations.
+    Layers(workDir string) []LayerDef
 
     // SessionConfig extracts session metadata from the workspace.
     SessionConfig(workDir string) (*SessionConfig, error)
@@ -402,9 +502,9 @@ type Harness interface {
 
 type LayerDef struct {
     Name      string
-    Patterns  []string         // glob patterns for files in this layer
-    MediaType string           // OCI media type
-    Frequency ChangeFrequency  // ChangesOften | ChangesRarely
+    Patterns  []string // glob patterns for files in this layer; ~/... or /... = external paths
+    MediaType string   // OCI media type; defaults to standard OCI layer type
+    CatchAll  bool     // if true, unmatched files fall into this layer
 }
 ```
 
@@ -417,9 +517,9 @@ name: string                    # required
 detect: string                  # file/dir that indicates this harness
 layers:                         # required, at least one
   - name: string                # required
-    patterns: [string]          # required, glob patterns
-    media_type: string          # optional, defaults based on name
-    frequency: often | rarely   # optional, defaults to "often"
+    patterns: [string]          # required, glob patterns; ~/... or /... = external paths
+    media_type: string          # optional, defaults to standard OCI layer media type
+    catch_all: bool             # optional, catch-all for unmatched files
 ignore: [string]                # optional, additional exclude patterns
 secret_patterns: [string]       # optional, regex patterns for secrets
 hooks:                          # optional, default hooks
@@ -431,20 +531,16 @@ hooks:                          # optional, default hooks
 
 ### 8.3 Registered Harnesses
 
-The following harness names are reserved for official implementations:
+The following harness names are in use by official implementations:
 
 - `claude-code` -- Anthropic Claude Code
 - `openclaw` -- OpenClaw
 - `opencode` -- OpenCode
 - `cursor` -- Cursor
 - `codex` -- OpenAI Codex CLI / Desktop
-- `github-copilot` -- GitHub Copilot
-- `windsurf` -- Windsurf
-- `aider` -- Aider
-- `docker-agent` -- Docker Agent
-- `swe-bench` -- SWE-bench evaluation harness
-- `openhands` -- OpenHands (formerly OpenDevin)
-- `custom` -- User-defined via YAML
+- `custom` -- User-defined via YAML (see Section 8.2)
+
+The harness name `custom` is the generic fallback for any workspace with no recognized agent. Third-party harnesses should pick a unique, namespaced name (e.g., `acme-agent`) to avoid collisions.
 
 ## 9. Store Behavior
 
@@ -697,8 +793,7 @@ This table documents where major agent frameworks store their state on disk. Har
       "size": 93323264,
       "annotations": {
         "org.opencontainers.image.title": "deps",
-        "dev.bento.layer.file-count": "1204",
-        "dev.bento.layer.change-frequency": "rarely"
+        "dev.bento.layer.file-count": "1204"
       }
     },
     {
@@ -707,8 +802,7 @@ This table documents where major agent frameworks store their state on disk. Har
       "size": 65536,
       "annotations": {
         "org.opencontainers.image.title": "agent",
-        "dev.bento.layer.file-count": "8",
-        "dev.bento.layer.change-frequency": "often"
+        "dev.bento.layer.file-count": "8"
       }
     },
     {
@@ -717,8 +811,7 @@ This table documents where major agent frameworks store their state on disk. Har
       "size": 131072,
       "annotations": {
         "org.opencontainers.image.title": "project",
-        "dev.bento.layer.file-count": "42",
-        "dev.bento.layer.change-frequency": "often"
+        "dev.bento.layer.file-count": "42"
       }
     }
   ],

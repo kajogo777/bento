@@ -21,9 +21,26 @@ type BentoConfigObj struct {
 	GitSha           string                `json:"gitSha,omitempty"`
 	GitBranch        string                `json:"gitBranch,omitempty"`
 	Message          string                `json:"message,omitempty"`
-	EnvFiles         map[string]EnvFileRef `json:"envFiles,omitempty"`
-	Metrics          *Metrics              `json:"metrics,omitempty"`
-	Environment      *Environment          `json:"environment,omitempty"`
+	// Env holds plain key-value environment variables to set on restore.
+	// Values are stored verbatim; do NOT put secrets here.
+	Env map[string]string `json:"env,omitempty"`
+	// Secrets maps variable names to references for secrets to resolve on restore.
+	// Only references (provider + path) are stored, never secret values.
+	Secrets  map[string]SecretRef  `json:"secrets,omitempty"`
+	EnvFiles map[string]EnvFileRef `json:"envFiles,omitempty"`
+	Metrics  *Metrics              `json:"metrics,omitempty"`
+	Environment *Environment       `json:"environment,omitempty"`
+}
+
+// SecretRef describes how to resolve a secret at restore time.
+// Only the reference is stored in the manifest, never the secret value.
+type SecretRef struct {
+	Source string `json:"source"`           // vault, env, aws-sts, 1password, gcloud, azure, file, exec
+	Path   string `json:"path,omitempty"`   // vault path, file path, or 1password item
+	Key    string `json:"key,omitempty"`    // field within the secret
+	Var    string `json:"var,omitempty"`    // source env var name (source=env)
+	Role   string `json:"role,omitempty"`   // IAM role ARN (source=aws-sts)
+	Command string `json:"command,omitempty"` // shell command (source=exec)
 }
 
 // EnvFileRef describes a templated env file and the secrets it references.

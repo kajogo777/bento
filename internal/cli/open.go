@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/kajogo777/bento/internal/config"
-	"github.com/kajogo777/bento/internal/harness"
 	"github.com/kajogo777/bento/internal/hooks"
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/kajogo777/bento/internal/registry"
@@ -83,7 +82,8 @@ func newOpenCmd() *cobra.Command {
 				return fmt.Errorf("opening store: %w", err)
 			}
 
-			// Load checkpoint (try local first, fall back to remote pull)
+			// Load checkpoint (try local first, fall back to remote pull).
+			// Layers are backed by temp files; we defer cleanup for all of them.
 			manifestBytes, _, layers, err := store.LoadCheckpoint(tag)
 			if err != nil {
 				// Determine remote to pull from
@@ -107,6 +107,12 @@ func newOpenCmd() *cobra.Command {
 					return fmt.Errorf("loading checkpoint %s: %w", ref, err)
 				}
 			}
+			// Clean up temp files when done, regardless of error path below.
+			defer func() {
+				for i := range layers {
+					layers[i].Cleanup()
+				}
+			}()
 
 			// Parse manifest to get layer info
 			info, err := manifest.ParseCheckpointInfo(manifestBytes)
@@ -124,10 +130,16 @@ func newOpenCmd() *cobra.Command {
 				layersToRestore = filterLayers(layers, manifestBytes, skipped, true)
 			}
 
-			// Build set of files in the checkpoint for cleanup
+			// Build set of files in the checkpoint for cleanup (stream to avoid
+			// loading entire layers into memory).
 			keepFiles := make(map[string]bool)
-			for _, ld := range layersToRestore {
-				files, err := workspace.ListLayerFiles(ld.Data)
+			for i := range layersToRestore {
+				r, err := layersToRestore[i].NewReader()
+				if err != nil {
+					continue
+				}
+				files, err := workspace.ListLayerFilesFromReader(r)
+				_ = r.Close()
 				if err == nil {
 					for _, f := range files {
 						keepFiles[f] = true
@@ -135,29 +147,17 @@ func newOpenCmd() *cobra.Command {
 				}
 			}
 
-			// Parse manifest for layer annotations
-			var ociManifest ocispec.Manifest
-			_ = json.Unmarshal(manifestBytes, &ociManifest)
-
-			// Unpack layers
+			// Unpack layers (stream each layer directly to disk, no full load into memory)
 			fmt.Printf("Restoring checkpoint %s (sequence %d)...\n", tag, info.Sequence)
-			for i, ld := range layersToRestore {
-				// Check if this layer has external paths embedded
-				var externalPathMap map[string]string
-				if i < len(ociManifest.Layers) {
-					if pathMapJSON, ok := ociManifest.Layers[i].Annotations[manifest.AnnotationExternalPaths]; ok {
-						expandedMap := make(map[string]string)
-						if err := json.Unmarshal([]byte(pathMapJSON), &expandedMap); err == nil {
-							for prefix, target := range expandedMap {
-								expandedMap[prefix] = harness.ExpandHome(target)
-							}
-							externalPathMap = expandedMap
-						}
-					}
+			for i := range layersToRestore {
+				r, err := layersToRestore[i].NewReader()
+				if err != nil {
+					return fmt.Errorf("opening layer %d: %w", i, err)
 				}
-
-				if err := workspace.UnpackLayerWithExternal(ld.Data, targetDir, externalPathMap); err != nil {
-					return fmt.Errorf("unpacking layer: %w", err)
+				unpackErr := workspace.UnpackLayerWithExternalFromReader(r, targetDir)
+				_ = r.Close()
+				if unpackErr != nil {
+					return fmt.Errorf("unpacking layer: %w", unpackErr)
 				}
 			}
 

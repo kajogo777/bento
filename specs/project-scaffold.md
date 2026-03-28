@@ -2,10 +2,12 @@
 
 This document describes the Go project structure, dependencies, build setup, CI configuration, and credential provider interface for the bento CLI.
 
+> **Note:** The module layout below is a **planning document**. Some files listed (e.g. `attach.go`, `watch.go`, `sandbox.go`, `mcp.go`, `auth.go`, `secrets/manifest.go`) are **roadmap items** not yet implemented. See the actual `internal/` directory for the current file tree.
+
 ## Module Layout
 
 ```
-github.com/bentoci/bento/
+github.com/kajogo777/bento/
 ├── cmd/
 │   └── bento/
 │       └── main.go                  # entrypoint
@@ -119,7 +121,7 @@ github.com/bentoci/bento/
 
 ```go
 // go.mod
-module github.com/bentoci/bento
+module github.com/kajogo777/bento
 
 go 1.23
 
@@ -461,27 +463,27 @@ archives:
 
 brews:
   - repository:
-      owner: bentoci
+      owner: kajogo777
       name: homebrew-tap
     homepage: https://bento.dev
     description: "Portable agent workspaces. Pack, ship, resume."
 
 scoops:
   - repository:
-      owner: bentoci
+      owner: kajogo777
       name: scoop-bucket
     homepage: https://bento.dev
     description: "Portable agent workspaces. Pack, ship, resume."
 
 winget:
-  - publisher: bentoci
+  - publisher: kajogo777
     short_description: "Portable agent workspaces"
-    package_identifier: bentoci/bento
+    package_identifier: kajogo777/bento
 
 dockers:
   - image_templates:
-      - "ghcr.io/bentoci/bento:{{ .Version }}"
-      - "ghcr.io/bentoci/bento:latest"
+      - "ghcr.io/kajogo777/bento:{{ .Version }}"
+      - "ghcr.io/kajogo777/bento:latest"
     dockerfile: Dockerfile
 
 checksum:

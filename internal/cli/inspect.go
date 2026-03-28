@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 
@@ -100,6 +101,13 @@ func newInspectCmd() *cobra.Command {
 				}
 			}
 
+			// Cleanup temp files when done.
+			defer func() {
+				for i := range layers {
+					layers[i].Cleanup()
+				}
+			}()
+
 			// Display layer file trees
 			fmt.Println("\nLayers:")
 			for i, ld := range layers {
@@ -111,11 +119,26 @@ func newInspectCmd() *cobra.Command {
 					}
 				}
 
-				files, _ := workspace.ListLayerFiles(ld.Data)
+				r, err := ld.NewReader()
+				var files []string
+				var layerSize int64
+				if err == nil {
+					files, _ = workspace.ListLayerFilesFromReader(r)
+					_ = r.Close()
+				}
 				sort.Strings(files)
 
+				// Get size from the temp file stat, or Data len for in-memory layers.
+				if ld.Path != "" {
+					if fi, err := os.Stat(ld.Path); err == nil {
+						layerSize = fi.Size()
+					}
+				} else {
+					layerSize = int64(len(ld.Data))
+				}
+
 				fmt.Printf("\n  %s (%d files, %s, %s)\n",
-					layerName, len(files), formatSize(len(ld.Data)), truncateDigest(layerDigest))
+					layerName, len(files), formatSize(int(layerSize)), truncateDigest(layerDigest))
 
 				for _, f := range files {
 					fmt.Printf("    %s\n", f)

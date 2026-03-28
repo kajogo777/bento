@@ -111,7 +111,10 @@ func (s *Scanner) Scan() (map[string]*ScanResult, error) {
 		return nil, err
 	}
 
-	// Scan external paths for each layer
+	// Scan external paths for each layer.
+	// Archive paths are stored as "__external__" + portable path so that:
+	//   - paths look natural in diffs and inspect output
+	//   - no separate annotation is needed for restore
 	for _, layer := range s.layers {
 		for _, extPattern := range lp[layer.Name].external {
 			source := harness.ExpandHome(extPattern)
@@ -122,14 +125,11 @@ func (s *Scanner) Scan() (map[string]*ScanResult, error) {
 				continue
 			}
 
-			prefix := sanitizePrefix(extPattern)
-
 			if !info.IsDir() {
-				rel := filepath.Base(source)
-				if !s.ignore.Match(rel) {
+				if !s.ignore.Match(filepath.Base(source)) {
 					result[layer.Name].ExternalFiles = append(result[layer.Name].ExternalFiles, ExternalFile{
 						AbsPath:     source,
-						ArchivePath: "__external__/" + prefix + "/" + rel,
+						ArchivePath: "__external__" + portablePath(source),
 					})
 				}
 				continue
@@ -143,13 +143,12 @@ func (s *Scanner) Scan() (map[string]*ScanResult, error) {
 				if err != nil {
 					return nil
 				}
-				rel = filepath.ToSlash(rel)
-				if s.ignore.Match(rel) {
+				if s.ignore.Match(filepath.ToSlash(rel)) {
 					return nil
 				}
 				result[layer.Name].ExternalFiles = append(result[layer.Name].ExternalFiles, ExternalFile{
 					AbsPath:     path,
-					ArchivePath: "__external__/" + prefix + "/" + rel,
+					ArchivePath: "__external__" + portablePath(path),
 				})
 				return nil
 			})
@@ -167,42 +166,35 @@ func (s *Scanner) Scan() (map[string]*ScanResult, error) {
 	return result, nil
 }
 
-// BuildExternalPathMap creates the archive-prefix -> source-path mapping
-// needed to restore external files to their original locations.
-// Paths are stored with ~/ prefix for portability when possible.
-func BuildExternalPathMap(extFiles []ExternalFile) map[string]string {
-	home, _ := os.UserHomeDir()
-	pathMap := make(map[string]string)
-	for _, ef := range extFiles {
-		parts := strings.SplitN(ef.ArchivePath, "/", 3)
-		if len(parts) < 3 {
-			continue
+// portablePath converts an absolute path to a portable form for use in archive
+// entry names. Home-directory paths are converted to ~/... so they restore
+// correctly on machines with different usernames.
+func portablePath(absPath string) string {
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		if strings.HasPrefix(absPath, home+"/") {
+			return "/~/" + absPath[len(home)+1:]
 		}
-		archivePrefix := parts[0] + "/" + parts[1] + "/"
-		if _, ok := pathMap[archivePrefix]; ok {
-			continue
-		}
-		// Reconstruct source dir
-		relPortion := parts[2]
-		sourceDir := strings.TrimSuffix(ef.AbsPath, string(filepath.Separator)+filepath.FromSlash(relPortion))
-		// Store as ~/... for portability
-		if home != "" && strings.HasPrefix(sourceDir, home) {
-			sourceDir = "~" + sourceDir[len(home):]
-		}
-		pathMap[archivePrefix] = sourceDir
 	}
-	return pathMap
+	return absPath // already absolute, e.g. /var/cache/...
 }
 
-// sanitizePrefix creates a safe archive prefix from an external pattern path.
-func sanitizePrefix(pattern string) string {
-	p := strings.TrimPrefix(pattern, "~/")
-	p = strings.TrimPrefix(p, "/")
-	p = strings.TrimSuffix(p, "/")
-	p = strings.ReplaceAll(p, "/", "-")
-	p = strings.ReplaceAll(p, ".", "-")
-	if p == "" {
-		p = "external"
+// absFromArchivePath converts a portable archive path back to an absolute path
+// by expanding ~/. Returns empty string if the path is invalid.
+func absFromArchivePath(archivePath string) string {
+	// Strip the __external__ sentinel
+	p := strings.TrimPrefix(archivePath, "__external__")
+	// Expand /~/ home prefix
+	if strings.HasPrefix(p, "/~/") {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return ""
+		}
+		return filepath.Join(home, filepath.FromSlash(p[3:]))
 	}
-	return p
+	// Plain absolute path
+	if filepath.IsAbs(p) {
+		return filepath.FromSlash(p)
+	}
+	return ""
 }

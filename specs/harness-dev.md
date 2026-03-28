@@ -48,37 +48,16 @@ workspace/
 #### Layer definition
 
 ```go
-func (h *ClaudeCodeHarness) Layers() []LayerDef {
+func (h *ClaudeCodeHarness) Layers(workDir string) []LayerDef {
     return []LayerDef{
-        {
-            Name: "project",
-            Patterns: []string{
-                "**/*.go", "**/*.py", "**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx",
-                "**/*.rs", "**/*.java", "**/*.c", "**/*.cpp", "**/*.h",
-                "**/*.html", "**/*.css", "**/*.scss",
-                "**/*.sql", "**/*.sh", "**/*.bash",
-                "**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.xml",
-                "**/*.md", "**/*.txt", "**/*.csv",
-                "Makefile", "Dockerfile", "docker-compose*.yaml",
-                "go.mod", "go.sum",
-                "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-                "pyproject.toml", "requirements*.txt", "Pipfile", "Pipfile.lock",
-                "Cargo.toml", "Cargo.lock",
-                ".gitignore", ".gitattributes",
-                ".env.example", ".env.template",
-                ".mcp.json",
-            },
-            MediaType: "application/vnd.bento.layer.project.v1.tar+gzip",
-            Frequency: ChangesOften,
-        },
         {
             Name: "agent",
             Patterns: []string{
                 "CLAUDE.md",
                 ".claude/**",
+                // External: workspace-specific session files from ~/.claude/projects/<hash>/
+                claudeSessionDir(workDir),
             },
-            MediaType: "application/vnd.bento.layer.agent.v1.tar+gzip",
-            Frequency: ChangesOften,
         },
         {
             Name: "deps",
@@ -88,12 +67,17 @@ func (h *ClaudeCodeHarness) Layers() []LayerDef {
                 "vendor/**",
                 ".tool-versions",
             },
-            MediaType: "application/vnd.bento.layer.deps.v1.tar+gzip",
-            Frequency: ChangesRarely,
+        },
+        {
+            // project is the catch-all: any file not matched above ends up here
+            Name:     "project",
+            CatchAll: true,
         },
     }
 }
 ```
+
+All layers use `application/vnd.oci.image.layer.v1.tar+gzip` by default; the `MediaType` field can be omitted.
 
 #### Ignore patterns
 
@@ -161,25 +145,19 @@ workspace/
 #### Layer definition
 
 ```go
-func (h *CodexHarness) Layers() []LayerDef {
+func (h *CodexHarness) Layers(workDir string) []LayerDef {
     return []LayerDef{
         {
-            Name:      "project",
-            Patterns:  []string{/* same source patterns as Claude Code */},
-            MediaType: "application/vnd.bento.layer.project.v1.tar+gzip",
-            Frequency: ChangesOften,
+            Name:     "agent",
+            Patterns: []string{"AGENTS.md", ".codex/**"},
         },
         {
-            Name:      "agent",
-            Patterns:  []string{"AGENTS.md", ".codex/**"},
-            MediaType: "application/vnd.bento.layer.agent.v1.tar+gzip",
-            Frequency: ChangesOften,
+            Name:     "deps",
+            Patterns: []string{"node_modules/**", ".venv/**", "vendor/**"},
         },
         {
-            Name:      "deps",
-            Patterns:  []string{"node_modules/**", ".venv/**", "vendor/**"},
-            MediaType: "application/vnd.bento.layer.deps.v1.tar+gzip",
-            Frequency: ChangesRarely,
+            Name:     "project",
+            CatchAll: true,
         },
     }
 }
@@ -193,61 +171,11 @@ func (h *CodexHarness) DefaultHooks() map[string]string {
 
 User-level state (`~/.codex/`) is NOT captured.
 
-### Aider
-
-Detection: `.aider.conf.yml` or `.aider.chat.history.md` exists.
-
-#### File layout
-
-```
-workspace/
-├── .aider.conf.yml              # -> agent layer
-├── .aider.chat.history.md       # -> agent layer (conversation log)
-├── .aider.input.history          # -> agent layer (readline history)
-├── .aider.tags.cache.v3/        # -> agent layer (repo map cache)
-├── src/                         # -> project layer
-├── requirements.txt             # -> project layer
-└── .venv/                       # -> deps layer
-```
-
-#### Layer definition
-
-```go
-func (h *AiderHarness) Layers() []LayerDef {
-    return []LayerDef{
-        {
-            Name:      "project",
-            Patterns:  []string{/* standard source patterns */},
-            MediaType: "application/vnd.bento.layer.project.v1.tar+gzip",
-            Frequency: ChangesOften,
-        },
-        {
-            Name:      "agent",
-            Patterns:  []string{".aider*", ".aider.tags.cache.v3/**"},
-            MediaType: "application/vnd.bento.layer.agent.v1.tar+gzip",
-            Frequency: ChangesOften,
-        },
-        {
-            Name:      "deps",
-            Patterns:  []string{".venv/**", "node_modules/**"},
-            MediaType: "application/vnd.bento.layer.deps.v1.tar+gzip",
-            Frequency: ChangesRarely,
-        },
-    }
-}
-```
-
 ### Cursor
 
 Detection: `.cursor/` directory exists.
 
-Agent layer captures `.cursor/rules/**`, `.cursor/mcp.json`, and legacy `.cursorrules`. Chat history lives in VS Code's internal SQLite database outside the workspace -- bento does not capture IDE-internal state.
-
-### Windsurf
-
-Detection: `.windsurf/` directory exists.
-
-Agent layer captures `.windsurf/rules/`. Cascade memories are stored in `~/.codeium/windsurf/memories/` (user-level, not captured).
+Agent layer captures `.cursor/rules/**`, `.cursor/mcp.json`, and legacy `.cursorrules`. Chat history lives in VS Code's internal SQLite database outside the workspace — bento does not capture IDE-internal state.
 
 ## Writing a Harness for a New Agent
 
@@ -269,13 +197,12 @@ harness:
   name: openclaw
   detect: ".openclaw/"
   layers:
-    - name: project
-      patterns: ["**/*.py", "**/*.js", "**/*.ts", "*.md", "*.yaml", "*.json"]
     - name: agent
       patterns: [".openclaw/**"]
     - name: deps
       patterns: [".venv/**", "node_modules/**"]
-      frequency: rarely
+    - name: project
+      catch_all: true
   ignore:
     - ".openclaw/credentials"
     - ".openclaw/cache/http/**"

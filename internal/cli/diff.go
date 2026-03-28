@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -74,6 +73,11 @@ func diffWorkspace(dir string, args []string) error {
 	if err != nil {
 		return fmt.Errorf("no checkpoints found. Run `bento save` first")
 	}
+	defer func() {
+		for i := range layers {
+			layers[i].Cleanup()
+		}
+	}()
 
 	var m ocispec.Manifest
 	_ = json.Unmarshal(manifestBytes, &m)
@@ -101,18 +105,28 @@ func diffWorkspace(dir string, args []string) error {
 			continue
 		}
 
-		savedHashes, _ := workspace.ListLayerFilesWithHashes(layers[i].Data)
+		// Stream the saved layer to compute hashes (avoids loading GBs into memory)
+		r, err := layers[i].NewReader()
+		if err != nil {
+			continue
+		}
+		savedHashes, _ := workspace.ListLayerFilesWithHashesFromReader(r)
+		_ = r.Close()
 
 		sr := scanResults[ld.Name]
 		currentHashes := make(map[string]string)
+
+		// Hash workspace files by streaming, not loading full content into memory
 		for _, f := range sr.WorkspaceFiles {
-			if data, err := os.ReadFile(filepath.Join(dir, f)); err == nil {
-				currentHashes[f] = fmt.Sprintf("%x", sha256.Sum256(data))
+			hash, err := workspace.HashFileStreaming(filepath.Join(dir, f))
+			if err == nil {
+				currentHashes[f] = hash
 			}
 		}
 		for _, ef := range sr.ExternalFiles {
-			if data, err := os.ReadFile(ef.AbsPath); err == nil {
-				currentHashes[ef.ArchivePath] = fmt.Sprintf("%x", sha256.Sum256(data))
+			hash, err := workspace.HashFileStreaming(ef.AbsPath)
+			if err == nil {
+				currentHashes[workspace.DisplayPath(ef.ArchivePath)] = hash
 			}
 		}
 
@@ -140,11 +154,21 @@ func diffCheckpoints(dir string, args []string) error {
 	if err != nil {
 		return fmt.Errorf("loading %s: %w", args[0], err)
 	}
+	defer func() {
+		for i := range layers1 {
+			layers1[i].Cleanup()
+		}
+	}()
 
 	manifestBytes2, _, layers2, err := store.LoadCheckpoint(tag2)
 	if err != nil {
 		return fmt.Errorf("loading %s: %w", args[1], err)
 	}
+	defer func() {
+		for i := range layers2 {
+			layers2[i].Cleanup()
+		}
+	}()
 
 	var m1, m2 ocispec.Manifest
 	_ = json.Unmarshal(manifestBytes1, &m1)
@@ -170,13 +194,27 @@ func diffCheckpoints(dir string, args []string) error {
 			continue
 		}
 
-		hashes1, _ := workspace.ListLayerFilesWithHashes(layers1[i].Data)
-		hashes2, _ := workspace.ListLayerFilesWithHashes(layers2[i].Data)
+		// Stream both layers for hash comparison (no full load into memory)
+		r1, err := layers1[i].NewReader()
+		if err != nil {
+			continue
+		}
+		hashes1, _ := workspace.ListLayerFilesWithHashesFromReader(r1)
+		_ = r1.Close()
+
+		r2, err := layers2[i].NewReader()
+		if err != nil {
+			continue
+		}
+		hashes2, _ := workspace.ListLayerFilesWithHashesFromReader(r2)
+		_ = r2.Close()
 
 		added, removed, modified := diffFileMaps(hashes1, hashes2)
 
-		fmt.Printf("  %s: changed (%s → %s)\n",
-			name, formatSize(len(layers1[i].Data)), formatSize(len(layers2[i].Data)))
+		// Compute sizes from temp file stat rather than holding data in memory
+		size1 := layerFileSize(layers1[i])
+		size2 := layerFileSize(layers2[i])
+		fmt.Printf("  %s: changed (%s → %s)\n", name, formatSize(size1), formatSize(size2))
 
 		for _, f := range added {
 			fmt.Printf("    %s+ %s%s\n", colorGreen, f, colorReset)
@@ -190,6 +228,18 @@ func diffCheckpoints(dir string, args []string) error {
 	}
 
 	return nil
+}
+
+// layerFileSize returns the byte size of a layer, reading from the temp file
+// path or from in-memory data.
+func layerFileSize(ld registry.LayerData) int {
+	if ld.Path != "" {
+		if info, err := os.Stat(ld.Path); err == nil {
+			return int(info.Size())
+		}
+		return 0
+	}
+	return len(ld.Data)
 }
 
 func truncateDigest(d string) string {

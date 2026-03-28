@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"time"
 
 	"github.com/kajogo777/bento/internal/config"
@@ -21,9 +20,10 @@ import (
 
 func newSaveCmd() *cobra.Command {
 	var (
-		flagMessage        string
-		flagTag            string
-		flagSkipSecretScan bool
+		flagMessage             string
+		flagTag                 string
+		flagSkipSecretScan      bool
+		flagAllowMissingExternal bool
 	)
 
 	cmd := &cobra.Command{
@@ -118,7 +118,7 @@ func newSaveCmd() *cobra.Command {
 			}
 			seq := len(seen) + 1
 
-			// Find parent
+			// Find parent digest
 			parentDigest := ""
 			if len(existing) > 0 {
 				if d, err := store.ResolveTag("latest"); err == nil {
@@ -126,10 +126,12 @@ func newSaveCmd() *cobra.Command {
 				}
 			}
 
-			// Build map of previous layer digests for change detection
+			// Build map of previous layer digests for change detection.
+			// Use LoadManifest (not LoadCheckpoint) — we only need the manifest,
+			// not the layer blobs, so there's no need to load gigabytes of data.
 			prevLayerDigests := make(map[string]string)
 			if parentDigest != "" {
-				if prevManifestBytes, _, _, loadErr := store.LoadCheckpoint(parentDigest); loadErr == nil {
+				if prevManifestBytes, _, loadErr := store.LoadManifest(parentDigest); loadErr == nil {
 					var prevManifest ocispec.Manifest
 					if jsonErr := json.Unmarshal(prevManifestBytes, &prevManifest); jsonErr == nil {
 						for _, ld := range prevManifest.Layers {
@@ -149,7 +151,7 @@ func newSaveCmd() *cobra.Command {
 				wsFiles := sr.WorkspaceFiles
 				extFiles := sr.ExternalFiles
 
-				data, err := workspace.PackLayerWithExternal(dir, wsFiles, extFiles)
+				data, err := workspace.PackLayerWithExternal(dir, wsFiles, extFiles, flagAllowMissingExternal)
 				if err != nil {
 					return fmt.Errorf("packing layer %s: %w", ld.Name, err)
 				}
@@ -170,22 +172,13 @@ func newSaveCmd() *cobra.Command {
 					}
 				}
 
-				// Build external path map annotation for restore
-				var annotations map[string]string
-				if len(extFiles) > 0 {
-					pathMap := workspace.BuildExternalPathMap(extFiles)
-					if len(pathMap) > 0 {
-						pathMapJSON, _ := json.Marshal(pathMap)
-						annotations = map[string]string{manifest.AnnotationExternalPaths: string(pathMapJSON)}
-					}
-				}
 
 				layerInfos = append(layerInfos, manifest.LayerInfo{
 					Name:        ld.Name,
 					MediaType:   mediaType,
 					Data:        data,
 					FileCount:   totalFiles,
-					Annotations: annotations,
+					
 				})
 
 				extInfo := ""
@@ -196,7 +189,8 @@ func newSaveCmd() *cobra.Command {
 				fmt.Printf("  %-10s %d files%s, %s (%s)\n", ld.Name+":", totalFiles, extInfo, sizeStr, status)
 			}
 
-			// Build config object
+			// Build config object — include env vars and secret refs so the
+			// checkpoint is self-describing when pushed to a remote registry.
 			cfgObj := &manifest.BentoConfigObj{
 				SchemaVersion:    "1.0.0",
 				Checkpoint:       seq,
@@ -216,8 +210,39 @@ func newSaveCmd() *cobra.Command {
 				cfgObj.GitSha = sc.GitSha
 				cfgObj.GitBranch = sc.GitBranch
 			}
-
 			cfgObj.Message = flagMessage
+
+			// Embed env vars (non-secret) into the manifest for portability
+			if len(cfg.Env) > 0 {
+				cfgObj.Env = cfg.Env
+			}
+
+			// Embed secret references (not values) into the manifest for portability
+			if len(cfg.Secrets) > 0 {
+				cfgObj.Secrets = make(map[string]manifest.SecretRef, len(cfg.Secrets))
+				for name, s := range cfg.Secrets {
+					cfgObj.Secrets[name] = manifest.SecretRef{
+						Source:  s.Source,
+						Path:    s.Fields["path"],
+						Key:     s.Fields["key"],
+						Var:     s.Fields["var"],
+						Role:    s.Fields["role"],
+						Command: s.Fields["command"],
+					}
+				}
+			}
+
+			// Embed env file mappings for portability
+			if len(cfg.EnvFiles) > 0 {
+				cfgObj.EnvFiles = make(map[string]manifest.EnvFileRef, len(cfg.EnvFiles))
+				for path, ef := range cfg.EnvFiles {
+					cfgObj.EnvFiles[path] = manifest.EnvFileRef{
+						Template: ef.Template,
+						Secrets:  ef.Secrets,
+					}
+				}
+			}
+
 			manifestBytes, configBytes, err := manifest.BuildManifest(cfgObj, layerInfos)
 			if err != nil {
 				return fmt.Errorf("building manifest: %w", err)
@@ -225,11 +250,11 @@ func newSaveCmd() *cobra.Command {
 
 			var storeLayerData []registry.LayerData
 			for _, li := range layerInfos {
-				digest := fmt.Sprintf("sha256:%x", sha256.Sum256(li.Data))
+				layerDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(li.Data))
 				storeLayerData = append(storeLayerData, registry.LayerData{
 					MediaType: li.MediaType,
 					Data:      li.Data,
-					Digest:    digest,
+					Digest:    layerDigest,
 				})
 			}
 
@@ -267,9 +292,6 @@ func newSaveCmd() *cobra.Command {
 				}
 			}
 
-			_ = manifestDigest
-			_ = strconv.Itoa(seq)
-
 			return nil
 		},
 	}
@@ -277,6 +299,7 @@ func newSaveCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&flagMessage, "message", "m", "", "checkpoint message")
 	cmd.Flags().StringVar(&flagTag, "tag", "", "custom tag for this checkpoint")
 	cmd.Flags().BoolVar(&flagSkipSecretScan, "skip-secret-scan", false, "skip secret scanning")
+	cmd.Flags().BoolVar(&flagAllowMissingExternal, "allow-missing-external", false, "warn instead of error when external agent session files are inaccessible")
 
 	return cmd
 }

@@ -1,8 +1,12 @@
 package manifest
 
 import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"time"
 
@@ -24,11 +28,16 @@ type LayerInfo struct {
 // The config is a valid OCI image config with bento metadata in Labels.
 // Layers use the standard OCI layer media type for Docker/containerd compatibility.
 func BuildManifest(cfg *BentoConfigObj, layers []LayerInfo) (manifestBytes []byte, configBytes []byte, err error) {
-	// Build diff_ids (uncompressed digests are approximated by compressed digests
-	// since our tar archives are deterministic). Docker uses these for layer identity.
+	// Build diff_ids: OCI requires the digest of the UNCOMPRESSED layer content.
+	// We decompress each layer to compute the correct uncompressed digest.
+	// Docker uses diff_ids for layer deduplication and verification.
 	diffIDs := make([]digest.Digest, len(layers))
 	for i, l := range layers {
-		diffIDs[i] = digest.FromBytes(l.Data)
+		id, err := uncompressedLayerDigest(l.Data)
+		if err != nil {
+			return nil, nil, fmt.Errorf("computing diff_id for layer %s: %w", l.Name, err)
+		}
+		diffIDs[i] = id
 	}
 
 	// Build OCI image config with bento metadata in Labels.
@@ -157,4 +166,22 @@ func BuildManifest(cfg *BentoConfigObj, layers []LayerInfo) (manifestBytes []byt
 	}
 
 	return manifestBytes, configBytes, nil
+}
+
+// uncompressedLayerDigest decompresses a gzip-compressed layer and returns the
+// SHA256 digest of the uncompressed content. This is required by the OCI image
+// spec: diff_ids must be digests of uncompressed layer tar archives.
+func uncompressedLayerDigest(compressedData []byte) (digest.Digest, error) {
+	gr, err := gzip.NewReader(bytes.NewReader(compressedData))
+	if err != nil {
+		return "", fmt.Errorf("gzip reader: %w", err)
+	}
+	defer func() { _ = gr.Close() }()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, gr); err != nil {
+		return "", fmt.Errorf("decompressing layer: %w", err)
+	}
+
+	return digest.NewDigestFromHex("sha256", fmt.Sprintf("%x", h.Sum(nil))), nil
 }
