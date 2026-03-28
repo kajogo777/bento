@@ -409,7 +409,7 @@ func TestDiffChangeTypes_Relative(t *testing.T) {
 	// Update workspace: modify one, remove one, add one.
 	createFile(t, workDir, "modified.go", "new content")
 	createFile(t, workDir, "added.go", "new file")
-	os.Remove(filepath.Join(workDir, "removed.go"))
+	_ = os.Remove(filepath.Join(workDir, "removed.go"))
 
 	newHashes := map[string]string{}
 	for _, f := range []string{"unchanged.go", "modified.go", "added.go"} {
@@ -449,7 +449,7 @@ func TestDiffChangeTypes_Absolute(t *testing.T) {
 	added := filepath.Join(extDir, "added.db")
 	writeFileAt(t, modified, "new content")
 	writeFileAt(t, added, "brand new")
-	os.Remove(removed)
+	_ = os.Remove(removed)
 
 	extFiles := []ExternalFile{makeExt(unchanged), makeExt(modified), makeExt(added)}
 	newHashes := map[string]string{}
@@ -503,7 +503,7 @@ func TestDiffChangeTypes_HomeRelative(t *testing.T) {
 	added := filepath.Join(extDir, "added.jsonl")
 	writeFileAt(t, modified, "new content")
 	writeFileAt(t, added, "brand new")
-	os.Remove(removed)
+	_ = os.Remove(removed)
 
 	extFiles := []ExternalFile{makeExt(unchanged), makeExt(modified), makeExt(added)}
 	newHashes := map[string]string{}

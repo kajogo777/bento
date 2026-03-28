@@ -274,7 +274,7 @@ func (s *LocalStore) pushLayerIfNotExists(desc ocispec.Descriptor, ld LayerData)
 	if err != nil {
 		return err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	return s.oci.Push(s.ctx, desc, rc)
 }
 

@@ -109,7 +109,6 @@ func diffWorkspace(dir string, args []string) error {
 	type layerDiffResult struct {
 		added, removed, modified []string
 		lineCounts               map[string]fileLineCounts
-		hasChanges               bool
 		name                     string
 		skip                     bool
 	}
