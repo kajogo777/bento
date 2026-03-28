@@ -167,16 +167,19 @@ func (s *Scanner) Scan() (map[string]*ScanResult, error) {
 }
 
 // portablePath converts an absolute path to a portable form for use in archive
-// entry names. Home-directory paths are converted to ~/... so they restore
-// correctly on machines with different usernames.
+// entry names. Home-directory paths are converted to /~/ so they restore
+// correctly on machines with different usernames. The result always uses
+// forward slashes so archive keys are consistent across platforms.
 func portablePath(absPath string) string {
+	normalized := NormalizePath(absPath)
 	home, err := os.UserHomeDir()
 	if err == nil && home != "" {
-		if strings.HasPrefix(absPath, home+"/") {
-			return "/~/" + absPath[len(home)+1:]
+		normalizedHome := NormalizePath(home)
+		if strings.HasPrefix(normalized, normalizedHome+"/") {
+			return "/~/" + normalized[len(normalizedHome)+1:]
 		}
 	}
-	return absPath // already absolute, e.g. /var/cache/...
+	return normalized // forward-slash absolute path, e.g. /var/cache/... or C:/app/...
 }
 
 // absFromArchivePath converts a portable archive path back to an absolute path
