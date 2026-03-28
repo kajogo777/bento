@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/kajogo777/bento/internal/config"
 	"github.com/kajogo777/bento/internal/harness"
@@ -70,8 +71,25 @@ func printLayerDiff(name string, added, removed, modified []string, hasChanges *
 		return
 	}
 	*hasChanges = true
+
+	// Build a human-readable summary: "3 changes (1 added, 2 modified)"
+	var parts []string
+	if len(added) > 0 {
+		parts = append(parts, fmt.Sprintf("%s%d added%s", colorGreen, len(added), colorReset))
+	}
+	if len(removed) > 0 {
+		parts = append(parts, fmt.Sprintf("%s%d removed%s", colorRed, len(removed), colorReset))
+	}
+	if len(modified) > 0 {
+		parts = append(parts, fmt.Sprintf("%s%d modified%s", colorYellow, len(modified), colorReset))
+	}
 	total := len(added) + len(removed) + len(modified)
-	fmt.Printf("  %s: %d change(s)\n", name, total)
+	word := "changes"
+	if total == 1 {
+		word = "change"
+	}
+	fmt.Printf("  %s: %d %s (%s)\n", name, total, word, strings.Join(parts, ", "))
+
 	for _, f := range added {
 		fmt.Printf("    %s+ %s%s\n", colorGreen, f, colorReset)
 	}

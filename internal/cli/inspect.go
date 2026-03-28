@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/kajogo777/bento/internal/config"
 	"github.com/kajogo777/bento/internal/manifest"
@@ -15,6 +16,55 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 )
+
+// printFileTree groups a sorted list of file paths by their top-level directory
+// and prints them with the given indent prefix. Files in the root are printed
+// directly; files in subdirectories are grouped under a "dir/ (N files)" header.
+func printFileTree(files []string, indent string) {
+	// Group by top-level directory (first path component)
+	type dirGroup struct {
+		dir   string
+		files []string
+	}
+	groups := []dirGroup{}
+	groupIdx := map[string]int{}
+
+	for _, f := range files {
+		slash := strings.Index(f, "/")
+		var dir string
+		if slash < 0 {
+			dir = "" // root-level file
+		} else {
+			dir = f[:slash]
+		}
+		if idx, ok := groupIdx[dir]; ok {
+			groups[idx].files = append(groups[idx].files, f)
+		} else {
+			groupIdx[dir] = len(groups)
+			groups = append(groups, dirGroup{dir: dir, files: []string{f}})
+		}
+	}
+
+	for _, g := range groups {
+		if g.dir == "" {
+			// Root-level files — print directly
+			for _, f := range g.files {
+				fmt.Printf("%s%s\n", indent, f)
+			}
+		} else if len(g.files) == 1 {
+			fmt.Printf("%s%s\n", indent, g.files[0])
+		} else {
+			fileWord := "files"
+			if len(g.files) == 1 {
+				fileWord = "file"
+			}
+			fmt.Printf("%s%s/ (%d %s)\n", indent, g.dir, len(g.files), fileWord)
+			for _, f := range g.files {
+				fmt.Printf("%s  %s\n", indent, f)
+			}
+		}
+	}
+}
 
 func newInspectCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -137,14 +187,18 @@ func newInspectCmd() *cobra.Command {
 					layerSize = int64(len(ld.Data))
 				}
 
-				fmt.Printf("\n  %s (%d files, %s, %s)\n",
-					layerName, len(files), formatSize(int(layerSize)), truncateDigest(layerDigest))
-
-				for _, f := range files {
-					fmt.Printf("    %s\n", f)
+				fileWord := "files"
+				if len(files) == 1 {
+					fileWord = "file"
 				}
+				fmt.Printf("\n  [%d/%d] %s — %d %s, %s\n",
+					i+1, len(layers), layerName, len(files), fileWord, formatSize(int(layerSize)))
+				fmt.Printf("  %s digest: %s%s\n", colorDim, truncateDigest(layerDigest), colorReset)
+
 				if len(files) == 0 {
 					fmt.Printf("    (empty)\n")
+				} else {
+					printFileTree(files, "    ")
 				}
 			}
 

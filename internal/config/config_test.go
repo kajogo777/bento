@@ -165,6 +165,110 @@ func TestExpandPathTilde(t *testing.T) {
 	}
 }
 
+func TestValidate_Valid(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{"no layers", "agent: cursor\n"},
+		{"project catch-all by name", `layers:
+  - name: project
+    patterns: ["**/*.go"]
+`},
+		{"explicit catch_all", `layers:
+  - name: code
+    patterns: ["**/*.go"]
+  - name: data
+    catch_all: true
+`},
+		{"patterns only", `layers:
+  - name: code
+    patterns: ["**/*.go"]
+  - name: assets
+    patterns: ["assets/**"]
+`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "bento.yaml"), []byte(tc.yaml), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(dir); err != nil {
+				t.Errorf("expected no error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidate_Errors(t *testing.T) {
+	cases := []struct {
+		name    string
+		yaml    string
+		wantErr string
+	}{
+		{
+			"empty layer name",
+			`layers:
+  - name: ""
+    patterns: ["**"]
+`,
+			"empty name",
+		},
+		{
+			"duplicate layer names",
+			`layers:
+  - name: code
+    patterns: ["**/*.go"]
+  - name: code
+    catch_all: true
+`,
+			"duplicate layer name",
+		},
+		{
+			"multiple catch-all layers",
+			`layers:
+  - name: project
+    patterns: ["**"]
+  - name: other
+    catch_all: true
+`,
+			"only one catch_all",
+		},
+		{
+			"no patterns non-catch-all",
+			`layers:
+  - name: code
+    patterns: []
+`,
+			"no patterns",
+		},
+		{
+			"secret without source",
+			`secrets:
+  MY_TOKEN:
+    path: /secret/token
+`,
+			"no source",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "bento.yaml"), []byte(tc.yaml), 0644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(dir)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error %q should contain %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestExpandPathNoTilde(t *testing.T) {
 	result := expandPath("/absolute/path")
 	if result != "/absolute/path" {

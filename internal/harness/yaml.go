@@ -22,7 +22,7 @@ func (h *ConfigLayerHarness) Layers(_ string) []LayerDef {
 	defs := make([]LayerDef, 0, len(h.layers))
 	for _, l := range h.layers {
 		mediaType := manifest.MediaTypeForLayer(l.Name)
-		catchAll := l.Name == "project"
+		catchAll := l.CatchAll || l.Name == "project"
 		defs = append(defs, LayerDef{
 			Name:      l.Name,
 			Patterns:  l.Patterns,

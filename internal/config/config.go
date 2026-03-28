@@ -26,9 +26,11 @@ type BentoConfig struct {
 
 // LayerConfig defines a layer in bento.yaml.
 // Patterns starting with ~/ or / are treated as external paths.
+// CatchAll, when true, makes this layer capture all files not matched by other layers.
 type LayerConfig struct {
 	Name     string   `yaml:"name"`
 	Patterns []string `yaml:"patterns"`
+	CatchAll bool     `yaml:"catch_all,omitempty"`
 }
 
 // Secret represents a secret reference in bento.yaml.
@@ -88,6 +90,47 @@ var DefaultIgnorePatterns = []string{
 	"bin/**",
 }
 
+// Validate checks the configuration for errors that would cause silent data
+// loss or corrupt checkpoints. Returns the first hard error found.
+func (c *BentoConfig) Validate() error {
+	// Validate layer definitions when custom layers are configured.
+	if len(c.Layers) > 0 {
+		seen := make(map[string]bool)
+		catchAllCount := 0
+
+		for i, l := range c.Layers {
+			if l.Name == "" {
+				return fmt.Errorf("layer %d has an empty name", i)
+			}
+			if seen[l.Name] {
+				return fmt.Errorf("duplicate layer name %q — each layer must have a unique name", l.Name)
+			}
+			seen[l.Name] = true
+
+			isCatchAll := l.CatchAll || l.Name == "project"
+			if isCatchAll {
+				catchAllCount++
+			}
+			if catchAllCount > 1 {
+				return fmt.Errorf("layer %q: only one catch_all layer is allowed", l.Name)
+			}
+
+			if len(l.Patterns) == 0 && !isCatchAll {
+				return fmt.Errorf("layer %q has no patterns and is not a catch_all — it will always be empty; add patterns or set catch_all: true", l.Name)
+			}
+		}
+	}
+
+	// Validate secrets regardless of whether layers are configured.
+	for name, s := range c.Secrets {
+		if s.Source == "" {
+			return fmt.Errorf("secret %q has no source — set source: to the secret provider (e.g. aws_ssm, env)", name)
+		}
+	}
+
+	return nil
+}
+
 // Load reads and parses a bento.yaml file from the given directory.
 func Load(dir string) (*BentoConfig, error) {
 	path := filepath.Join(dir, "bento.yaml")
@@ -105,6 +148,10 @@ func Load(dir string) (*BentoConfig, error) {
 		cfg.Store = DefaultStorePath()
 	} else {
 		cfg.Store = expandPath(cfg.Store)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("bento.yaml: %w", err)
 	}
 
 	return cfg, nil
