@@ -546,21 +546,33 @@ The harness name `custom` is the generic fallback for any workspace with no reco
 
 ### 9.1 Local Store (OCI Image Layout)
 
-The default store is a local OCI image layout directory at `~/.bento/store/`. Each workspace is a subdirectory following the OCI Image Layout specification.
+The default store is a local OCI image layout directory at `~/.bento/store/`. Layer blobs are shared across all workspaces via a content-addressed blob pool at the store root, while each workspace retains its own index (tags, manifests). This eliminates redundant disk usage when multiple workspaces contain identical layers.
 
 ```
 ~/.bento/store/
-├── myproject/
-│   ├── oci-layout          # {"imageLayoutVersion": "1.0.0"}
-│   ├── index.json          # tags → manifest digests
-│   └── blobs/
-│       └── sha256/
-│           ├── abc123...   # manifests
-│           ├── def456...   # config objects
-│           └── 789012...   # layer tarballs
-└── another-project/
-    └── ...
+├── blobs/                     ← shared across all workspaces
+│   └── sha256/
+│       ├── abc123...          # manifests, configs, and layer tarballs
+│       ├── def456...          # (content-addressed — identical content stored once)
+│       └── 789012...
+├── ws-aaa/
+│   ├── oci-layout             # {"imageLayoutVersion": "1.0.0"}
+│   ├── index.json             # tags → manifest digests
+│   └── blobs → ../blobs       # symlink (junction on Windows)
+└── ws-bbb/
+    ├── oci-layout
+    ├── index.json
+    └── blobs → ../blobs
 ```
+
+Each workspace directory contains a symlink `blobs → ../blobs` (or a directory junction on Windows) so that oras-go and other OCI tools see a standard OCI image layout. Manifests, configs, and layers all live in the shared pool; only `index.json` and `oci-layout` are workspace-specific.
+
+#### 9.1.1 Garbage Collection
+
+GC is a two-phase process:
+
+- **Phase 1 (workspace GC):** `bento gc` removes old manifests from a workspace's `index.json` based on retention policy (`--keep-last`, `--keep-tagged`). This is scoped to a single workspace.
+- **Phase 2 (blob GC):** Runs automatically after Phase 1. Scans all workspace indexes and deletes blobs from the shared pool that are no longer referenced by any manifest in any workspace. A lock file (`~/.bento/store/.gc-lock`) prevents concurrent blob GC. Blob GC MUST NOT run concurrently with save/push operations.
 
 ### 9.2 Remote Store (OCI Registry)
 
@@ -716,7 +728,6 @@ The following are anticipated but not yet specified:
 
 - **Encryption**: Client-side encryption of layer content before push
 - **Streaming restore**: Progressive layer extraction during restore
-- **Garbage collection protocol**: Standardized retention policies and GC triggers
 - **Concurrent access protocol**: Locking or conflict resolution for shared workspaces
 - **Agent identity and provenance**: Structured agent role metadata and signed checkpoint chains
 

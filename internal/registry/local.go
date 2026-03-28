@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/opencontainers/go-digest"
@@ -23,7 +24,13 @@ type LocalStore struct {
 }
 
 // newLocalStore opens or creates an OCI image layout store at the given path.
+// It ensures the shared blob pool exists at the store root level and that the
+// workspace's blobs directory is a symlink into the shared pool.
 func newLocalStore(storePath string) (*LocalStore, error) {
+	if err := ensureSharedBlobLayout(storePath); err != nil {
+		return nil, fmt.Errorf("setting up shared blob layout: %w", err)
+	}
+
 	ctx := context.Background()
 	store, err := oci.NewWithContext(ctx, storePath)
 	if err != nil {
@@ -31,6 +38,81 @@ func newLocalStore(storePath string) (*LocalStore, error) {
 	}
 	store.AutoSaveIndex = true
 	return &LocalStore{oci: store, ctx: ctx}, nil
+}
+
+// ensureSharedBlobLayout creates the shared blob pool at the store root
+// (parent of storePath) and links storePath/blobs to the shared pool.
+//
+// On Unix, a symlink is used (blobs → ../blobs).
+// On Windows, a directory junction is used (requires absolute target path
+// but no admin privileges).
+//
+// Layout after setup:
+//
+//	store_root/
+//	├── blobs/sha256/          ← shared across all workspaces
+//	└── ws-xxx/
+//	    ├── oci-layout
+//	    ├── index.json
+//	    └── blobs → ../blobs   ← symlink or junction
+func ensureSharedBlobLayout(storePath string) error {
+	storeRoot := filepath.Dir(storePath)
+	sharedBlobDir := filepath.Join(storeRoot, "blobs", "sha256")
+	wsBlobLink := filepath.Join(storePath, "blobs")
+
+	// Ensure workspace directory exists.
+	if err := os.MkdirAll(storePath, 0755); err != nil {
+		return fmt.Errorf("creating workspace dir: %w", err)
+	}
+
+	// Ensure shared blob pool exists.
+	if err := os.MkdirAll(sharedBlobDir, 0755); err != nil {
+		return fmt.Errorf("creating shared blob dir: %w", err)
+	}
+
+	// Check current state of the blobs path in the workspace.
+	fi, err := os.Lstat(wsBlobLink)
+	if err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			// Already a symlink/junction — nothing to do.
+			return nil
+		}
+		// On Windows, junctions appear as directories with reparse points,
+		// not as symlinks. Check if it already resolves to the shared pool.
+		if fi.IsDir() {
+			resolved, evalErr := filepath.EvalSymlinks(wsBlobLink)
+			sharedBlobs := filepath.Join(storeRoot, "blobs")
+			absShared, _ := filepath.Abs(sharedBlobs)
+			if evalErr == nil && resolved == absShared {
+				// Already a junction pointing to the right place.
+				return nil
+			}
+
+			// Real directory exists — remove it only if empty.
+			entries, readErr := os.ReadDir(wsBlobLink)
+			if readErr != nil {
+				return fmt.Errorf("reading workspace blobs dir: %w", readErr)
+			}
+			if len(entries) > 0 {
+				// Non-empty blobs dir without migration — this shouldn't
+				// happen in normal flow. Leave it alone to avoid data loss.
+				return nil
+			}
+			if err := os.Remove(wsBlobLink); err != nil {
+				return fmt.Errorf("removing empty workspace blobs dir: %w", err)
+			}
+		}
+	}
+
+	// Create the directory link (symlink on Unix, junction on Windows).
+	if err := createDirLink(filepath.Join(storeRoot, "blobs"), wsBlobLink); err != nil {
+		// If the link already exists (race condition), that's fine.
+		if !os.IsExist(err) {
+			return fmt.Errorf("creating blobs link: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // SaveCheckpoint writes a checkpoint's blobs (config, layers, manifest) and tags it.

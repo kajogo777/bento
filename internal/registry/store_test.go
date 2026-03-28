@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -46,8 +47,9 @@ func makeManifestLayerInfo(name, mediaType string, data []byte, fileCount int) m
 
 func TestLocalStore_FullLifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
+	wsDir := filepath.Join(tmpDir, "ws-test")
 
-	store, err := NewStore(tmpDir)
+	store, err := NewStore(wsDir)
 	if err != nil {
 		t.Fatalf("NewStore failed: %v", err)
 	}
@@ -210,7 +212,8 @@ func TestLocalStore_FullLifecycle(t *testing.T) {
 
 func TestLocalStore_ResolveTag_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
-	store, err := NewStore(tmpDir)
+	wsDir := filepath.Join(tmpDir, "ws-test")
+	store, err := NewStore(wsDir)
 	if err != nil {
 		t.Fatalf("NewStore failed: %v", err)
 	}
@@ -226,7 +229,8 @@ func TestLocalStore_ResolveTag_NotFound(t *testing.T) {
 
 func TestLocalStore_DeleteCheckpoint_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
-	store, err := NewStore(tmpDir)
+	wsDir := filepath.Join(tmpDir, "ws-test")
+	store, err := NewStore(wsDir)
 	if err != nil {
 		t.Fatalf("NewStore failed: %v", err)
 	}
@@ -242,7 +246,8 @@ func TestLocalStore_DeleteCheckpoint_NotFound(t *testing.T) {
 
 func TestLocalStore_TagOverwrite(t *testing.T) {
 	tmpDir := t.TempDir()
-	store, err := NewStore(tmpDir)
+	wsDir := filepath.Join(tmpDir, "ws-test")
+	store, err := NewStore(wsDir)
 	if err != nil {
 		t.Fatalf("NewStore failed: %v", err)
 	}

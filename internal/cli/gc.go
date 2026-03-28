@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/kajogo777/bento/internal/policy"
+	"github.com/kajogo777/bento/internal/registry"
 	"github.com/spf13/cobra"
 )
 
@@ -16,7 +17,7 @@ func newGCCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "gc",
-		Short: "Clean up old checkpoints",
+		Short: "Clean up old checkpoints and orphaned blobs",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir, err := filepath.Abs(flagDir)
 			if err != nil {
@@ -52,6 +53,15 @@ func newGCCmd() *cobra.Command {
 				fmt.Println("Nothing to clean up.")
 			} else {
 				fmt.Printf("Deleted %d checkpoint(s).\n", len(deleted))
+			}
+
+			// Phase 2: Prune orphaned blobs from the shared pool.
+			result, err := registry.BlobGC(cfg.Store)
+			if err != nil {
+				return fmt.Errorf("blob garbage collection: %w", err)
+			}
+			if len(result.Deleted) > 0 {
+				fmt.Printf("Pruned %d blob(s), freed %s.\n", len(result.Deleted), formatSize(int(result.BytesFreed)))
 			}
 
 			return nil

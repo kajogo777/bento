@@ -210,9 +210,12 @@ bento diff postgres-done redis-done
 ## Cleaning Up
 
 ```bash
+# Remove old checkpoints and prune orphaned blobs
 bento gc --keep-last 5
 bento gc --keep-last 5 --keep-tagged
 ```
+
+Blob pruning happens automatically — after removing old checkpoints, bento scans all workspace indexes and deletes blobs from the shared pool that are no longer referenced by any checkpoint anywhere.
 
 ## Secrets
 

@@ -205,7 +205,7 @@ bento fork <ref> [-m <message>]               Branch from a checkpoint
 bento tag <ref> <new-tag>                     Tag a checkpoint
 bento inspect [ref]                           Show metadata and file tree
 bento push [<remote>]                         Push to registry
-bento gc [--keep-last <n>] [--keep-tagged]    Clean up old checkpoints
+bento gc [--keep-last <n>] [--keep-tagged]    Clean up old checkpoints and blobs
 bento env show                                Show env vars and secret refs
 bento env set <key> <value>                   Set an env var
 ```
@@ -323,7 +323,7 @@ Yes. Checkpoints are portable across macOS, Linux, and Windows.
 ## Roadmap
 
 - [x] Core CLI (init, save, open, list, diff, fork, tag, inspect, gc)
-- [x] Local OCI store
+- [x] Local OCI store with shared blob deduplication
 - [x] Secret scanning and hydration
 - [x] Agent support:
   - [x] Claude Code (with session capture)
