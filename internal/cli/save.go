@@ -16,6 +16,7 @@ import (
 	"github.com/kajogo777/bento/internal/workspace"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 )
 
 func newSaveCmd() *cobra.Command {
@@ -143,50 +144,91 @@ func newSaveCmd() *cobra.Command {
 				}
 			}
 
-			// Pack layers
+			// Pack layers concurrently, preserving original order.
 			fmt.Println("Scanning workspace...")
-			var layerInfos []manifest.LayerInfo
-			for _, ld := range layers {
-				sr := scanResults[ld.Name]
-				wsFiles := sr.WorkspaceFiles
-				extFiles := sr.ExternalFiles
 
-				packed, err := workspace.PackLayerWithExternalToTemp(dir, wsFiles, extFiles, flagAllowMissingExternal)
-				if err != nil {
-					return fmt.Errorf("packing layer %s: %w", ld.Name, err)
-				}
+			type packResult struct {
+				packed     *workspace.PackResult
+				mediaType  string
+				totalFiles int
+				extCount   int
+				status     string
+				name       string
+			}
 
-				mediaType := ld.MediaType
-				if mediaType == "" {
-					mediaType = manifest.MediaTypeForLayer(ld.Name)
-				}
+			results := make([]packResult, len(layers))
 
-				totalFiles := len(wsFiles) + len(extFiles)
-				status := "changed"
-				if totalFiles == 0 {
-					status = "empty"
-				} else if parentDigest != "" {
-					if prevDigest, ok := prevLayerDigests[ld.Name]; ok && prevDigest == packed.GzipDigest {
-						status = "unchanged, reusing"
+			g := new(errgroup.Group)
+			g.SetLimit(runtime.NumCPU())
+
+			for i, ld := range layers {
+				i, ld := i, ld // capture loop variables
+				g.Go(func() error {
+					sr := scanResults[ld.Name]
+					wsFiles := sr.WorkspaceFiles
+					extFiles := sr.ExternalFiles
+
+					packed, err := workspace.PackLayerWithExternalToTemp(dir, wsFiles, extFiles, flagAllowMissingExternal)
+					if err != nil {
+						return fmt.Errorf("packing layer %s: %w", ld.Name, err)
+					}
+
+					mediaType := ld.MediaType
+					if mediaType == "" {
+						mediaType = manifest.MediaTypeForLayer(ld.Name)
+					}
+
+					totalFiles := len(wsFiles) + len(extFiles)
+					status := "changed"
+					if totalFiles == 0 {
+						status = "empty"
+					} else if parentDigest != "" {
+						if prevDigest, ok := prevLayerDigests[ld.Name]; ok && prevDigest == packed.GzipDigest {
+							status = "unchanged, reusing"
+						}
+					}
+
+					results[i] = packResult{
+						packed:     packed,
+						mediaType:  mediaType,
+						totalFiles: totalFiles,
+						extCount:   len(extFiles),
+						status:     status,
+						name:       ld.Name,
+					}
+					return nil
+				})
+			}
+
+			if err := g.Wait(); err != nil {
+				// Clean up any temp files that were successfully created
+				for _, r := range results {
+					if r.packed != nil && r.packed.Path != "" {
+						_ = os.Remove(r.packed.Path)
 					}
 				}
+				return err
+			}
+
+			// Print results and build layerInfos in original order.
+			var layerInfos []manifest.LayerInfo
+			for _, r := range results {
+				extInfo := ""
+				if r.extCount > 0 {
+					extInfo = fmt.Sprintf(" (+%d external)", r.extCount)
+				}
+				sizeStr := formatSize(int(r.packed.Size))
+				fmt.Printf("  %-10s %d files%s, %s (%s)\n", r.name+":", r.totalFiles, extInfo, sizeStr, r.status)
 
 				layerInfos = append(layerInfos, manifest.LayerInfo{
-					Name:       ld.Name,
-					MediaType:  mediaType,
-					Path:       packed.Path,
-					Size:       packed.Size,
-					GzipDigest: packed.GzipDigest,
-					DiffID:     packed.DiffID,
-					FileCount:  totalFiles,
+					Name:       r.name,
+					MediaType:  r.mediaType,
+					Path:       r.packed.Path,
+					Size:       r.packed.Size,
+					GzipDigest: r.packed.GzipDigest,
+					DiffID:     r.packed.DiffID,
+					FileCount:  r.totalFiles,
 				})
-
-				extInfo := ""
-				if len(extFiles) > 0 {
-					extInfo = fmt.Sprintf(" (+%d external)", len(extFiles))
-				}
-				sizeStr := formatSize(int(packed.Size))
-				fmt.Printf("  %-10s %d files%s, %s (%s)\n", ld.Name+":", totalFiles, extInfo, sizeStr, status)
 			}
 
 			// Defer cleanup of temp layer files

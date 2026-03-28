@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/kajogo777/bento/internal/config"
@@ -15,6 +16,7 @@ import (
 	"github.com/kajogo777/bento/internal/workspace"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 )
 
 func newOpenCmd() *cobra.Command {
@@ -131,19 +133,34 @@ func newOpenCmd() *cobra.Command {
 			}
 
 			// Build set of files in the checkpoint for cleanup (stream to avoid
-			// loading entire layers into memory).
-			keepFiles := make(map[string]bool)
+			// loading entire layers into memory). List files from all layers concurrently.
+			perLayerFiles := make([][]string, len(layersToRestore))
+
+			kg := new(errgroup.Group)
+			kg.SetLimit(runtime.NumCPU())
+
 			for i := range layersToRestore {
-				r, err := layersToRestore[i].NewReader()
-				if err != nil {
-					continue
-				}
-				files, err := workspace.ListLayerFilesFromReader(r)
-				_ = r.Close()
-				if err == nil {
-					for _, f := range files {
-						keepFiles[f] = true
+				i := i // capture loop variable
+				kg.Go(func() error {
+					r, err := layersToRestore[i].NewReader()
+					if err != nil {
+						return nil // skip unreadable layers
 					}
+					files, err := workspace.ListLayerFilesFromReader(r)
+					_ = r.Close()
+					if err == nil {
+						perLayerFiles[i] = files
+					}
+					return nil
+				})
+			}
+			_ = kg.Wait() // errors are silently skipped (same as original behavior)
+
+			// Merge all per-layer file lists into keepFiles (single goroutine, no mutex needed).
+			keepFiles := make(map[string]bool)
+			for _, files := range perLayerFiles {
+				for _, f := range files {
+					keepFiles[f] = true
 				}
 			}
 

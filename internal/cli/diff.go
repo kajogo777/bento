@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 
 	"github.com/kajogo777/bento/internal/config"
 	"github.com/kajogo777/bento/internal/manifest"
@@ -12,6 +14,7 @@ import (
 	"github.com/kajogo777/bento/internal/workspace"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 )
 
@@ -103,42 +106,97 @@ func diffWorkspace(dir string, args []string) error {
 
 	fmt.Printf("Comparing workspace → %s\n", tag)
 
-	hasChanges := false
+	type layerDiffResult struct {
+		added, removed, modified []string
+		lineCounts               map[string]fileLineCounts
+		hasChanges               bool
+		name                     string
+		skip                     bool
+	}
+
+	numLayers := len(layerDefs)
+	layerResults := make([]layerDiffResult, numLayers)
+
+	g := new(errgroup.Group)
+	g.SetLimit(runtime.NumCPU())
+
 	for i, ld := range layerDefs {
 		if i >= len(layers) {
+			layerResults[i].skip = true
 			continue
 		}
+		i, ld := i, ld // capture loop variables
+		g.Go(func() error {
+			// Stream the saved layer to compute hashes (avoids loading GBs into memory)
+			r, err := layers[i].NewReader()
+			if err != nil {
+				layerResults[i].skip = true
+				return nil
+			}
+			savedHashes, _ := workspace.ListLayerFilesWithHashesFromReader(r)
+			_ = r.Close()
 
-		// Stream the saved layer to compute hashes (avoids loading GBs into memory)
-		r, err := layers[i].NewReader()
-		if err != nil {
+			sr := scanResults[ld.Name]
+			currentHashes := make(map[string]string)
+
+			// Hash workspace and external files concurrently using errgroup.
+			var mu sync.Mutex
+			hg := new(errgroup.Group)
+			hg.SetLimit(runtime.NumCPU())
+
+			for _, f := range sr.WorkspaceFiles {
+				f := f
+				hg.Go(func() error {
+					hash, err := workspace.HashFileStreaming(filepath.Join(dir, f))
+					if err == nil {
+						mu.Lock()
+						currentHashes[f] = hash
+						mu.Unlock()
+					}
+					return nil // skip files that error, matching original behavior
+				})
+			}
+			for _, ef := range sr.ExternalFiles {
+				ef := ef
+				hg.Go(func() error {
+					hash, err := workspace.HashFileStreaming(ef.AbsPath)
+					if err == nil {
+						mu.Lock()
+						currentHashes[workspace.DisplayPath(ef.ArchivePath)] = hash
+						mu.Unlock()
+					}
+					return nil // skip files that error, matching original behavior
+				})
+			}
+			_ = hg.Wait() // individual file errors are silently skipped
+
+			added, removed, modified := diffFileMaps(savedHashes, currentHashes)
+
+			// Compute line counts for added/removed/modified files.
+			lineCounts := computeWorkspaceLineCounts(layers[i], added, removed, modified, dir, sr)
+
+			layerResults[i] = layerDiffResult{
+				added:      added,
+				removed:    removed,
+				modified:   modified,
+				lineCounts: lineCounts,
+				name:       ld.Name,
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	// Print results in original layer order.
+	hasChanges := false
+	for _, res := range layerResults {
+		if res.skip {
 			continue
 		}
-		savedHashes, _ := workspace.ListLayerFilesWithHashesFromReader(r)
-		_ = r.Close()
-
-		sr := scanResults[ld.Name]
-		currentHashes := make(map[string]string)
-
-		// Hash workspace files by streaming, not loading full content into memory
-		for _, f := range sr.WorkspaceFiles {
-			hash, err := workspace.HashFileStreaming(filepath.Join(dir, f))
-			if err == nil {
-				currentHashes[f] = hash
-			}
-		}
-		for _, ef := range sr.ExternalFiles {
-			hash, err := workspace.HashFileStreaming(ef.AbsPath)
-			if err == nil {
-				currentHashes[workspace.DisplayPath(ef.ArchivePath)] = hash
-			}
-		}
-
-		added, removed, modified := diffFileMaps(savedHashes, currentHashes)
-
-		// Compute line counts for added/removed/modified files.
-		lineCounts := computeWorkspaceLineCounts(layers[i], added, removed, modified, dir, sr)
-		printLayerDiff(ld.Name, added, removed, modified, lineCounts, &hasChanges)
+		printLayerDiff(res.name, res.added, res.removed, res.modified, res.lineCounts, &hasChanges)
 	}
 
 	if !hasChanges {
@@ -192,36 +250,107 @@ func diffCheckpoints(dir string, args []string) error {
 
 	fmt.Printf("Comparing %s → %s\n", args[0], args[1])
 
-	hasChanges := false
-	for i := 0; i < len(layers1) && i < len(layers2); i++ {
+	numLayers := len(layers1)
+	if len(layers2) < numLayers {
+		numLayers = len(layers2)
+	}
+
+	type checkpointDiffResult struct {
+		added, removed, modified []string
+		lineCounts               map[string]fileLineCounts
+		name                     string
+		unchanged                bool
+		digest                   string
+		skip                     bool
+	}
+
+	cpResults := make([]checkpointDiffResult, numLayers)
+
+	g := new(errgroup.Group)
+	g.SetLimit(runtime.NumCPU())
+
+	for i := 0; i < numLayers; i++ {
+		i := i // capture loop variable
 		name := layerName(m1.Layers, i)
+		g.Go(func() error {
+			if layers1[i].Digest == layers2[i].Digest {
+				cpResults[i] = checkpointDiffResult{
+					name:      name,
+					unchanged: true,
+					digest:    layers1[i].Digest,
+				}
+				return nil
+			}
 
-		if layers1[i].Digest == layers2[i].Digest {
+			// Stream both layers concurrently for hash comparison.
+			var hashes1, hashes2 map[string]string
+			var mu sync.Mutex
+			hg := new(errgroup.Group)
+			hg.SetLimit(2)
+
+			hg.Go(func() error {
+				r1, err := layers1[i].NewReader()
+				if err != nil {
+					return nil
+				}
+				h, _ := workspace.ListLayerFilesWithHashesFromReader(r1)
+				_ = r1.Close()
+				mu.Lock()
+				hashes1 = h
+				mu.Unlock()
+				return nil
+			})
+			hg.Go(func() error {
+				r2, err := layers2[i].NewReader()
+				if err != nil {
+					return nil
+				}
+				h, _ := workspace.ListLayerFilesWithHashesFromReader(r2)
+				_ = r2.Close()
+				mu.Lock()
+				hashes2 = h
+				mu.Unlock()
+				return nil
+			})
+			_ = hg.Wait()
+
+			if hashes1 == nil || hashes2 == nil {
+				cpResults[i].skip = true
+				return nil
+			}
+
+			added, removed, modified := diffFileMaps(hashes1, hashes2)
+
+			// Compute line counts by re-reading both layers for the changed files.
+			lineCounts := computeCheckpointLineCounts(layers1[i], layers2[i], added, removed, modified)
+
+			cpResults[i] = checkpointDiffResult{
+				name:       name,
+				added:      added,
+				removed:    removed,
+				modified:   modified,
+				lineCounts: lineCounts,
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	// Print results in original layer order.
+	hasChanges := false
+	for _, res := range cpResults {
+		if res.skip {
+			continue
+		}
+		if res.unchanged {
 			fmt.Printf("\n  %s%s: unchanged%s (%s)\n",
-				colorDim, name, colorReset, truncateDigest(layers1[i].Digest))
+				colorDim, res.name, colorReset, truncateDigest(res.digest))
 			continue
 		}
-
-		// Stream both layers for hash comparison (no full load into memory)
-		r1, err := layers1[i].NewReader()
-		if err != nil {
-			continue
-		}
-		hashes1, _ := workspace.ListLayerFilesWithHashesFromReader(r1)
-		_ = r1.Close()
-
-		r2, err := layers2[i].NewReader()
-		if err != nil {
-			continue
-		}
-		hashes2, _ := workspace.ListLayerFilesWithHashesFromReader(r2)
-		_ = r2.Close()
-
-		added, removed, modified := diffFileMaps(hashes1, hashes2)
-
-		// Compute line counts by re-reading both layers for the changed files.
-		lineCounts := computeCheckpointLineCounts(layers1[i], layers2[i], added, removed, modified)
-		printLayerDiff(name, added, removed, modified, lineCounts, &hasChanges)
+		printLayerDiff(res.name, res.added, res.removed, res.modified, res.lineCounts, &hasChanges)
 	}
 	if !hasChanges {
 		fmt.Println("\nNo changes between checkpoints.")
