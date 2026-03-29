@@ -1,4 +1,4 @@
-# AGENTS.md — Bento Development Guide
+# AGENTS.md - Bento Development Guide
 
 ## Project Overview
 
@@ -27,15 +27,15 @@ internal/
 
 ### Key Design Decisions
 
-1. **Standard OCI media types** — All layers use `application/vnd.oci.image.layer.v1.tar+gzip` so `docker pull`, `COPY --from`, and containerd work natively. Layer semantics are carried by `org.opencontainers.image.title` annotations.
+1. **Standard OCI media types** - All layers use `application/vnd.oci.image.layer.v1.tar+gzip` so `docker pull`, `COPY --from`, and containerd work natively. Layer semantics are carried by `org.opencontainers.image.title` annotations.
 
-2. **Shared blob store** — Local OCI store at `~/.bento/store/` uses a shared content-addressed blob pool. Identical layers across workspaces are stored once.
+2. **Shared blob store** - Local OCI store at `~/.bento/store/` uses a shared content-addressed blob pool. Identical layers across workspaces are stored once.
 
-3. **Composable extensions** — Each agent framework, language, and tool gets a small extension that contributes patterns to the right layer. Extensions auto-detect and merge. No monolithic harnesses.
+3. **Composable extensions** - Each agent framework, language, and tool gets a small extension that contributes patterns to the right layer. Extensions auto-detect and merge. No monolithic harnesses.
 
-4. **Three core layers** — deps (rarely changes, large), agent (changes often, small), project (catch-all). Extensions can add more layers (e.g., `build-cache`).
+4. **Three core layers** - deps (rarely changes, large), agent (changes often, small), project (catch-all). Extensions can add more layers (e.g., `build-cache`).
 
-5. **Secret safety** — Pre-save regex scanning, credential file exclusion, env references (never store secret values).
+5. **Secret safety** - Pre-save regex scanning, credential file exclusion, env references (never store secret values).
 
 ## Extension System
 
@@ -64,21 +64,24 @@ On every `save`/`diff`/`watch`, all extensions are auto-detected, their contribu
 
 | Extension | Detects | Patterns |
 |-----------|---------|----------|
-| `claude-code` | `.claude/` or `CLAUDE.md` | `CLAUDE.md`, `.claude/**`, `~/.claude/projects/<hash>/` |
-| `codex` | `.codex/` | `.codex/**`, `~/.codex/sessions/` |
-| `opencode` | `.opencode/` or `opencode.json` | `.opencode/**`, `opencode.json`, `~/.local/share/opencode/...` |
-| `openclaw` | `SOUL.md` or `IDENTITY.md` | `SOUL.md`, `MEMORY.md`, `memory/**`, `skills/**` |
-| `cursor` | `.cursor/` or `.cursorrules` | `.cursor/rules/**`, `.cursor/mcp.json`, `.cursorrules` |
+| `claude-code` | `.claude/` or `CLAUDE.md` | `CLAUDE.md`, `CLAUDE.local.md`, `.claude/**`, `.mcp.json`, `.worktreeinclude`, `~/.claude/projects/<path-with-dashes>/`, `~/.claude/{CLAUDE.md, settings.json, keybindings.json, rules/, skills/, commands/, agents/, agent-memory/, output-styles/}`, `~/.claude.json` |
+| `codex` | `.codex/` | `.codex/**`, `~/.codex/sessions/` (workspace-scoped), `~/.codex/state_N.sqlite` (global), `~/.codex/memories/`, `~/.codex/{AGENTS.md, config.yaml, config.json}` |
+| `opencode` | `.opencode/` or `opencode.json` | `.opencode/**`, `opencode.json`, `~/.local/share/opencode/opencode.db` (global), `~/.local/share/opencode/storage/` (legacy), `~/.config/opencode/commands/`, `~/.opencode/commands/` |
+| `openclaw` | `SOUL.md` or `IDENTITY.md` | `SOUL.md`, `MEMORY.md`, `memory/**`, `skills/**`, `canvas/**`, `~/.openclaw/openclaw.json`, `~/.openclaw/agents/<id>/sessions/`, `~/.openclaw/workspace/skills/` |
+| `cursor` | `.cursor/` or `.cursorrules` | `.cursor/rules/**`, `.cursor/mcp.json`, `.cursorrules`, `.cursorignore`, `~/.cursor/mcp.json`, `~/Library/.../Cursor/User/workspaceStorage/<hash>/` |
 | `agents-md` | `AGENTS.md` | `AGENTS.md` |
 
 **Deps extensions** (contribute to `deps` layer):
 
 | Extension | Detects | Patterns |
 |-----------|---------|----------|
-| `node` | `package.json` | `node_modules/**` |
-| `python` | `pyproject.toml`, `requirements*.txt`, `.venv/` | `.venv/**` |
+| `node` | `package.json`, `bun.lockb`, `bun.lock`, `bunfig.toml`, `deno.json`, `deno.jsonc`, `deno.lock` | `node_modules/**`, `vendor/**` (deno only) |
+| `python` | `pyproject.toml`, `requirements*.txt`, `.venv/`, `Pipfile`, `setup.py`, `uv.lock`, `.python-version` | `.venv/**` |
 | `go-mod` | `go.mod` | `vendor/**` |
 | `rust` | `Cargo.toml` | `target/**` (as extra `build-cache` layer) |
+| `ruby` | `Gemfile`, `Gemfile.lock`, `Rakefile`, `*.gemspec` | `vendor/bundle/**`, `.bundle/**` |
+| `elixir` | `mix.exs` | `deps/**`, `_build/**` (as extra `build-cache` layer) |
+| `ocaml` | `dune-project`, `dune-workspace`, `*.opam` | `_opam/**`, `_esy/**`, `_build/**` (as extra `build-cache` layer) |
 
 **Tool extensions** (contribute to `deps` layer):
 
@@ -88,7 +91,7 @@ On every `save`/`diff`/`watch`, all extensions are auto-detected, their contribu
 
 ### How Merge Works
 
-All contributions are merged generically — no special cases for "agent" vs "deps":
+All contributions are merged generically - no special cases for "agent" vs "deps":
 
 1. Seed core layers: `deps`, `agent` (always exist, even if empty)
 2. For each active extension's contribution, add patterns to the named layer (deduped)
@@ -146,11 +149,11 @@ watch:
 3. Merge contributions → layer definitions + ignore + hooks
 4. Run pre_save hook (abort on failure)
 5. Collect ignore patterns (common + extensions + config + .bentoignore)
-6. Scan workspace — assign files to layers
-7. Secret scan — abort if credentials found
+6. Scan workspace - assign files to layers
+7. Secret scan - abort if credentials found
 8. Acquire file lock (.save-lock)
 9. Pack layers concurrently (tar+gzip, parallel up to NumCPU)
-10. Compare layer digests with parent — skip if all unchanged
+10. Compare layer digests with parent - skip if all unchanged
 11. Build OCI config + manifest
 12. Store to local OCI layout, tag as cp-N and latest
 13. Run post_save hook (warn on failure, don't abort)
@@ -182,7 +185,7 @@ make test-integration   # E2E tests (build-tagged: integration)
 make lint               # golangci-lint
 ```
 
-E2E tests in `e2e/` compile the binary and exercise full workflows. They create isolated temp workspaces — never pollute the real store.
+E2E tests in `e2e/` compile the binary and exercise full workflows. They create isolated temp workspaces - never pollute the real store.
 
 ## Build & Release
 
@@ -217,20 +220,20 @@ Configuration errors must be caught at parse time, not at runtime.
 
 ### 3. Simple, Obvious Names
 
-- **CLI commands** — short verbs: `save`, `open`, `list`, `diff`, `fork`, `tag`, `inspect`
-- **Config fields** — plain English, `snake_case`: `keep_last`, `catch_all`, `post_restore`
-- **Go types** — say what they do: `Extension`, `Contribution`, `Merge`, `LayerDef`
-- **Vocabulary** — use project terms: checkpoint (not snapshot), layer (not partition), extension (not plugin/adapter), open (not restore/extract)
+- **CLI commands** - short verbs: `save`, `open`, `list`, `diff`, `fork`, `tag`, `inspect`
+- **Config fields** - plain English, `snake_case`: `keep_last`, `catch_all`, `post_restore`
+- **Go types** - say what they do: `Extension`, `Contribution`, `Merge`, `LayerDef`
+- **Vocabulary** - use project terms: checkpoint (not snapshot), layer (not partition), extension (not plugin/adapter), open (not restore/extract)
 - Flag names mirror config: `--keep-last` ↔ `keep_last:`
 
 ### 4. Error Handling
 
-1. **Never lose data silently** — fail loudly with a clear message
-2. **Partial results > no results** — especially for restore
-3. **Idempotency** — same inputs produce same digests
-4. **Non-interactive by default** — `--force` for unattended operation
+1. **Never lose data silently** - fail loudly with a clear message
+2. **Partial results > no results** - especially for restore
+3. **Idempotency** - same inputs produce same digests
+4. **Non-interactive by default** - `--force` for unattended operation
 5. **Pre-hooks abort; post-hooks warn**
-6. **Actionable errors** — say what happened, why, and how to fix it
+6. **Actionable errors** - say what happened, why, and how to fix it
 
 ### 5. OCI Compatibility First
 

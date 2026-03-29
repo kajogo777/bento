@@ -23,10 +23,23 @@ func (c Cursor) Detect(workDir string) bool {
 }
 
 func (c Cursor) Contribute(workDir string) Contribution {
-	agentPatterns := []string{".cursor/rules/**", ".cursor/mcp.json", ".cursorrules"}
+	agentPatterns := []string{
+		".cursor/rules/**",
+		".cursor/mcp.json",
+		".cursorrules",
+		".cursorignore", // ignore patterns for Cursor indexing
+	}
 
 	if wsDir := cursorWorkspaceDir(workDir); wsDir != "" {
 		agentPatterns = append(agentPatterns, wsDir+"/")
+	}
+
+	// Global MCP server configuration. Some Cursor versions store
+	// user-level MCP configs under ~/.cursor/ rather than in the
+	// project .cursor/ directory.
+	globalMCP := ExpandHome("~/.cursor/mcp.json")
+	if fileExists(globalMCP) {
+		agentPatterns = append(agentPatterns, globalMCP)
 	}
 
 	return Contribution{

@@ -118,18 +118,11 @@ bento save -m "multi-agent"
 # Detected extensions: claude-code, codex, agents-md, node
 ```
 
-Each extension contributes patterns to the right layer. Multiple agent extensions merge naturally — their patterns are unioned into the agent layer.
+Each extension contributes patterns to the right layer. Multiple extensions merge naturally -- their patterns are unioned into the same layer. Extensions capture a superset of all known storage paths across agent versions, so state is never silently missed when a user runs an older or newer release. Directories that do not exist on disk cost nothing (no files matched = no bytes in the layer).
 
-#### Support Matrix
-
-| Feature | Claude Code | Codex | OpenCode | OpenClaw | Cursor |
-|---------|:-----------:|:-----:|:--------:|:--------:|:------:|
-| Auto-detection | `.claude/`, `CLAUDE.md` | `.codex/` | `.opencode/`, `opencode.json` | `SOUL.md`, `IDENTITY.md` | `.cursor/`, `.cursorrules` |
-| Agent memory | CLAUDE.md, `.claude/**` | AGENTS.md, `.codex/**` | AGENTS.md, `.opencode/**` | SOUL.md, MEMORY.md, `memory/**` | `.cursor/rules/**` |
-| Session capture | `~/.claude/projects/<hash>/` | `~/.codex/sessions/` (filtered by cwd) | `~/.local/share/opencode/storage/session/<hash>/` | `~/.openclaw/agents/<id>/sessions/` | `~/Library/.../Cursor/workspaceStorage/<hash>/` |
-| Credential exclusion | `.claude/credentials`, `oauth_tokens` | `auth.json` | `auth.json` | `.env`, `openclaw.json` | - |
-| Version detection | `claude --version` | - | `opencode --version` | - | - |
-| Post-restore hook | - | `.codex/setup.sh` | - | - | - |
+Built-in agent extensions: **Claude Code**, **Codex**, **OpenCode**, **OpenClaw**, **Cursor**, **AGENTS.md** (cross-agent).
+Built-in deps extensions: **Node** (npm, yarn, pnpm, bun, deno), **Python** (pip, uv, pipenv, poetry), **Go**, **Rust**, **Ruby**, **Elixir**, **OCaml**.
+Built-in tool extensions: **tool-versions** (asdf / mise).
 
 Define custom layers in `bento.yaml` for unsupported agents. Patterns starting with `~/` or `/` capture files from outside the workspace:
 

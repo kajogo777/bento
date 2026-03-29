@@ -28,23 +28,52 @@ func (o OpenClaw) Contribute(workDir string) Contribution {
 		"memory/**", "skills/**", "canvas/**",
 	}
 
-	// Add external sessions if we can find the agent scoped to this workspace
-	if sessDir := openClawSessionDir(workDir); sessDir != "" {
+	openclawHome := openClawHome()
+
+	// Add external sessions if we can find the agent scoped to this workspace.
+	if sessDir := openClawSessionDir(openclawHome, workDir); sessDir != "" {
 		agentPatterns = append(agentPatterns, sessDir+"/")
+	}
+
+	// Include the agent config (openclaw.json) from the home directory. It
+	// contains agent definitions, model settings, and workspace mappings.
+	// Credentials are intentionally excluded for security.
+	if configPath := filepath.Join(openclawHome, "openclaw.json"); fileExists(configPath) {
+		agentPatterns = append(agentPatterns, configPath)
+	}
+
+	// Include the default workspace directory if it matches the current workDir.
+	// This covers the case where the user's project IS the openclaw workspace.
+	openClawAddDefaultWorkspace(openclawHome, workDir, &agentPatterns)
+
+	// Build ignore list: exclude the OpenClaw credentials directory.
+	// We use the specific ~/.openclaw/credentials path rather than a broad
+	// "credentials/**" pattern, because a blanket pattern would affect all
+	// extensions (ignore patterns are merged globally) and could exclude
+	// legitimate credentials/ directories in unrelated projects.
+	var ignorePatterns []string
+	credsDir := filepath.Join(openclawHome, "credentials")
+	if info, err := os.Stat(credsDir); err == nil && info.IsDir() {
+		ignorePatterns = append(ignorePatterns, credsDir+"/**")
 	}
 
 	return Contribution{
 		Layers: map[string][]string{
 			"agent": agentPatterns,
 		},
+		Ignore: ignorePatterns,
 	}
 }
 
-func openClawSessionDir(workDir string) string {
-	openclawHome := os.Getenv("OPENCLAW_STATE_DIR")
-	if openclawHome == "" {
-		openclawHome = ExpandHome("~/.openclaw")
+// openClawHome returns the OpenClaw home directory.
+func openClawHome() string {
+	if h := os.Getenv("OPENCLAW_STATE_DIR"); h != "" {
+		return h
 	}
+	return ExpandHome("~/.openclaw")
+}
+
+func openClawSessionDir(openclawHome, workDir string) string {
 	if info, err := os.Stat(openclawHome); err != nil || !info.IsDir() {
 		return ""
 	}
@@ -59,6 +88,33 @@ func openClawSessionDir(workDir string) string {
 		return ""
 	}
 	return sessionsDir
+}
+
+// openClawAddDefaultWorkspace adds the default workspace skills directory from
+// ~/.openclaw/workspace/ if the workspace path matches the current workDir.
+// This captures skills that live in the global workspace but belong to this project.
+func openClawAddDefaultWorkspace(openclawHome, workDir string, patterns *[]string) {
+	absWork, err := filepath.Abs(workDir)
+	if err != nil {
+		return
+	}
+	if resolved, err := filepath.EvalSymlinks(absWork); err == nil {
+		absWork = resolved
+	}
+
+	defaultWS := filepath.Join(openclawHome, "workspace")
+	if resolved, err := filepath.EvalSymlinks(defaultWS); err == nil {
+		defaultWS = resolved
+	}
+
+	// If the default workspace IS the current workDir, the in-project patterns
+	// already cover it. If it's different, include the skills subdirectory.
+	if defaultWS != absWork {
+		skillsDir := filepath.Join(openclawHome, "workspace", "skills")
+		if info, err := os.Stat(skillsDir); err == nil && info.IsDir() {
+			*patterns = append(*patterns, skillsDir+"/")
+		}
+	}
 }
 
 func openClawAgentForWorkspace(openclawHome, workDir string) string {
@@ -98,4 +154,10 @@ func openClawAgentForWorkspace(openclawHome, workDir string) string {
 		}
 	}
 	return ""
+}
+
+// fileExists returns true if the path exists and is a regular file.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }

@@ -21,6 +21,9 @@ func allBuiltinExtensions() []Extension {
 		Python{},
 		GoMod{},
 		Rust{},
+		Ruby{},
+		Elixir{},
+		OCaml{},
 
 		// Tool extensions
 		ToolVersions{},

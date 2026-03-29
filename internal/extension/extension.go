@@ -10,8 +10,8 @@ import (
 
 // WatchMethod constants for per-layer watch behavior.
 const (
-	WatchRealtime = "realtime" // fsnotify — instant detection
-	WatchPeriodic = "periodic" // polling — periodic fingerprint check
+	WatchRealtime = "realtime" // fsnotify, instant detection
+	WatchPeriodic = "periodic" // polling, periodic fingerprint check
 	WatchOff      = "off"      // not watched (still included in saves)
 )
 
@@ -174,6 +174,9 @@ func defaultWatchForLayer(layerName string) string {
 var CommonSourcePatterns = []string{
 	"**/*.go", "**/*.py", "**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx",
 	"**/*.rs", "**/*.java", "**/*.c", "**/*.cpp", "**/*.h",
+	"**/*.rb", "**/*.erb", "**/*.rake",       // Ruby
+	"**/*.ex", "**/*.exs", "**/*.eex", "**/*.heex", // Elixir
+	"**/*.ml", "**/*.mli", "**/*.mll", "**/*.mly",  // OCaml
 	"**/*.html", "**/*.css", "**/*.scss",
 	"**/*.sql", "**/*.sh", "**/*.bash",
 	"**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.xml",
@@ -181,8 +184,13 @@ var CommonSourcePatterns = []string{
 	"Makefile", "Dockerfile", "docker-compose*.yaml",
 	"go.mod", "go.sum",
 	"package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-	"pyproject.toml", "requirements*.txt", "Pipfile", "Pipfile.lock",
+	"bun.lockb", "bun.lock", "bunfig.toml",
+	"deno.json", "deno.jsonc", "deno.lock",
+	"pyproject.toml", "requirements*.txt", "Pipfile", "Pipfile.lock", "uv.lock",
 	"Cargo.toml", "Cargo.lock",
+	"Gemfile", "Gemfile.lock", "Rakefile",
+	"mix.exs", "mix.lock",
+	"dune-project", "dune-workspace", "*.opam",
 	".gitignore", ".gitattributes",
 	".env.example", ".env.template",
 	".mcp.json",
