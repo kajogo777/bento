@@ -116,22 +116,20 @@ The project layer is a catch-all. Any workspace file not matched by agent or dep
 
 Unchanged layers are deduplicated automatically. Custom layers can be defined in `bento.yaml`.
 
-### Agent Detection
+### Auto-Detection
 
-By default, `agent` is set to `auto`. Bento scans the workspace on every `save` and `diff` to detect which agents are active. If you add a new agent mid-project, bento picks it up automatically.
+Bento uses composable **extensions** that auto-detect agents, languages, and tools in your workspace on every `save` and `diff`. If you add a new agent or framework mid-project, bento picks it up automatically.
 
 ```bash
 bento init
-# Detected agent: claude-code
+# Detected extensions: claude-code, agents-md, node
 
 # Later, start using Codex too...
 bento save -m "multi-agent"
-# Detected agent: claude-code+codex
+# Detected extensions: claude-code, codex, agents-md, node
 ```
 
-When multiple agents are detected, their layers are merged. Each agent gets its own agent layer (`agent-claude-code`, `agent-codex`), while deps and project layers are shared.
-
-Use `--agent <name>` to force a single agent. This overrides auto-detection regardless of which markers are present.
+Each extension contributes patterns to the right layer. Multiple agent extensions merge naturally — their patterns are unioned into the agent layer.
 
 #### Support Matrix
 
@@ -226,7 +224,7 @@ A pre-save scan catches credentials before they're stored.
 ## CLI Reference
 
 ```
-bento init [--task <desc>] [--agent <name>]   Initialize workspace tracking
+bento init [--task <desc>]                    Initialize workspace tracking
 bento save [-m <message>] [--tag <tag>]       Save a checkpoint
 bento open <ref> [<target-dir>]               Restore a checkpoint
 bento list                                    List checkpoints
@@ -250,7 +248,6 @@ bento env export [-o <file>] [--template t]   Export resolved .env file
 `bento.yaml` at your workspace root:
 
 ```yaml
-agent: auto
 task: "refactor auth module"
 
 store: ~/.bento/store
@@ -309,7 +306,7 @@ Full format details in [SPEC.md](specs/SPEC.md).
 │   ├── registry/         # OCI image layout store
 │   ├── manifest/         # OCI manifest construction
 │   ├── secrets/          # scanning, hydration, .env population
-│   ├── harness/          # agent detection and layer definitions
+│   ├── extension/        # composable extensions (agent, deps, tool detection)
 │   ├── hooks/            # lifecycle hook execution
 │   └── policy/           # retention and GC
 ```

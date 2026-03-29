@@ -9,7 +9,7 @@
 
 This specification defines the **Bento Artifact Format**, an open standard for packaging AI agent workspace state as OCI (Open Container Initiative) artifacts. A bento artifact consists of semantically typed layers representing different aspects of a workspace -- project files, agent state, and dependencies -- bundled with structured metadata into a standard OCI image manifest.
 
-The format is designed to be portable (any OCI registry), inspectable (semantic layer types), efficient (content-deduplicated), and extensible (custom layers via harness adapters).
+The format is designed to be portable (any OCI registry), inspectable (semantic layer types), efficient (content-deduplicated), and extensible (custom layers via extensions).
 
 ## 1. Terminology
 
@@ -19,7 +19,7 @@ The format is designed to be portable (any OCI registry), inspectable (semantic 
 
 **Layer**: A tar+gzip archive containing a subset of workspace files, identified by a media type that declares what kind of content it holds.
 
-**Harness**: An adapter that maps a specific agent framework's file layout to bento's layer taxonomy.
+**Extension**: A composable unit that contributes file patterns to bento's layer model.
 
 **Store**: An OCI Target (local OCI layout directory or remote registry) where checkpoints are stored.
 
@@ -87,7 +87,7 @@ A bento checkpoint is represented as an OCI image manifest. Bento uses **standar
     "dev.bento.checkpoint.message": "refactored auth module",
     "dev.bento.checkpoint.sequence": "3",
     "dev.bento.checkpoint.parent": "sha256:def456...",
-    "dev.bento.agent": "claude-code",
+    "dev.bento.extensions": "claude-code,node",
     "dev.bento.task": "refactor auth module"
   }
 }
@@ -108,10 +108,10 @@ The config object is a valid OCI image config. Bento metadata is stored in `conf
   "created": "2026-03-26T10:00:00Z",
   "config": {
     "Labels": {
-      "dev.bento.agent": "claude-code",
+      "dev.bento.extensions": "claude-code,node",
       "dev.bento.checkpoint.sequence": "3",
       "dev.bento.format.version": "0.3.0",
-      "dev.bento.config": "{\"schemaVersion\":\"1.0.0\",\"agent\":\"claude-code\",\"task\":\"refactor auth module\",\"checkpoint\":3,\"created\":\"2026-03-26T10:00:00Z\",\"harness\":\"claude-code\"}"
+      "dev.bento.config": "{\"schemaVersion\":\"1.0.0\",\"extensions\":[\"claude-code\",\"node\"],\"task\":\"refactor auth module\",\"checkpoint\":3,\"created\":\"2026-03-26T10:00:00Z\"}"
     }
   },
   "rootfs": {
@@ -126,13 +126,11 @@ The `dev.bento.config` label contains the full bento metadata as JSON:
 ```json
 {
   "schemaVersion": "1.0.0",
-  "agent": "claude-code",
-  "agentVersion": "1.2.3",
+  "extensions": ["claude-code", "node"],
   "task": "refactor auth module",
   "checkpoint": 3,
   "created": "2026-03-26T10:00:00Z",
   "status": "paused",
-  "harness": "claude-code",
   "gitSha": "a1b2c3d",
   "gitBranch": "main",
   "environment": { "os": "linux", "arch": "amd64" }
@@ -155,14 +153,14 @@ All layers use the standard OCI media type `application/vnd.oci.image.layer.v1.t
 
 #### 3.3.2 Well-Known Custom Layer Types
 
-Harnesses MAY use these registered types for common additional layers. These are not required but provide consistent media types when multiple harnesses need the same concept.
+Extensions MAY use these registered types for common additional layers. These are not required but provide consistent media types when multiple extensions need the same concept.
 
 | Media Type | Name | Description |
 |---|---|---|
 | `application/vnd.bento.layer.build-cache.v1.tar+gzip` | build-cache | Incremental compilation state, webpack cache, .tsbuildinfo |
 | `application/vnd.bento.layer.data.v1.tar+gzip` | data | SQLite databases, local data files, seed data |
 | `application/vnd.bento.layer.runtime.v1.tar+gzip` | runtime | Pinned agent CLI binaries and MCP server binaries |
-| `application/vnd.bento.layer.custom.v1.tar+gzip` | custom | Any harness-specific content not covered above |
+| `application/vnd.bento.layer.custom.v1.tar+gzip` | custom | Any extension-specific content not covered above |
 
 #### 3.3.3 Non-Layer Artifacts
 
@@ -179,12 +177,12 @@ Layers MUST NOT contain:
 - Absolute paths
 - Paths containing backslashes
 - Symlinks pointing outside the archive
-- Files matching patterns in `.bentoignore` or the harness `Ignore()` list
+- Files matching patterns in `.bentoignore` or the extension list
 - Content matching known secret patterns (see Section 6)
 
 #### 3.3.5 Layer Assignment Rules
 
-When a file matches patterns in multiple layers, the **first matching layer** in the harness definition order wins. The project layer is a **catch-all**: any workspace file not matched by agent or deps patterns (and not in the ignore list) is captured in the project layer. This ensures no workspace file is silently excluded.
+When a file matches patterns in multiple layers, the **first matching layer** in the extension definition order wins. The project layer is a **catch-all**: any workspace file not matched by agent or deps patterns (and not in the ignore list) is captured in the project layer. This ensures no workspace file is silently excluded.
 
 ### 3.4 Annotations
 
@@ -198,9 +196,9 @@ Bento uses the `dev.bento.*` annotation namespace on both manifests and layer de
 | `dev.bento.checkpoint.sequence` | REQUIRED | Monotonically increasing checkpoint number |
 | `dev.bento.checkpoint.parent` | RECOMMENDED | Digest of parent checkpoint |
 | `dev.bento.checkpoint.message` | OPTIONAL | Human-readable description |
-| `dev.bento.agent` | RECOMMENDED | Agent framework identifier |
+| `dev.bento.extensions` | RECOMMENDED | Comma-separated list of active extensions |
 | `dev.bento.task` | OPTIONAL | Task description |
-| `dev.bento.harness` | RECOMMENDED | Harness that produced this artifact |
+| `dev.bento.extensions` | RECOMMENDED | Extensions active when artifact was produced |
 | `dev.bento.format.version` | RECOMMENDED | Spec version (e.g., "0.3.0") |
 
 #### 3.4.2 Layer Annotations
@@ -325,7 +323,7 @@ credentials
 .ssh/*
 ```
 
-Additional patterns can be specified in `.bentoignore` and via the harness `Ignore()` method.
+Additional patterns can be specified in `.bentoignore` and via the extension method.
 
 ## 6.5 Environment Variables and Secret References in Manifests
 
@@ -409,9 +407,9 @@ All hooks are optional. Each hook value is a shell command string executed via `
 
 If a `pre_*` hook exits with a non-zero status, the operation is aborted. If a `post_*` hook exits with a non-zero status, the operation completes but a warning is emitted.
 
-### 7.4 Harness Default Hooks
+### 7.4 Extension Default Hooks
 
-Harnesses MAY provide default hooks via the `DefaultHooks()` method. User-defined hooks in `bento.yaml` override harness defaults for the same lifecycle point.
+Extensions MAY provide default hooks via the `DefaultHooks()` method. User-defined hooks in `bento.yaml` override extension defaults for the same lifecycle point.
 
 ## 7.5 Watch Mode
 
@@ -445,82 +443,39 @@ All `bento watch` flags mirror the `bento save` flags.
 - Watch mode is not safe for concurrent access from multiple processes. Run one watcher per workspace.
 - Events from dependency directories (e.g. `node_modules`) are ignored via the normal ignore pattern rules.
 
-## 8. Harness Interface
+## 8. Extension Interface
 
-A harness maps an agent framework's workspace layout to bento's layer taxonomy.
+An extension is a composable unit that contributes patterns to bento's layer model. Each extension has a single concern: an agent framework, a language/framework, or a tool.
 
 ### 8.1 Go Interface
 
 ```go
-type Harness interface {
-    // Name returns the harness identifier.
+type Extension interface {
+    // Name returns the extension identifier (e.g., "claude-code", "node").
     Name() string
 
-    // Detect returns true if this harness is active in the workspace.
+    // Detect returns true if this extension is relevant to the workspace.
     Detect(workDir string) bool
 
-    // Layers returns the layer definitions for this harness.
-    // workDir is the absolute path to the workspace root; harnesses that
-    // capture external paths (e.g. agent session dirs) need it to resolve
-    // workspace-specific locations.
-    Layers(workDir string) []LayerDef
-
-    // SessionConfig extracts session metadata from the workspace.
-    SessionConfig(workDir string) (*SessionConfig, error)
-
-    // Ignore returns additional exclude patterns beyond .bentoignore.
-    Ignore() []string
-
-    // SecretPatterns returns patterns that should be flagged
-    // if found in content (pre-push safety check).
-    SecretPatterns() []string
-
-    // DefaultHooks returns suggested hooks for this agent framework.
-    // Users can override any of these in bento.yaml.
-    DefaultHooks() map[string]string
+    // Contribute returns the patterns and config this extension adds.
+    Contribute(workDir string) Contribution
 }
 
-type LayerDef struct {
-    Name      string
-    Patterns  []string // glob patterns for files in this layer; ~/... or /... = external paths
-    MediaType string   // OCI media type; defaults to standard OCI layer type
-    CatchAll  bool     // if true, unmatched files fall into this layer
+type Contribution struct {
+    Layers      map[string][]string // layer name → patterns to add
+    ExtraLayers []LayerDef          // new layers (e.g., "build-cache")
+    Ignore      []string            // patterns to exclude
+    Hooks       map[string]string   // default lifecycle hooks
 }
 ```
 
-### 8.2 YAML Definition
+### 8.2 Built-in Extensions
 
-For harnesses defined without Go code:
+Agent extensions: `claude-code`, `codex`, `opencode`, `openclaw`, `cursor`, `agents-md`
+Deps extensions: `node`, `python`, `go-mod`, `rust`
+Tool extensions: `tool-versions`
 
-```yaml
-name: string                    # required
-detect: string                  # file/dir that indicates this harness
-layers:                         # required, at least one
-  - name: string                # required
-    patterns: [string]          # required, glob patterns; ~/... or /... = external paths
-    media_type: string          # optional, defaults to standard OCI layer media type
-    catch_all: bool             # optional, catch-all for unmatched files
-ignore: [string]                # optional, additional exclude patterns
-secret_patterns: [string]       # optional, regex patterns for secrets
-hooks:                          # optional, default hooks
-  pre_save: string
-  post_restore: string
-  pre_push: string
-  post_fork: string
-```
-
-### 8.3 Registered Harnesses
-
-The following harness names are in use by official implementations:
-
-- `claude-code` -- Anthropic Claude Code
-- `openclaw` -- OpenClaw
-- `opencode` -- OpenCode
-- `cursor` -- Cursor
-- `codex` -- OpenAI Codex CLI / Desktop
-- `custom` -- User-defined via YAML (see Section 8.2)
-
-The harness name `custom` is the generic fallback for any workspace with no recognized agent. Third-party harnesses should pick a unique, namespaced name (e.g., `acme-agent`) to avoid collisions.
+All extensions auto-detect. When `extensions:` is listed in `bento.yaml`, only those extensions are used.
 
 ## 9. Store Behavior
 
@@ -631,7 +586,7 @@ Bento checkpoints are portable across macOS, Linux, and Windows. The following r
 
 All file paths within tar archives MUST use forward slashes, regardless of the platform that created the archive. Implementations MUST normalize backslashes to forward slashes on save and convert to the native separator on restore.
 
-Glob patterns in harness definitions and `.bentoignore` MUST use forward slashes. Implementations MUST match these patterns against normalized forward-slash paths.
+Glob patterns in extension definitions and `.bentoignore` MUST use forward slashes. Implementations MUST match these patterns against normalized forward-slash paths.
 
 ### 15.2 File Permissions
 
@@ -682,7 +637,7 @@ Implementations MUST execute hooks using the platform's native shell:
 - Linux/macOS: `sh -c "<command>"`
 - Windows: `cmd /c "<command>"`
 
-Harnesses that need cross-platform hooks should use platform-agnostic commands (e.g., `make`, `npm run`, `go run`) or define platform-specific hooks:
+Extensions that need cross-platform hooks should use platform-agnostic commands (e.g., `make`, `npm run`, `go run`) or define platform-specific hooks:
 
 ```yaml
 hooks:
@@ -698,7 +653,7 @@ When a platform-specific hook is defined, it takes precedence over the base hook
 The following are explicitly out of scope for this version of the specification. They may be addressed in future versions.
 
 - **Concurrent access**: Multiple agents or processes saving to the same workspace simultaneously is undefined behavior. Use separate workspaces or worktrees for parallel agents and coordinate via tags.
-- **Agent identity and roles**: Tracking which agent in a multi-agent team created a checkpoint (e.g., investigator vs. coder vs. reviewer). The `dev.bento.agent` annotation provides basic identification but role-based attribution is not specified.
+- **Agent identity and roles**: Tracking which agent in a multi-agent team created a checkpoint (e.g., investigator vs. coder vs. reviewer). The `dev.bento.extensions` annotation provides basic identification but role-based attribution is not specified.
 - **Supply chain security**: Signing checkpoints with Sigstore/cosign/Notation and verifying provenance. Bento artifacts are compatible with these tools but this spec does not define signing workflows or trust policies.
 - **Context summarization**: Generating compact handoff documents for agents on restore. Agents load their session history directly from the agent layer. Users can add summarization via hooks if needed.
 
@@ -748,7 +703,7 @@ application/vnd.bento.attachment.log.v1+jsonl
 
 ## Appendix B: Agent Configuration Locations
 
-This table documents where major agent frameworks store their state on disk. Harness authors should use this as a reference when defining layer patterns.
+This table documents where major agent frameworks store their state on disk. Extension authors should use this as a reference when defining layer patterns.
 
 | Agent | Project config | User config | Sessions | Memory / Plans |
 |---|---|---|---|---|
@@ -811,9 +766,8 @@ This table documents where major agent frameworks store their state on disk. Har
     "dev.bento.checkpoint.sequence": "3",
     "dev.bento.checkpoint.parent": "sha256:abc123def456...",
     "dev.bento.checkpoint.message": "refactored auth module",
-    "dev.bento.agent": "claude-code",
+    "dev.bento.extensions": "claude-code,node",
     "dev.bento.task": "refactor auth module",
-    "dev.bento.harness": "claude-code",
     "dev.bento.format.version": "0.3.0"
   }
 }
@@ -841,7 +795,7 @@ The bento MCP server runs as a stdio-based MCP server. Agents and MCP clients co
 }
 ```
 
-If `BENTO_WORKSPACE` is not set, the server uses the current working directory. The server reads `bento.yaml` from the workspace root for store and harness configuration.
+If `BENTO_WORKSPACE` is not set, the server uses the current working directory. The server reads `bento.yaml` from the workspace root for store and extension configuration.
 
 ### D.2 Tools
 

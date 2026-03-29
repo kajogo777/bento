@@ -39,7 +39,7 @@ bento init
 ```
 
 ```
-Detected agent: claude-code
+Detected extensions: claude-code, agents-md, node
 Created bento.yaml
 Store: ~/.bento/store (local)
 Created .bentoignore
@@ -114,7 +114,7 @@ Message:    added tests
 
 Config:
   Task:      refactor auth module
-  Harness:   claude-code
+  Extensions: claude-code, agents-md, node
   Git:       main (a1b2c3d)
   Platform:  darwin/arm64
 
@@ -265,18 +265,17 @@ hooks:
 If your project uses multiple agents, bento detects all of them:
 
 ```
-Detected agent: claude-code+codex
+Detected extensions: claude-code, codex, agents-md, node
 ```
 
 ```
 Scanning workspace...
   deps:              0 files, 32B (empty)
-  agent-claude-code: 3 files, 2KB (changed)
-  agent-codex:       4 files, 3KB (changed)
+  agent:             7 files, 5KB (changed)
   project:           12 files, 45KB (changed)
 ```
 
-Each agent's state is tracked independently. Use `--agent <name>` to force a single agent.
+Each extension contributes patterns to the right layer. Multiple agents merge naturally.
 
 ## Supported Agents
 
