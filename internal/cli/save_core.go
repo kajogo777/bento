@@ -290,12 +290,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 			Arch: runtime.GOARCH,
 		},
 	}
-	if gitSha, err := gitOutput(opts.Dir, "rev-parse", "HEAD"); err == nil {
-		cfgObj.GitSha = gitSha
-	}
-	if gitBranch, err := gitOutput(opts.Dir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
-		cfgObj.GitBranch = gitBranch
-	}
+	cfgObj.Repos = discoverRepos(opts.Dir)
 	cfgObj.Message = opts.Message
 
 	// Embed env vars and secret references
@@ -420,4 +415,60 @@ func gitOutput(dir string, args ...string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// discoverRepos walks the workspace for git repositories and returns their state.
+// It finds the root repo (if any) and submodules/nested repos.
+func discoverRepos(workDir string) []manifest.RepoInfo {
+	var repos []manifest.RepoInfo
+
+	// Check root first
+	if info := repoInfoAt(workDir, "."); info != nil {
+		repos = append(repos, *info)
+	}
+
+	// Walk for nested .git dirs (submodules, multi-repo)
+	_ = filepath.WalkDir(workDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.Name() == ".git" && path != filepath.Join(workDir, ".git") {
+			// Found a nested repo — the repo root is the parent dir
+			repoDir := filepath.Dir(path)
+			rel, relErr := filepath.Rel(workDir, repoDir)
+			if relErr != nil {
+				return nil
+			}
+			rel = filepath.ToSlash(rel)
+			if info := repoInfoAt(repoDir, rel); info != nil {
+				repos = append(repos, *info)
+			}
+			// Don't descend into nested .git
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+		}
+		return nil
+	})
+
+	return repos
+}
+
+// repoInfoAt collects git metadata for a repo at the given directory.
+func repoInfoAt(dir, relPath string) *manifest.RepoInfo {
+	// Verify it's actually a git repo
+	if _, err := gitOutput(dir, "rev-parse", "--git-dir"); err != nil {
+		return nil
+	}
+	info := &manifest.RepoInfo{Path: relPath}
+	if sha, err := gitOutput(dir, "rev-parse", "HEAD"); err == nil {
+		info.Sha = sha
+	}
+	if branch, err := gitOutput(dir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+		info.Branch = branch
+	}
+	if remote, err := gitOutput(dir, "remote", "get-url", "origin"); err == nil {
+		info.Remote = remote
+	}
+	return info
 }

@@ -17,8 +17,7 @@ type BentoConfigObj struct {
 	Checkpoint       int                   `json:"checkpoint"`
 	Created          string                `json:"created"`
 	Status           string                `json:"status,omitempty"`
-	GitSha           string                `json:"gitSha,omitempty"`
-	GitBranch        string                `json:"gitBranch,omitempty"`
+	Repos            []RepoInfo            `json:"repos,omitempty"`
 	Message          string                `json:"message,omitempty"`
 	// Env holds environment variables — each entry is either a plain string value
 	// or a secret reference (object with source + provider fields).
@@ -143,6 +142,14 @@ func (e *ManifestEnvEntry) UnmarshalJSON(data []byte) error {
 	e.Command = rf.Command
 	e.IsRef = true
 	return nil
+}
+
+// RepoInfo records the state of a git repository within the workspace.
+type RepoInfo struct {
+	Path   string `json:"path"`             // relative to workspace root ("." for root repo)
+	Remote string `json:"remote,omitempty"` // origin remote URL
+	Branch string `json:"branch,omitempty"`
+	Sha    string `json:"sha,omitempty"`
 }
 
 // Metrics holds runtime metrics for a checkpoint.

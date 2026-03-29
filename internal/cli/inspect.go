@@ -158,8 +158,20 @@ func newInspectCmd() *cobra.Command {
 					if len(cfgObj.Extensions) > 0 {
 						fmt.Printf("  Extensions: %s\n", strings.Join(cfgObj.Extensions, ", "))
 					}
-					if cfgObj.GitBranch != "" {
-						fmt.Printf("  Git:       %s (%s)\n", cfgObj.GitBranch, cfgObj.GitSha)
+					if len(cfgObj.Repos) > 0 {
+						if len(cfgObj.Repos) == 1 && cfgObj.Repos[0].Path == "." {
+							r := cfgObj.Repos[0]
+							fmt.Printf("  Git:       %s (%s)\n", r.Branch, r.Sha[:12])
+						} else {
+							fmt.Println("  Repos:")
+							for _, r := range cfgObj.Repos {
+								sha := r.Sha
+								if len(sha) > 12 {
+									sha = sha[:12]
+								}
+								fmt.Printf("    %s: %s (%s)\n", r.Path, r.Branch, sha)
+							}
+						}
 					}
 					if cfgObj.Environment != nil {
 						fmt.Printf("  Platform:  %s/%s\n", cfgObj.Environment.OS, cfgObj.Environment.Arch)

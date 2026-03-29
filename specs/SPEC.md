@@ -131,8 +131,9 @@ The `dev.bento.config` label contains the full bento metadata as JSON:
   "checkpoint": 3,
   "created": "2026-03-26T10:00:00Z",
   "status": "paused",
-  "gitSha": "a1b2c3d",
-  "gitBranch": "main",
+  "repos": [
+    {"path": ".", "remote": "git@github.com:myorg/myapp.git", "branch": "main", "sha": "a1b2c3d"}
+  ],
   "environment": { "os": "linux", "arch": "amd64" }
 }
 ```

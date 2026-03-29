@@ -14,8 +14,7 @@ func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 		Checkpoint:       5,
 		Created:          "2025-01-15T10:00:00Z",
 		Status:           "completed",
-		GitSha:           "deadbeef",
-		GitBranch:        "main",
+		Repos:            []RepoInfo{{Path: ".", Remote: "git@github.com:test/repo.git", Branch: "main", Sha: "deadbeef"}},
 		Message:          "checkpoint after refactor",
 		Env: map[string]ManifestEnvEntry{
 			"NODE_ENV": {Value: "development"},
@@ -67,11 +66,8 @@ func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 	if got.Status != cfg.Status {
 		t.Errorf("Status: got %q, want %q", got.Status, cfg.Status)
 	}
-	if got.GitSha != cfg.GitSha {
-		t.Errorf("GitSha: got %q, want %q", got.GitSha, cfg.GitSha)
-	}
-	if got.GitBranch != cfg.GitBranch {
-		t.Errorf("GitBranch: got %q, want %q", got.GitBranch, cfg.GitBranch)
+	if len(got.Repos) != 1 || got.Repos[0].Sha != "deadbeef" || got.Repos[0].Branch != "main" {
+		t.Errorf("Repos: got %v, want [{. main deadbeef}]", got.Repos)
 	}
 	if got.Message != cfg.Message {
 		t.Errorf("Message: got %q, want %q", got.Message, cfg.Message)
@@ -159,11 +155,8 @@ func TestMarshalUnmarshalRoundtrip_OptionalFieldsEmpty(t *testing.T) {
 	if got.Status != "" {
 		t.Errorf("Status should be empty, got %q", got.Status)
 	}
-	if got.GitSha != "" {
-		t.Errorf("GitSha should be empty, got %q", got.GitSha)
-	}
-	if got.GitBranch != "" {
-		t.Errorf("GitBranch should be empty, got %q", got.GitBranch)
+	if len(got.Repos) > 0 {
+		t.Errorf("Repos should be empty, got %v", got.Repos)
 	}
 	if got.Message != "" {
 		t.Errorf("Message should be empty, got %q", got.Message)
