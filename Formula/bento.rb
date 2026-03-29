@@ -5,20 +5,20 @@
 class Bento < Formula
   desc "Portable agent workspaces. Save, ship, restore."
   homepage "https://github.com/kajogo777/bento"
-  version "0.1.20"
+  version "0.1.21"
 
   on_macos do
     if Hardware::CPU.intel?
-      url "https://github.com/kajogo777/bento/releases/download/v0.1.20/bento_0.1.20_darwin_amd64.tar.gz"
-      sha256 "a346e3f7069649d31d55048f4cc20a9e851c0d0efb4d24c250d614ba26442bbc"
+      url "https://github.com/kajogo777/bento/releases/download/v0.1.21/bento_0.1.21_darwin_amd64.tar.gz"
+      sha256 "7fcace0a372a7f53d7799e0225216003860cdc89df2f4230c4d927ec0ff5d54d"
 
       define_method(:install) do
         bin.install "bento"
       end
     end
     if Hardware::CPU.arm?
-      url "https://github.com/kajogo777/bento/releases/download/v0.1.20/bento_0.1.20_darwin_arm64.tar.gz"
-      sha256 "c433da7372679ed499b87a5234e262970ed4ed8d6780663e971408cd3fee5873"
+      url "https://github.com/kajogo777/bento/releases/download/v0.1.21/bento_0.1.21_darwin_arm64.tar.gz"
+      sha256 "c8b25fb5042ff9c417d167eec2151c805efbee26cb2187fa6d8f78d68c8a2049"
 
       define_method(:install) do
         bin.install "bento"
@@ -28,15 +28,15 @@ class Bento < Formula
 
   on_linux do
     if Hardware::CPU.intel? && Hardware::CPU.is_64_bit?
-      url "https://github.com/kajogo777/bento/releases/download/v0.1.20/bento_0.1.20_linux_amd64.tar.gz"
-      sha256 "10ebc49914141aa98541591f51f596ec895fd0a0eb8d41e76187deb3cb76a0a6"
+      url "https://github.com/kajogo777/bento/releases/download/v0.1.21/bento_0.1.21_linux_amd64.tar.gz"
+      sha256 "563d7f04c40077ef619498a9e3bb4c9695d0011f1fc0d5f77f2479d3a43c8409"
       define_method(:install) do
         bin.install "bento"
       end
     end
     if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
-      url "https://github.com/kajogo777/bento/releases/download/v0.1.20/bento_0.1.20_linux_arm64.tar.gz"
-      sha256 "615f8637ef82f0e5dcc870463f427e8d801066a0c3198949713e3a3540567867"
+      url "https://github.com/kajogo777/bento/releases/download/v0.1.21/bento_0.1.21_linux_arm64.tar.gz"
+      sha256 "80830382156918f00e0a8ba7575c93ac969b8d34ca86470324bbe6141d77c332"
       define_method(:install) do
         bin.install "bento"
       end
