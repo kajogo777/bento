@@ -22,33 +22,17 @@ Git tracks your source code. **Bento tracks everything git doesn't.**
 
 ## How It Works
 
-Bento decomposes your workspace into semantic layers based on what the files are and how often they change:
+Bento decomposes your workspace into a **bento workspace** — a portable, layered package of your files, agent state, and dependencies:
 
-```
-┌───────────────────────────────────────────────────┐
-│               🍱 bento artifact                    │
-├─────────────┬───────────┬─────────────────────────┤
-│    deps     │   agent   │        project          │
-│             │           │                         │
-│ node_modules│  memory,  │  your code, tests,      │
-│ .venv,      │  plans,   │  configs, build files   │
-│ build cache │  history, │                         │
-│             │  skills   │                         │
-│   rarely    │  changes  │     changes often       │
-│   changes   │  often    │                         │
-├─────────────┴───────────┴─────────────────────────┤
-│                  metadata                          │
-│                                                    │
-│  env vars, secret references, git repos,           │
-│  extensions, task description, platform            │
-└────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="docs/bento-artifact.svg" alt="Bento workspace structure" width="600">
+</p>
 
 Layers that haven't changed share digests and aren't re-uploaded. Your 200MB `node_modules` is stored once, not once per checkpoint.
 
-Alongside layers, each checkpoint stores workspace metadata: environment variables (plain values and secret references that resolve on demand), the git repos the workspace depends on (branch, sha, remote for each), which extensions were active, and the OS/arch it was created on. This makes checkpoints self-describing — `bento open` on a new machine knows what the workspace needs.
+Each checkpoint also stores workspace metadata: environment variables, secret references (resolved on demand, never stored), the git repos the workspace depends on (branch, sha, remote for each), active extensions, and the OS/arch it was created on. This makes checkpoints self-describing — `bento open` on a new machine knows what the workspace needs.
 
-Bento artifacts are standard OCI artifacts. They work with any OCI-compatible registry (GHCR, Docker Hub, ECR) and interoperate with `docker`, `crane`, and `cosign`.
+A bento workspace is a standard OCI artifact. Push it to any OCI-compatible registry — Docker Hub, GHCR, ECR, Artifact Registry — and pull it anywhere. It interoperates with `docker`, `crane`, and `cosign` out of the box.
 
 ## Install
 
