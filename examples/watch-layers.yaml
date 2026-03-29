@@ -1,0 +1,52 @@
+# bento.yaml with per-layer watch methods
+# Each layer can control how it's monitored during `bento watch`:
+#   realtime  — instant detection via filesystem events (default for project)
+#   periodic  — checked every ~30s via polling (default for deps and agent)
+#   off       — not watched, but still included in saves
+agent: auto
+task: "full-stack development"
+
+layers:
+  - name: deps
+    patterns:
+      - "node_modules/**"
+      - ".venv/**"
+      - "vendor/**"
+    watch: periodic          # large dirs — polled to avoid FD exhaustion
+
+  - name: agent
+    patterns:
+      - ".claude/**"
+      - "CLAUDE.md"
+    watch: periodic          # burst writes during agent runs
+
+  - name: project
+    patterns:
+      - "**"
+    catch_all: true
+    watch: realtime          # source code — instant detection
+
+  - name: build-cache
+    patterns:
+      - "dist/**"
+      - ".next/**"
+      - ".nuxt/**"
+    watch: off               # build output — don't trigger saves
+
+ignore:
+  - "*.log"
+  - "tmp/**"
+  - "coverage/**"
+
+watch:
+  debounce: 5               # faster saves for active development
+  skip_secret_scan: true     # skip scanning on auto-saves for speed
+
+retention:
+  keep_tagged: true
+  tiers:
+    - max_age: 1h                # keep all checkpoints from the last hour
+    - max_age: 24h
+      resolution: 1h             # 1h–24h old: keep one per hour
+    - max_age: 168h
+      resolution: 24h            # 24h–7d old: keep one per day

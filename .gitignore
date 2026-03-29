@@ -32,4 +32,5 @@ Thumbs.db
 
 # Stakpak session files
 .stakpak/session*
+.stakpak
 .claude

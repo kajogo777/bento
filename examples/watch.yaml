@@ -1,0 +1,18 @@
+# bento.yaml with watch mode enabled
+# Just run `bento watch` — no config needed for defaults.
+# This example shows available tuning options.
+agent: auto
+task: "implement feature X"
+
+store: ~/.bento/store
+
+# Watch configuration
+watch:
+  debounce: 10            # seconds of quiet before saving (default: 10)
+  message: "auto-save"    # checkpoint message for auto-saves
+
+hooks:
+  post_restore: "npm install"
+
+retention:
+  keep_tagged: true

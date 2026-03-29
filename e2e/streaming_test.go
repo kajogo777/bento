@@ -222,6 +222,14 @@ func TestLargeFileCheckpointDiff(t *testing.T) {
 
 	// Mutate and save again.
 	writeLargeFile(t, filepath.Join(dir, "large_data.txt"), fileMB<<20)
+	// Append a unique line to ensure the content differs from cp-1
+	// (writeLargeFile uses a fixed seed, producing identical content).
+	f, err := os.OpenFile(filepath.Join(dir, "large_data.txt"), os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fmt.Fprintln(f, "mutated for cp-2")
+	_ = f.Close()
 	run(t, dir, "save", "--skip-secret-scan") // cp-2
 
 	_, elapsed, rss := runMeasured(t, dir, "diff", "cp-1", "cp-2")

@@ -187,6 +187,46 @@ func TestValidate_Valid(t *testing.T) {
   - name: assets
     patterns: ["assets/**"]
 `},
+		{"layer watch realtime", `layers:
+  - name: project
+    patterns: ["**"]
+    watch: realtime
+`},
+		{"layer watch periodic", `layers:
+  - name: deps
+    patterns: ["node_modules/**"]
+    watch: periodic
+`},
+		{"layer watch off", `layers:
+  - name: build
+    patterns: ["dist/**"]
+    watch: off
+`},
+		{"layer watch omitted", `layers:
+  - name: project
+    patterns: ["**"]
+`},
+		{"watch config debounce", "watch:\n  debounce: 5\n"},
+		{"watch config message", "watch:\n  message: auto\n"},
+		{"watch config skip_secret_scan", "watch:\n  skip_secret_scan: true\n"},
+		{"retention keep_last zero", "retention:\n  keep_last: 0\n"},
+		{"retention keep_last positive", "retention:\n  keep_last: 50\n"},
+		{"hooks timeout zero", "hooks:\n  timeout: 0\n"},
+		{"hooks timeout positive", "hooks:\n  timeout: 600\n"},
+		{"retention tiers valid", `retention:
+  tiers:
+    - max_age: 1h
+      resolution: 0s
+    - max_age: 24h
+      resolution: 1h
+    - max_age: 168h
+      resolution: 24h
+`},
+		{"retention tier resolution zero", `retention:
+  tiers:
+    - max_age: 1h
+      resolution: 0s
+`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -250,6 +290,68 @@ func TestValidate_Errors(t *testing.T) {
     path: /secret/token
 `,
 			"no 'source' field",
+		},
+		{
+			"invalid layer watch value",
+			`layers:
+  - name: project
+    patterns: ["**"]
+    watch: instant
+`,
+			`invalid watch value "instant"`,
+		},
+		{
+			"layer watch typo",
+			`layers:
+  - name: deps
+    patterns: ["node_modules/**"]
+    watch: polll
+`,
+			`invalid watch value "polll"`,
+		},
+		{
+			"watch debounce negative",
+			"watch:\n  debounce: -1\n",
+			"watch.debounce must be >= 1",
+		},
+		{
+			"retention keep_last negative",
+			"retention:\n  keep_last: -5\n",
+			"retention.keep_last must be >= 0",
+		},
+		{
+			"hooks timeout negative",
+			"hooks:\n  timeout: -10\n",
+			"hooks.timeout must be >= 0",
+		},
+		{
+			"retention tier zero max_age",
+			`retention:
+  tiers:
+    - max_age: 0s
+      resolution: 0s
+`,
+			"max_age must be a positive duration",
+		},
+		{
+			"retention tier resolution exceeds max_age",
+			`retention:
+  tiers:
+    - max_age: 1h
+      resolution: 2h
+`,
+			"resolution (2h0m0s) must be smaller than max_age (1h0m0s)",
+		},
+		{
+			"retention tiers not ascending",
+			`retention:
+  tiers:
+    - max_age: 24h
+      resolution: 1h
+    - max_age: 1h
+      resolution: 0s
+`,
+			"max_age (1h0m0s) must be larger than previous tier (24h0m0s)",
 		},
 	}
 	for _, tc := range cases {

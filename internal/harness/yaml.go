@@ -23,14 +23,33 @@ func (h *ConfigLayerHarness) Layers(_ string) []LayerDef {
 	for _, l := range h.layers {
 		mediaType := manifest.MediaTypeForLayer(l.Name)
 		catchAll := l.CatchAll || l.Name == "project"
+
+		watchMethod := l.Watch
+		if watchMethod == "" {
+			watchMethod = defaultWatchMethod(l.Name)
+		}
+
 		defs = append(defs, LayerDef{
-			Name:      l.Name,
-			Patterns:  l.Patterns,
-			MediaType: mediaType,
-			CatchAll:  catchAll,
+			Name:        l.Name,
+			Patterns:    l.Patterns,
+			MediaType:   mediaType,
+			CatchAll:    catchAll,
+			WatchMethod: watchMethod,
 		})
 	}
 	return defs
+}
+
+// defaultWatchMethod returns the default watch method for a layer based on its
+// name. Layers named "deps" or "agent" default to periodic polling; all others
+// default to realtime (fsnotify).
+func defaultWatchMethod(layerName string) string {
+	switch layerName {
+	case "deps", "agent":
+		return WatchPeriodic
+	default:
+		return WatchRealtime
+	}
 }
 
 func (h *ConfigLayerHarness) SessionConfig(workDir string) (*SessionConfig, error) {

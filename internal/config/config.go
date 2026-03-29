@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,15 +24,19 @@ type BentoConfig struct {
 	Env       map[string]EnvEntry `yaml:"env,omitempty"`
 	Hooks     HooksConfig         `yaml:"hooks,omitempty"`
 	Retention RetentionConfig     `yaml:"retention,omitempty"`
+	Watch     WatchConfig         `yaml:"watch,omitempty"`
 }
 
 // LayerConfig defines a layer in bento.yaml.
 // Patterns starting with ~/ or / are treated as external paths.
 // CatchAll, when true, makes this layer capture all files not matched by other layers.
+// Watch controls how this layer is monitored during `bento watch`:
+// "realtime" (instant detection), "periodic" (check every ~30s), or "off" (not watched).
 type LayerConfig struct {
 	Name     string   `yaml:"name"`
 	Patterns []string `yaml:"patterns"`
 	CatchAll bool     `yaml:"catch_all,omitempty"`
+	Watch    string   `yaml:"watch,omitempty"`
 }
 
 // EnvEntry represents a single environment variable in bento.yaml.
@@ -127,8 +132,26 @@ type HooksConfig struct {
 
 // RetentionConfig defines garbage collection policy.
 type RetentionConfig struct {
-	KeepLast   int  `yaml:"keep_last,omitempty"`
-	KeepTagged bool `yaml:"keep_tagged,omitempty"`
+	KeepLast   int             `yaml:"keep_last,omitempty"`
+	KeepTagged bool            `yaml:"keep_tagged,omitempty"`
+	Tiers      []RetentionTier `yaml:"tiers,omitempty"`
+}
+
+// RetentionTier defines a time-based retention tier for watch-mode auto-GC.
+// Behavior depends on Resolution:
+//   - nil (omitted in YAML): keep all checkpoints in this age range
+//   - 0:                     keep none — delete all checkpoints in this age range
+//   - >0 (e.g. 1h):         keep one checkpoint per interval (newest in each bucket)
+type RetentionTier struct {
+	MaxAge     time.Duration  `yaml:"max_age"`
+	Resolution *time.Duration `yaml:"resolution,omitempty"`
+}
+
+// WatchConfig defines configuration for `bento watch` auto-checkpointing.
+type WatchConfig struct {
+	Debounce       int    `yaml:"debounce,omitempty"`         // seconds of quiet before saving; default 10
+	Message        string `yaml:"message,omitempty"`          // checkpoint message; default "auto-save"
+	SkipSecretScan bool   `yaml:"skip_secret_scan,omitempty"` // skip secret scanning on auto-saves
 }
 
 // DefaultStorePath returns the platform-appropriate default store location.
@@ -202,6 +225,16 @@ func (c *BentoConfig) Validate() error {
 			if len(l.Patterns) == 0 && !isCatchAll {
 				return fmt.Errorf("layer %q has no patterns and is not a catch_all — it will always be empty; add patterns or set catch_all: true", l.Name)
 			}
+
+			// Validate watch value.
+			if l.Watch != "" {
+				switch l.Watch {
+				case "realtime", "periodic", "off":
+					// valid
+				default:
+					return fmt.Errorf("layer %q has invalid watch value %q — must be \"realtime\", \"periodic\", or \"off\"", l.Name, l.Watch)
+				}
+			}
 		}
 	}
 
@@ -210,6 +243,40 @@ func (c *BentoConfig) Validate() error {
 		if entry.IsRef && entry.Source == "" {
 			return fmt.Errorf("env %q has a reference form but no source — set source: to the secret provider (e.g. env, file, exec)", name)
 		}
+	}
+
+	// Validate watch config.
+	if c.Watch.Debounce != 0 && c.Watch.Debounce < 1 {
+		return fmt.Errorf("watch.debounce must be >= 1 second (got %d)", c.Watch.Debounce)
+	}
+
+	// Validate retention config.
+	if c.Retention.KeepLast < 0 {
+		return fmt.Errorf("retention.keep_last must be >= 0 (got %d)", c.Retention.KeepLast)
+	}
+	if len(c.Retention.Tiers) > 0 {
+		for i, tier := range c.Retention.Tiers {
+			if tier.MaxAge <= 0 {
+				return fmt.Errorf("retention.tiers[%d]: max_age must be a positive duration (e.g. \"1h\", \"24h\")", i)
+			}
+			if tier.Resolution != nil {
+				r := *tier.Resolution
+				if r < 0 {
+					return fmt.Errorf("retention.tiers[%d]: resolution must be >= 0", i)
+				}
+				if r > 0 && r >= tier.MaxAge {
+					return fmt.Errorf("retention.tiers[%d]: resolution (%v) must be smaller than max_age (%v)", i, r, tier.MaxAge)
+				}
+			}
+			if i > 0 && tier.MaxAge <= c.Retention.Tiers[i-1].MaxAge {
+				return fmt.Errorf("retention.tiers[%d]: max_age (%v) must be larger than previous tier (%v)", i, tier.MaxAge, c.Retention.Tiers[i-1].MaxAge)
+			}
+		}
+	}
+
+	// Validate hooks config.
+	if c.Hooks.Timeout < 0 {
+		return fmt.Errorf("hooks.timeout must be >= 0 (got %d)", c.Hooks.Timeout)
 	}
 
 	return nil

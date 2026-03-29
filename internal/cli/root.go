@@ -177,6 +177,7 @@ func NewRootCmd(version string) *cobra.Command {
 		newGCCmd(),
 		newEnvCmd(),
 		newAddCmd(),
+		newWatchCmd(),
 	)
 
 	return rootCmd

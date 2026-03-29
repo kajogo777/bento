@@ -169,6 +169,34 @@ hooks:
 
 Pre-hooks abort the operation on failure. Post-hooks warn but continue.
 
+### Watch Mode
+
+`bento watch` runs a background file-system watcher that automatically creates checkpoints as you work:
+
+```bash
+bento watch                          # start watching (Ctrl-C to stop)
+bento watch --debounce 5 -m "wip"   # 5s quiet period, custom message
+```
+
+Each layer is monitored according to its watch method:
+
+| Layer | Watch | Behavior |
+|-------|-------|----------|
+| **project** | `realtime` | Instant detection via fsnotify |
+| **deps** | `periodic` | Checked every ~30s (avoids FD exhaustion on large dirs) |
+| **agent** | `periodic` | Checked every ~30s |
+
+Unchanged saves are skipped automatically. Old checkpoints are pruned via tiered retention (full granularity for the last hour, hourly for 24h, daily for 7d).
+
+Override watch methods per layer in `bento.yaml`:
+
+```yaml
+layers:
+  - name: build-cache
+    patterns: ["dist/**"]
+    watch: off             # don't trigger saves on build output
+```
+
 ### Secrets
 
 Bento never stores secrets. It stores references that are resolved on demand:
@@ -207,6 +235,7 @@ bento fork <ref> [-m <message>]               Branch from a checkpoint
 bento tag <ref> <new-tag>                     Tag a checkpoint
 bento inspect [ref]                           Show metadata and file tree
 bento push [<remote>]                         Push to registry
+bento watch [-m <message>] [--debounce <s>]   Watch and auto-checkpoint on changes
 bento gc [--keep-last <n>] [--keep-tagged]    Clean up old checkpoints and blobs
 bento env show                                Show env vars and secret refs
 bento env set <key> <value>                   Set a plain env var
@@ -335,7 +364,7 @@ Yes. Checkpoints are portable across macOS, Linux, and Windows.
 - [ ] Store schemes (`oci://`, `file://`)
 - [ ] `bento attach` (OCI referrers for diffs, test results, logs)
 - [ ] MCP server (agents checkpoint themselves)
-- [ ] `bento watch` (auto-checkpointing)
+- [x] `bento watch` (auto-checkpointing)
 - [ ] Docker sandbox integration
 
 ## License

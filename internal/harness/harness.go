@@ -10,12 +10,27 @@ import (
 	"github.com/kajogo777/bento/internal/secrets"
 )
 
+// WatchMethod constants for per-layer watch behavior.
+const (
+	WatchRealtime = "realtime" // fsnotify — instant detection
+	WatchPeriodic = "periodic" // polling — periodic fingerprint check
+	WatchOff      = "off"      // not watched (still included in saves)
+)
+
+// ValidWatchMethods is the set of accepted watch values.
+var ValidWatchMethods = map[string]bool{
+	WatchRealtime: true,
+	WatchPeriodic: true,
+	WatchOff:      true,
+}
+
 // LayerDef defines a layer for file assignment.
 type LayerDef struct {
-	Name     string
-	Patterns []string // workspace-relative globs; ~/... or /... = external paths
-	MediaType string
-	CatchAll  bool // if true, unmatched files fall into this layer
+	Name        string
+	Patterns    []string // workspace-relative globs; ~/... or /... = external paths
+	MediaType   string
+	CatchAll    bool   // if true, unmatched files fall into this layer
+	WatchMethod string // "realtime", "periodic", or "off"; defaults to "realtime"
 }
 
 // SessionConfig holds metadata extracted from the workspace.
@@ -65,26 +80,29 @@ func BaseSessionConfig(agentName, workDir string) *SessionConfig {
 
 func AgentLayer(patterns []string) LayerDef {
 	return LayerDef{
-		Name:      "agent",
-		Patterns:  patterns,
-		MediaType: manifest.MediaTypeAgent,
+		Name:        "agent",
+		Patterns:    patterns,
+		MediaType:   manifest.MediaTypeAgent,
+		WatchMethod: WatchPeriodic,
 	}
 }
 
 func DepsLayer(patterns []string) LayerDef {
 	return LayerDef{
-		Name:      "deps",
-		Patterns:  patterns,
-		MediaType: manifest.MediaTypeDeps,
+		Name:        "deps",
+		Patterns:    patterns,
+		MediaType:   manifest.MediaTypeDeps,
+		WatchMethod: WatchPeriodic,
 	}
 }
 
 func ProjectLayer(patterns []string) LayerDef {
 	return LayerDef{
-		Name:      "project",
-		Patterns:  patterns,
-		MediaType: manifest.MediaTypeProject,
-		CatchAll:  true,
+		Name:        "project",
+		Patterns:    patterns,
+		MediaType:   manifest.MediaTypeProject,
+		CatchAll:    true,
+		WatchMethod: WatchRealtime,
 	}
 }
 
