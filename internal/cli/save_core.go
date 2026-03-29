@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/kajogo777/bento/internal/config"
+	"github.com/kajogo777/bento/internal/extension"
 	"github.com/kajogo777/bento/internal/hooks"
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/kajogo777/bento/internal/registry"
@@ -47,16 +50,14 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		return nil, fmt.Errorf("loading bento.yaml: %w", err)
 	}
 
-	// Resolve agent harness
-	h := resolveHarness(opts.Dir, cfg)
-	layers := h.Layers(opts.Dir)
+	// Resolve extensions
+	resolved := resolveExtensions(opts.Dir, cfg)
+	layers := resolved.Layers
 
 	// Run pre_save hook
 	hookCmd := cfg.Hooks.PreSave
-	if hookCmd == "" {
-		if defaults := h.DefaultHooks(); defaults["pre_save"] != "" {
-			hookCmd = defaults["pre_save"]
-		}
+	if hookCmd == "" && resolved.Hooks != nil {
+		hookCmd = resolved.Hooks["pre_save"]
 	}
 	if hookCmd != "" {
 		runner := hooks.NewRunner(opts.Dir, cfg.Hooks.Timeout)
@@ -66,7 +67,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 	}
 
 	// Collect ignore patterns
-	ignorePatterns := append(config.DefaultIgnorePatterns, h.Ignore()...)
+	ignorePatterns := append(config.DefaultIgnorePatterns, resolved.Ignore...)
 	ignorePatterns = append(ignorePatterns, cfg.Ignore...)
 	if bentoIgnore, err := workspace.LoadBentoIgnore(opts.Dir); err == nil {
 		ignorePatterns = append(ignorePatterns, bentoIgnore...)
@@ -81,7 +82,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 
 	// Secret scan
 	if !opts.SkipSecretScan {
-		secretPatterns := h.SecretPatterns()
+		secretPatterns := extension.CommonSecretPatterns
 		if len(secretPatterns) > 0 {
 			secretScanner, err := secrets.NewSecretScanner(secretPatterns)
 			if err != nil {
@@ -107,7 +108,8 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		}
 	}
 
-	sc, _ := h.SessionConfig(opts.Dir)
+	// Collect active extension names for manifest metadata
+	activeExtensions := extension.ActiveExtensionNames(opts.Dir, cfg.Extensions)
 
 	// Open store
 	store, err := registry.NewStore(cfg.StorePath())
@@ -187,7 +189,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 
 			mediaType := ld.MediaType
 			if mediaType == "" {
-				mediaType = manifest.MediaTypeForLayer(ld.Name)
+				mediaType = manifest.LayerMediaType
 			}
 
 			totalFiles := len(wsFiles) + len(extFiles)
@@ -277,10 +279,10 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 	cfgObj := &manifest.BentoConfigObj{
 		SchemaVersion:    "1.0.0",
 		WorkspaceID:      cfg.ID,
+		Extensions:       activeExtensions,
 		Checkpoint:       seq,
 		Created:          time.Now().UTC().Format(time.RFC3339),
 		Status:           "paused",
-		Harness:          h.Name(),
 		ParentCheckpoint: parentDigest,
 		Task:             cfg.Task,
 		Environment: &manifest.Environment{
@@ -288,11 +290,11 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 			Arch: runtime.GOARCH,
 		},
 	}
-	if sc != nil {
-		cfgObj.Agent = sc.Agent
-		cfgObj.AgentVersion = sc.AgentVersion
-		cfgObj.GitSha = sc.GitSha
-		cfgObj.GitBranch = sc.GitBranch
+	if gitSha, err := gitOutput(opts.Dir, "rev-parse", "HEAD"); err == nil {
+		cfgObj.GitSha = gitSha
+	}
+	if gitBranch, err := gitOutput(opts.Dir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+		cfgObj.GitBranch = gitBranch
 	}
 	cfgObj.Message = opts.Message
 
@@ -392,10 +394,8 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 
 	// Run post_save hook
 	postHookCmd := cfg.Hooks.PostSave
-	if postHookCmd == "" {
-		if defaults := h.DefaultHooks(); defaults["post_save"] != "" {
-			postHookCmd = defaults["post_save"]
-		}
+	if postHookCmd == "" && resolved.Hooks != nil {
+		postHookCmd = resolved.Hooks["post_save"]
 	}
 	if postHookCmd != "" {
 		runner := hooks.NewRunner(opts.Dir, cfg.Hooks.Timeout)
@@ -409,4 +409,15 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		Digest: manifestDigest,
 		Seq:    seq,
 	}, nil
+}
+
+// gitOutput runs a git command and returns trimmed stdout.
+func gitOutput(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }

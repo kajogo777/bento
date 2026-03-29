@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/kajogo777/bento/internal/config"
-	"github.com/kajogo777/bento/internal/harness"
+	"github.com/kajogo777/bento/internal/extension"
 	"github.com/kajogo777/bento/internal/policy"
 	"github.com/kajogo777/bento/internal/registry"
 	"github.com/kajogo777/bento/internal/watcher"
@@ -47,12 +47,12 @@ Layers with watch: off are not monitored (still included in saves).`,
 				return fmt.Errorf("loading bento.yaml: %w", err)
 			}
 
-			// Resolve harness and layers.
-			h := resolveHarness(dir, cfg)
-			layers := h.Layers(dir)
+			// Resolve extensions and layers.
+			resolved := resolveExtensions(dir, cfg)
+			layers := resolved.Layers
 
 			// Collect ignore patterns.
-			ignorePatterns := append(config.DefaultIgnorePatterns, h.Ignore()...)
+			ignorePatterns := append(config.DefaultIgnorePatterns, resolved.Ignore...)
 			ignorePatterns = append(ignorePatterns, cfg.Ignore...)
 			if bentoIgnore, err := workspace.LoadBentoIgnore(dir); err == nil {
 				ignorePatterns = append(ignorePatterns, bentoIgnore...)
@@ -162,7 +162,7 @@ Layers with watch: off are not monitored (still included in saves).`,
 }
 
 // printWatchBanner prints a summary of the watch configuration at startup.
-func printWatchBanner(dir string, layers []harness.LayerDef, debounce int) {
+func printWatchBanner(dir string, layers []extension.LayerDef, debounce int) {
 	fmt.Printf("Workspace: %s\n", dir)
 	fmt.Printf("Debounce:  %ds\n", debounce)
 	fmt.Println("Layers:")
@@ -172,7 +172,7 @@ func printWatchBanner(dir string, layers []harness.LayerDef, debounce int) {
 			method = "realtime"
 		}
 		detail := ""
-		if method == harness.WatchPeriodic {
+		if method == extension.WatchPeriodic {
 			var dirs []string
 			for _, p := range l.Patterns {
 				d := strings.TrimSuffix(p, "/**")

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/kajogo777/bento/internal/harness"
+	"github.com/kajogo777/bento/internal/extension"
 	"github.com/kajogo777/bento/internal/workspace"
 )
 
@@ -21,7 +21,7 @@ type Config struct {
 	WorkDir          string
 	DebounceDuration time.Duration         // quiet period before saving; default 10s
 	PollInterval     time.Duration         // for periodic-watch layers; default 30s
-	Layers           []harness.LayerDef    // layers with WatchMethod set
+	Layers           []extension.LayerDef    // layers with WatchMethod set
 	IgnorePatterns   []string
 	SaveFunc         func() error          // called when debounce fires
 }
@@ -61,12 +61,12 @@ func New(cfg Config) (*Watcher, error) {
 	// Collect periodic dirs from poll-method layers and add realtime dirs.
 	for _, layer := range cfg.Layers {
 		switch layer.WatchMethod {
-		case harness.WatchPeriodic:
+		case extension.WatchPeriodic:
 			dirs := periodicDirsFromLayer(cfg.WorkDir, layer)
 			w.periodicDirs = append(w.periodicDirs, dirs...)
-		case harness.WatchRealtime:
+		case extension.WatchRealtime:
 			// fsnotify dirs are added by the recursive walker below
-		case harness.WatchOff:
+		case extension.WatchOff:
 			// not watched at all
 		}
 	}
@@ -90,7 +90,7 @@ func New(cfg Config) (*Watcher, error) {
 
 // Run starts the event loop. It blocks until ctx is cancelled.
 func (w *Watcher) Run(ctx context.Context) error {
-	defer w.fsWatcher.Close()
+	defer w.fsWatcher.Close() //nolint:errcheck
 
 	debounce := time.NewTimer(0)
 	if !debounce.Stop() {
@@ -102,7 +102,6 @@ func (w *Watcher) Run(ctx context.Context) error {
 	defer pollTicker.Stop()
 
 	pending := false
-	saving := false
 
 	for {
 		select {
@@ -130,9 +129,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 				}
 			}
 			pending = true
-			if !saving {
-				debounce.Reset(w.cfg.DebounceDuration)
-			}
+			debounce.Reset(w.cfg.DebounceDuration)
 
 		// --- periodic check (for periodic-watch layers) ---
 		case <-pollTicker.C:
@@ -154,20 +151,16 @@ func (w *Watcher) Run(ctx context.Context) error {
 			}
 			if changed {
 				pending = true
-				if !saving {
-					debounce.Reset(w.cfg.DebounceDuration)
-				}
+				debounce.Reset(w.cfg.DebounceDuration)
 			}
 
 		// --- debounce fires → save ---
 		case <-debounce.C:
-			if pending && !saving {
+			if pending {
 				pending = false
-				saving = true
 				if err := w.cfg.SaveFunc(); err != nil {
-					fmt.Fprintf(os.Stderr, "⚠ auto-save failed: %v\n", err)
+					fmt.Fprintf(os.Stderr, "⚠ auto-save failed: %v\n", err) //nolint:errcheck
 				}
-				saving = false
 				// If events arrived during save, schedule another save.
 				if pending {
 					debounce.Reset(w.cfg.DebounceDuration)
@@ -181,11 +174,9 @@ func (w *Watcher) Run(ctx context.Context) error {
 			}
 			if errors.Is(err, fsnotify.ErrEventOverflow) {
 				pending = true
-				if !saving {
-					debounce.Reset(w.cfg.DebounceDuration)
-				}
+				debounce.Reset(w.cfg.DebounceDuration)
 			}
-			fmt.Fprintf(os.Stderr, "⚠ watcher error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "⚠ watcher error: %v\n", err) //nolint:errcheck
 		}
 	}
 }
@@ -232,7 +223,7 @@ func (w *Watcher) isPeriodicDir(absPath string) bool {
 func (w *Watcher) refreshPeriodicDirs() {
 	var updated []string
 	for _, layer := range w.cfg.Layers {
-		if layer.WatchMethod == harness.WatchPeriodic {
+		if layer.WatchMethod == extension.WatchPeriodic {
 			dirs := periodicDirsFromLayer(w.cfg.WorkDir, layer)
 			updated = append(updated, dirs...)
 		}
@@ -259,11 +250,11 @@ func isRelevantEvent(e fsnotify.Event) bool {
 // periodicDirsFromLayer extracts root directories from a layer's patterns
 // for periodic polling. "node_modules/**" → "<workDir>/node_modules", etc.
 // External patterns (~/...) are resolved to absolute paths.
-func periodicDirsFromLayer(workDir string, layer harness.LayerDef) []string {
+func periodicDirsFromLayer(workDir string, layer extension.LayerDef) []string {
 	var dirs []string
 	for _, p := range layer.Patterns {
-		if harness.IsExternalPattern(p) {
-			resolved := strings.TrimSuffix(harness.ExpandHome(p), "/")
+		if extension.IsExternalPattern(p) {
+			resolved := strings.TrimSuffix(extension.ExpandHome(p), "/")
 			if info, err := os.Stat(resolved); err == nil && info.IsDir() {
 				dirs = append(dirs, resolved)
 			}
@@ -298,7 +289,7 @@ func layerFingerprint(dir string) (uint64, error) {
 		if err != nil {
 			continue
 		}
-		fmt.Fprintf(h, "%s\t%d\t%d\n", e.Name(), info.ModTime().UnixNano(), info.Size())
+		fmt.Fprintf(h, "%s\t%d\t%d\n", e.Name(), info.ModTime().UnixNano(), info.Size()) //nolint:errcheck
 	}
 	return h.Sum64(), nil
 }

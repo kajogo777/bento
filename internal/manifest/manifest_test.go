@@ -47,14 +47,12 @@ func makeLayerInfo(name, mediaType string, data []byte, fileCount int) LayerInfo
 func TestBuildManifest(t *testing.T) {
 	cfg := &BentoConfigObj{
 		SchemaVersion:    "1.0",
-		Agent:            "claude",
-		AgentVersion:     "3.5",
+		Extensions: []string{"claude-code"},
 		Task:             "build-feature",
 		WorkspaceID:      "ws-abc123def456",
 		ParentCheckpoint: "sha256:parent",
 		Checkpoint:       3,
 		Created:          "2025-01-15T10:00:00Z",
-		Harness:          "docker",
 		Message:          "third checkpoint",
 	}
 
@@ -115,14 +113,11 @@ func TestBuildManifest(t *testing.T) {
 	if annotations[AnnotationCheckpointParent] != "sha256:parent" {
 		t.Errorf("annotation parent: got %q, want %q", annotations[AnnotationCheckpointParent], "sha256:parent")
 	}
-	if annotations[AnnotationAgent] != "claude" {
-		t.Errorf("annotation agent: got %q, want %q", annotations[AnnotationAgent], "claude")
+	if annotations[AnnotationExtensions] != "claude-code" {
+		t.Errorf("annotation extensions: got %q, want %q", annotations[AnnotationExtensions], "claude-code")
 	}
 	if annotations[AnnotationTask] != "build-feature" {
 		t.Errorf("annotation task: got %q, want %q", annotations[AnnotationTask], "build-feature")
-	}
-	if annotations[AnnotationHarness] != "docker" {
-		t.Errorf("annotation harness: got %q, want %q", annotations[AnnotationHarness], "docker")
 	}
 	if annotations[AnnotationCheckpointMessage] != "third checkpoint" {
 		t.Errorf("annotation message: got %q, want %q", annotations[AnnotationCheckpointMessage], "third checkpoint")
@@ -136,8 +131,8 @@ func TestBuildManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to parse config JSON: %v", err)
 	}
-	if cfgParsed.Agent != "claude" {
-		t.Errorf("config agent: got %q, want %q", cfgParsed.Agent, "claude")
+	if len(cfgParsed.Extensions) == 0 || cfgParsed.Extensions[0] != "claude-code" {
+		t.Errorf("config extensions: got %q, want %q", cfgParsed.Extensions, "claude-code")
 	}
 	if cfgParsed.Checkpoint != 3 {
 		t.Errorf("config checkpoint: got %d, want 3", cfgParsed.Checkpoint)

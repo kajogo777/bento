@@ -140,8 +140,8 @@ func newInspectCmd() *cobra.Command {
 				fmt.Printf("Parent:     %s\n", info.Parent)
 			}
 			fmt.Printf("Created:    %s\n", info.Created)
-			if info.Agent != "" {
-				fmt.Printf("Agent:      %s\n", info.Agent)
+			if info.Extensions != "" {
+				fmt.Printf("Extensions: %s\n", info.Extensions)
 			}
 			if info.Message != "" {
 				fmt.Printf("Message:    %s\n", info.Message)
@@ -155,8 +155,8 @@ func newInspectCmd() *cobra.Command {
 					if cfgObj.Task != "" {
 						fmt.Printf("  Task:      %s\n", cfgObj.Task)
 					}
-					if cfgObj.Harness != "" {
-						fmt.Printf("  Agent:     %s\n", cfgObj.Harness)
+					if len(cfgObj.Extensions) > 0 {
+						fmt.Printf("  Extensions: %s\n", strings.Join(cfgObj.Extensions, ", "))
 					}
 					if cfgObj.GitBranch != "" {
 						fmt.Printf("  Git:       %s (%s)\n", cfgObj.GitBranch, cfgObj.GitSha)
@@ -183,7 +183,7 @@ func newInspectCmd() *cobra.Command {
 				// Get file count from annotation.
 				fileCount := 0
 				if fc, ok := layerDesc.Annotations["dev.bento.layer.file-count"]; ok {
-					fmt.Sscanf(fc, "%d", &fileCount)
+					_, _ = fmt.Sscanf(fc, "%d", &fileCount)
 				}
 
 				// If --files, read actual file list from layer blob.

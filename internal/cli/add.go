@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/kajogo777/bento/internal/config"
-	"github.com/kajogo777/bento/internal/harness"
+	"github.com/kajogo777/bento/internal/extension"
 	"github.com/kajogo777/bento/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -17,7 +17,7 @@ func newAddCmd() *cobra.Command {
 		Short: "Add a file to a layer's tracking patterns",
 		Long: `Adds a file path as a pattern to the specified layer in bento.yaml.
 
-If bento.yaml has no custom layers section, the detected harness layers are
+If bento.yaml has no custom layers section, the detected extension layers are
 written to bento.yaml first (so you can customize them), then the pattern is
 added to the target layer.
 
@@ -44,11 +44,11 @@ that appears before the catch-all will move it out of the catch-all.`,
 				return fmt.Errorf("file not found: %s", filePath)
 			}
 
-			// If no custom layers in config, populate from harness
+			// If no custom layers in config, populate from extensions
 			if len(cfg.Layers) == 0 {
-				h := resolveHarness(dir, cfg)
-				cfg.Layers = harnessToConfig(h.Layers(dir))
-				fmt.Println("Initialized layers in bento.yaml from detected harness.")
+				resolved := resolveExtensions(dir, cfg)
+				cfg.Layers = layerDefsToConfig(resolved.Layers)
+				fmt.Println("Initialized layers in bento.yaml from detected extensions.")
 			}
 
 			// Find target layer
@@ -89,15 +89,15 @@ that appears before the catch-all will move it out of the catch-all.`,
 	return cmd
 }
 
-// harnessToConfig converts harness LayerDefs to config LayerConfigs,
+// layerDefsToConfig converts extension LayerDefs to config LayerConfigs,
 // filtering out external patterns (~/... or /...) since those are
 // machine-specific and shouldn't be persisted in bento.yaml.
-func harnessToConfig(defs []harness.LayerDef) []config.LayerConfig {
+func layerDefsToConfig(defs []extension.LayerDef) []config.LayerConfig {
 	layers := make([]config.LayerConfig, 0, len(defs))
 	for _, ld := range defs {
 		var patterns []string
 		for _, p := range ld.Patterns {
-			if !harness.IsExternalPattern(p) {
+			if !extension.IsExternalPattern(p) {
 				patterns = append(patterns, p)
 			}
 		}

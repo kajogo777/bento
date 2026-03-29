@@ -1,13 +1,12 @@
-package harness
+package extension
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
-// ClaudeCode detects and configures the Claude Code agent framework.
+// ClaudeCode detects the Claude Code agent framework.
 type ClaudeCode struct{}
 
 func (c ClaudeCode) Name() string { return "claude-code" }
@@ -22,7 +21,7 @@ func (c ClaudeCode) Detect(workDir string) bool {
 	return false
 }
 
-func (c ClaudeCode) Layers(workDir string) []LayerDef {
+func (c ClaudeCode) Contribute(workDir string) Contribution {
 	agentPatterns := []string{"CLAUDE.md", ".claude/**"}
 
 	// Add external session path if it exists
@@ -30,28 +29,13 @@ func (c ClaudeCode) Layers(workDir string) []LayerDef {
 		agentPatterns = append(agentPatterns, extPath+"/")
 	}
 
-	return []LayerDef{
-		DepsLayer(append(CommonDepsPatterns, ".tool-versions")),
-		AgentLayer(agentPatterns),
-		ProjectLayer(CommonSourcePatterns),
+	return Contribution{
+		Layers: map[string][]string{
+			"agent": agentPatterns,
+		},
+		Ignore: []string{".claude/credentials", ".claude/oauth_tokens"},
 	}
 }
-
-func (c ClaudeCode) SessionConfig(workDir string) (*SessionConfig, error) {
-	cfg := BaseSessionConfig(c.Name(), workDir)
-	if out, err := exec.Command("claude", "--version").Output(); err == nil {
-		cfg.AgentVersion = strings.TrimSpace(string(out))
-	}
-	return cfg, nil
-}
-
-func (c ClaudeCode) Ignore() []string {
-	patterns := append(CommonIgnorePatterns, CommonCredentialFiles...)
-	return append(patterns, ".claude/credentials", ".claude/oauth_tokens")
-}
-
-func (c ClaudeCode) SecretPatterns() []string { return CommonSecretPatterns }
-func (c ClaudeCode) DefaultHooks() map[string]string { return nil }
 
 // claudeProjectPath returns the absolute path to Claude Code's project-specific
 // session directory, or empty string if it doesn't exist.

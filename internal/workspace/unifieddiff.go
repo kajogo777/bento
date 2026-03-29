@@ -26,11 +26,11 @@ func UnifiedDiff(oldName, newName string, oldLines, newLines []string, contextLi
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("--- %s\n", oldName))
-	sb.WriteString(fmt.Sprintf("+++ %s\n", newName))
+	fmt.Fprintf(&sb, "--- %s\n", oldName)
+	fmt.Fprintf(&sb, "+++ %s\n", newName)
 
 	for _, h := range hunks {
-		sb.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", h.oldStart, h.oldCount, h.newStart, h.newCount))
+		fmt.Fprintf(&sb, "@@ -%d,%d +%d,%d @@\n", h.oldStart, h.oldCount, h.newStart, h.newCount)
 		for _, l := range h.lines {
 			sb.WriteString(l)
 			sb.WriteByte('\n')

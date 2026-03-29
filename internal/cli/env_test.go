@@ -27,11 +27,11 @@ func execEnv(t *testing.T, dir string, args ...string) string {
 	rootCmd.SetArgs(fullArgs)
 	err := rootCmd.Execute()
 
-	w.Close()
+	w.Close() //nolint:errcheck
 	os.Stdout = oldStdout
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	out := buf.String()
 
 	if err != nil {
@@ -56,11 +56,11 @@ func execEnvExpectErr(t *testing.T, dir string, args ...string) string {
 	rootCmd.SetArgs(fullArgs)
 	err := rootCmd.Execute()
 
-	w.Close()
+	w.Close() //nolint:errcheck
 	os.Stdout = oldStdout
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	out := buf.String()
 
 	if err == nil {
@@ -74,7 +74,7 @@ func setupWorkspace(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	storeDir := t.TempDir()
-	yaml := "id: ws-test\nstore: " + storeDir + "\nagent: auto\n"
+	yaml := "id: ws-test\nstore: " + storeDir + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "bento.yaml"), []byte(yaml), 0644); err != nil {
 		t.Fatal(err)
 	}

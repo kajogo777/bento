@@ -57,7 +57,7 @@ func TestLocalStore_FullLifecycle(t *testing.T) {
 	// Build a checkpoint.
 	cfg := &manifest.BentoConfigObj{
 		SchemaVersion: "1.0",
-		Agent:         "claude",
+		Extensions:    []string{"claude-code"},
 		Checkpoint:    1,
 		Created:       "2025-01-15T10:00:00Z",
 		Message:       "first checkpoint",
@@ -131,8 +131,8 @@ func TestLocalStore_FullLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to parse loaded config: %v", err)
 	}
-	if loadedCfg.Agent != "claude" {
-		t.Errorf("loaded config agent: got %q, want %q", loadedCfg.Agent, "claude")
+	if strings.Join(loadedCfg.Extensions, ",") != "claude-code" {
+		t.Errorf("loaded config extensions: got %q, want %q", strings.Join(loadedCfg.Extensions, ","), "claude-code")
 	}
 	if loadedCfg.Checkpoint != 1 {
 		t.Errorf("loaded config checkpoint: got %d, want 1", loadedCfg.Checkpoint)

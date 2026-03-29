@@ -11,7 +11,6 @@ func TestLoad(t *testing.T) {
 	dir := t.TempDir()
 	yaml := `store: /tmp/bento-test-store
 remote: s3://my-bucket
-agent: cursor
 task: my-task
 env:
   FOO: bar
@@ -37,9 +36,6 @@ retention:
 	if cfg.Remote != "s3://my-bucket" {
 		t.Errorf("Remote = %q, want %q", cfg.Remote, "s3://my-bucket")
 	}
-	if cfg.Agent != "cursor" {
-		t.Errorf("Agent = %q, want %q", cfg.Agent, "cursor")
-	}
 	if cfg.Task != "my-task" {
 		t.Errorf("Task = %q, want %q", cfg.Task, "my-task")
 	}
@@ -63,7 +59,7 @@ retention:
 func TestLoadDefaults(t *testing.T) {
 	dir := t.TempDir()
 	// Minimal yaml with no store specified.
-	yaml := "agent: cursor\n"
+	yaml := "task: test\n"
 	if err := os.WriteFile(filepath.Join(dir, "bento.yaml"), []byte(yaml), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +89,6 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	original := &BentoConfig{
 		Store:  "/tmp/roundtrip-store",
 		Remote: "s3://roundtrip",
-		Agent:  "cursor",
 		Task:   "roundtrip-task",
 		Env:    map[string]EnvEntry{"KEY": NewLiteralEnv("value")},
 		Hooks: HooksConfig{
@@ -120,9 +115,6 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	}
 	if loaded.Remote != original.Remote {
 		t.Errorf("Remote = %q, want %q", loaded.Remote, original.Remote)
-	}
-	if loaded.Agent != original.Agent {
-		t.Errorf("Agent = %q, want %q", loaded.Agent, original.Agent)
 	}
 	if loaded.Task != original.Task {
 		t.Errorf("Task = %q, want %q", loaded.Task, original.Task)
@@ -170,7 +162,7 @@ func TestValidate_Valid(t *testing.T) {
 		name string
 		yaml string
 	}{
-		{"no layers", "agent: cursor\n"},
+		{"no layers", "task: test\n"},
 		{"project catch-all by name", `layers:
   - name: project
     patterns: ["**/*.go"]

@@ -1,6 +1,5 @@
 # bento.yaml with custom layer definitions
 # When layers is set, it replaces auto-detection entirely
-agent: auto
 task: "migrate database schema"
 
 layers:

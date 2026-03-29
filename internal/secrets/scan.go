@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// DefaultPatterns are the built-in secret detection patterns used when a harness
+// DefaultPatterns are the built-in secret detection patterns.
 // does not provide its own.
 var DefaultPatterns = []string{
 	`(?i)AKIA[0-9A-Z]{16}`,                      // AWS access key

@@ -1,4 +1,4 @@
-package harness
+package extension
 
 import (
 	"encoding/json"
@@ -7,7 +7,7 @@ import (
 	"runtime"
 )
 
-// Cursor detects and configures the Cursor agent framework.
+// Cursor detects the Cursor agent framework.
 type Cursor struct{}
 
 func (c Cursor) Name() string { return "cursor" }
@@ -22,30 +22,19 @@ func (c Cursor) Detect(workDir string) bool {
 	return false
 }
 
-func (c Cursor) Layers(workDir string) []LayerDef {
+func (c Cursor) Contribute(workDir string) Contribution {
 	agentPatterns := []string{".cursor/rules/**", ".cursor/mcp.json", ".cursorrules"}
 
 	if wsDir := cursorWorkspaceDir(workDir); wsDir != "" {
 		agentPatterns = append(agentPatterns, wsDir+"/")
 	}
 
-	return []LayerDef{
-		DepsLayer(CommonDepsPatterns),
-		AgentLayer(agentPatterns),
-		ProjectLayer(CommonSourcePatterns),
+	return Contribution{
+		Layers: map[string][]string{
+			"agent": agentPatterns,
+		},
 	}
 }
-
-func (c Cursor) SessionConfig(workDir string) (*SessionConfig, error) {
-	return BaseSessionConfig(c.Name(), workDir), nil
-}
-
-func (c Cursor) Ignore() []string {
-	return append(CommonIgnorePatterns, CommonCredentialFiles...)
-}
-
-func (c Cursor) SecretPatterns() []string  { return CommonSecretPatterns }
-func (c Cursor) DefaultHooks() map[string]string { return nil }
 
 func cursorWorkspaceDir(workDir string) string {
 	storagePath := cursorWorkspaceStoragePath()

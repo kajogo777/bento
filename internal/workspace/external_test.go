@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kajogo777/bento/internal/harness"
+	"github.com/kajogo777/bento/internal/extension"
 )
 
 // ---------------------------------------------------------------------------
@@ -268,7 +268,7 @@ func TestDiffKeyConsistency_RelativePath(t *testing.T) {
 	workDir := t.TempDir()
 	createFile(t, workDir, "src/main.go", "package main\n")
 
-	layers := []harness.LayerDef{
+	layers := []extension.LayerDef{
 		{Name: "project", Patterns: []string{"src/**"}},
 	}
 	s := NewScanner(workDir, layers, nil)
@@ -295,7 +295,7 @@ func TestDiffKeyConsistency_AbsolutePath(t *testing.T) {
 
 	createFile(t, extDir, "session.db", "data")
 
-	layers := []harness.LayerDef{
+	layers := []extension.LayerDef{
 		{Name: "agent", Patterns: []string{extDir + "/"}},
 	}
 	s := NewScanner(workDir, layers, nil)
@@ -339,7 +339,7 @@ func TestDiffKeyConsistency_HomeRelativePath(t *testing.T) {
 
 	writeFileAt(t, filepath.Join(extDir, "session.jsonl"), "content")
 
-	layers := []harness.LayerDef{
+	layers := []extension.LayerDef{
 		{Name: "agent", Patterns: []string{extDir + "/"}},
 	}
 	s := NewScanner(workDir, layers, nil)
@@ -532,7 +532,7 @@ func TestScannerArchivePaths_Absolute(t *testing.T) {
 	createFile(t, extDir, "a.txt", "a")
 	createFile(t, extDir, "sub/b.txt", "b")
 
-	layers := []harness.LayerDef{
+	layers := []extension.LayerDef{
 		{Name: "agent", Patterns: []string{extDir + "/"}},
 	}
 	s := NewScanner(workDir, layers, nil)
@@ -566,7 +566,7 @@ func TestScannerArchivePaths_HomeRelative(t *testing.T) {
 
 	createFile(t, extDir, "session.jsonl", "data")
 
-	layers := []harness.LayerDef{
+	layers := []extension.LayerDef{
 		{Name: "agent", Patterns: []string{extDir + "/"}},
 	}
 	s := NewScanner(workDir, layers, nil)

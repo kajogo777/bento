@@ -65,7 +65,7 @@ func makeWorkspace(t *testing.T) string {
 	storeDir := t.TempDir()
 
 	// Write bento.yaml manually so we can control the store path.
-	bentoYAML := "store: " + storeDir + "\nagent: custom\n"
+	bentoYAML := "store: " + storeDir + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "bento.yaml"), []byte(bentoYAML), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -556,7 +556,7 @@ func TestOpenGeneratesBentoIgnore(t *testing.T) {
 	storeDir := t.TempDir()
 
 	// Write bento.yaml with ignore patterns
-	bentoYAML := "store: " + storeDir + "\nagent: custom\nignore:\n    - \"*.log\"\n    - tmp/\n"
+	bentoYAML := "store: " + storeDir + "\nignore:\n    - \"*.log\"\n    - tmp/\n"
 	writeFile(t, dir, "bento.yaml", bentoYAML)
 	writeFile(t, dir, "main.go", "package main\n")
 
@@ -590,7 +590,7 @@ func TestOpenSkipsBentoYAMLWhenExists(t *testing.T) {
 
 	// Create target dir with its own bento.yaml
 	dst := t.TempDir()
-	existingYAML := "store: /custom/store\nagent: custom\nid: ws-existing\n"
+	existingYAML := "store: /custom/store\nid: ws-existing\n"
 	writeFile(t, dst, "bento.yaml", existingYAML)
 
 	run(t, src, "open", "cp-1", dst)
@@ -643,7 +643,6 @@ func TestPortableConfigRoundtrip(t *testing.T) {
 	// Write a bento.yaml with hooks, ignore, and retention
 	bentoYAML := strings.Join([]string{
 		"store: " + storeDir,
-		"agent: custom",
 		"task: test portable config",
 		"ignore:",
 		"    - \"*.log\"",
@@ -702,7 +701,7 @@ func TestPortableConfigRemote(t *testing.T) {
 	dir := t.TempDir()
 	storeDir := t.TempDir()
 
-	bentoYAML := "store: " + storeDir + "\nagent: custom\nremote: ghcr.io/testorg/testrepo\n"
+	bentoYAML := "store: " + storeDir + "\nremote: ghcr.io/testorg/testrepo\n"
 	writeFile(t, dir, "bento.yaml", bentoYAML)
 	writeFile(t, dir, "main.go", "package main\n")
 

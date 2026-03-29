@@ -1,18 +1,36 @@
-# bento.yaml with watch mode enabled
-# Just run `bento watch` — no config needed for defaults.
-# This example shows available tuning options.
-agent: auto
-task: "implement feature X"
+# bento.yaml with watch mode and custom layer watch methods.
+# Per-layer watch controls how each layer triggers auto-checkpoints:
+#   realtime  — instant detection via filesystem events (default for project)
+#   periodic  — checked every ~30s via polling (default for deps and agent)
+#   off       — not watched, but still included in manual saves
+task: "full-stack development"
 
-store: ~/.bento/store
+layers:
+  - name: deps
+    patterns: ["node_modules/**", ".venv/**"]
+    watch: periodic
 
-# Watch configuration
+  - name: agent
+    patterns: [".claude/**", "CLAUDE.md", "AGENTS.md"]
+    watch: periodic
+
+  - name: build-cache
+    patterns: ["dist/**", ".next/**"]
+    watch: off               # build output shouldn't trigger saves
+
+  - name: project
+    catch_all: true
+    watch: realtime
+
 watch:
-  debounce: 10            # seconds of quiet before saving (default: 10)
-  message: "auto-save"    # checkpoint message for auto-saves
-
-hooks:
-  post_restore: "npm install"
+  debounce: 5
+  skip_secret_scan: true
 
 retention:
   keep_tagged: true
+  tiers:
+    - max_age: 1h            # keep all checkpoints from the last hour
+    - max_age: 24h
+      resolution: 1h         # 1h–24h: keep one per hour
+    - max_age: 168h
+      resolution: 24h        # 1d–7d: keep one per day

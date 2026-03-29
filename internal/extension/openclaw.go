@@ -1,4 +1,4 @@
-package harness
+package extension
 
 import (
 	"encoding/json"
@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-// OpenClaw detects and configures the OpenClaw agent framework.
+// OpenClaw detects the OpenClaw agent framework.
 type OpenClaw struct{}
 
 func (o OpenClaw) Name() string { return "openclaw" }
@@ -21,9 +21,9 @@ func (o OpenClaw) Detect(workDir string) bool {
 	return false
 }
 
-func (o OpenClaw) Layers(workDir string) []LayerDef {
+func (o OpenClaw) Contribute(workDir string) Contribution {
 	agentPatterns := []string{
-		"SOUL.md", "AGENTS.md", "USER.md", "IDENTITY.md",
+		"SOUL.md", "USER.md", "IDENTITY.md",
 		"TOOLS.md", "HEARTBEAT.md", "BOOTSTRAP.md", "MEMORY.md",
 		"memory/**", "skills/**", "canvas/**",
 	}
@@ -33,23 +33,12 @@ func (o OpenClaw) Layers(workDir string) []LayerDef {
 		agentPatterns = append(agentPatterns, sessDir+"/")
 	}
 
-	return []LayerDef{
-		DepsLayer(CommonDepsPatterns),
-		AgentLayer(agentPatterns),
-		ProjectLayer(CommonSourcePatterns),
+	return Contribution{
+		Layers: map[string][]string{
+			"agent": agentPatterns,
+		},
 	}
 }
-
-func (o OpenClaw) SessionConfig(workDir string) (*SessionConfig, error) {
-	return BaseSessionConfig(o.Name(), workDir), nil
-}
-
-func (o OpenClaw) Ignore() []string {
-	return append(CommonIgnorePatterns, CommonCredentialFiles...)
-}
-
-func (o OpenClaw) SecretPatterns() []string  { return CommonSecretPatterns }
-func (o OpenClaw) DefaultHooks() map[string]string { return nil }
 
 func openClawSessionDir(workDir string) string {
 	openclawHome := os.Getenv("OPENCLAW_STATE_DIR")

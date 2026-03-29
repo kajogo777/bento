@@ -11,14 +11,12 @@ import (
 type BentoConfigObj struct {
 	SchemaVersion    string                `json:"schemaVersion"`
 	WorkspaceID      string                `json:"workspaceId,omitempty"`
-	Agent            string                `json:"agent,omitempty"`
-	AgentVersion     string                `json:"agentVersion,omitempty"`
+	Extensions       []string              `json:"extensions,omitempty"`
 	Task             string                `json:"task,omitempty"`
 	ParentCheckpoint string                `json:"parentCheckpoint,omitempty"`
 	Checkpoint       int                   `json:"checkpoint"`
 	Created          string                `json:"created"`
 	Status           string                `json:"status,omitempty"`
-	Harness          string                `json:"harness,omitempty"`
 	GitSha           string                `json:"gitSha,omitempty"`
 	GitBranch        string                `json:"gitBranch,omitempty"`
 	Message          string                `json:"message,omitempty"`

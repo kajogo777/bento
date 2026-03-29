@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/opencontainers/go-digest"
@@ -45,14 +46,11 @@ func BuildManifest(cfg *BentoConfigObj, layers []LayerInfo) (manifestBytes []byt
 	labels := map[string]string{
 		AnnotationFormatVersion: FormatVersion,
 	}
-	if cfg.Agent != "" {
-		labels[AnnotationAgent] = cfg.Agent
+	if len(cfg.Extensions) > 0 {
+		labels[AnnotationExtensions] = strings.Join(cfg.Extensions, ",")
 	}
 	if cfg.Task != "" {
 		labels[AnnotationTask] = cfg.Task
-	}
-	if cfg.Harness != "" {
-		labels[AnnotationHarness] = cfg.Harness
 	}
 	if cfg.Message != "" {
 		labels[AnnotationCheckpointMessage] = cfg.Message
@@ -132,14 +130,11 @@ func BuildManifest(cfg *BentoConfigObj, layers []LayerInfo) (manifestBytes []byt
 	if cfg.ParentCheckpoint != "" {
 		manifestAnnotations[AnnotationCheckpointParent] = cfg.ParentCheckpoint
 	}
-	if cfg.Agent != "" {
-		manifestAnnotations[AnnotationAgent] = cfg.Agent
+	if len(cfg.Extensions) > 0 {
+		manifestAnnotations[AnnotationExtensions] = strings.Join(cfg.Extensions, ",")
 	}
 	if cfg.Task != "" {
 		manifestAnnotations[AnnotationTask] = cfg.Task
-	}
-	if cfg.Harness != "" {
-		manifestAnnotations[AnnotationHarness] = cfg.Harness
 	}
 	if cfg.Message != "" {
 		manifestAnnotations[AnnotationCheckpointMessage] = cfg.Message

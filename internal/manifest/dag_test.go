@@ -9,7 +9,7 @@ func TestParseCheckpointInfo(t *testing.T) {
 	// Build a valid manifest using BuildManifest so the JSON is realistic.
 	cfg := &BentoConfigObj{
 		SchemaVersion:    "1.0",
-		Agent:            "claude",
+		Extensions:       []string{"claude-code"},
 		Task:             "build-feature",
 		ParentCheckpoint: "sha256:parentdigest",
 		Checkpoint:       7,
@@ -39,8 +39,8 @@ func TestParseCheckpointInfo(t *testing.T) {
 	if info.Created != "2025-02-01T12:00:00Z" {
 		t.Errorf("Created: got %q, want %q", info.Created, "2025-02-01T12:00:00Z")
 	}
-	if info.Agent != "claude" {
-		t.Errorf("Agent: got %q, want %q", info.Agent, "claude")
+	if info.Extensions != "claude-code" {
+		t.Errorf("Extensions: got %q, want %q", info.Extensions, "claude-code")
 	}
 }
 
@@ -75,8 +75,8 @@ func TestParseCheckpointInfo_NoAnnotations(t *testing.T) {
 	if info.Created != "" {
 		t.Errorf("Created: got %q, want empty", info.Created)
 	}
-	if info.Agent != "" {
-		t.Errorf("Agent: got %q, want empty", info.Agent)
+	if info.Extensions != "" {
+		t.Errorf("Extensions: got %q, want empty", info.Extensions)
 	}
 }
 

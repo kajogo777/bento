@@ -10,8 +10,8 @@ func TestExtractFileContentFromLayer(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create test files
-	os.WriteFile(dir+"/hello.txt", []byte("hello world\n"), 0644)
-	os.WriteFile(dir+"/other.txt", []byte("other\n"), 0644)
+	_ = os.WriteFile(dir+"/hello.txt", []byte("hello world\n"), 0644)
+	_ = os.WriteFile(dir+"/other.txt", []byte("other\n"), 0644)
 
 	// Pack into a layer
 	data, err := PackLayer(dir, []string{"hello.txt", "other.txt"})

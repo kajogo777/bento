@@ -320,7 +320,6 @@ func TestWatchCustomLayerWatchOff(t *testing.T) {
 	// Custom config with a layer set to watch: off.
 	bentoYAML := `id: ws-test-watchoff
 store: ` + storeDir + `
-agent: custom
 layers:
   - name: project
     patterns: ["src/**"]
@@ -396,7 +395,6 @@ func TestConfigValidation_BadWatchValue(t *testing.T) {
 
 	bentoYAML := `id: ws-test-validation
 store: ` + storeDir + `
-agent: custom
 layers:
   - name: project
     patterns: ["**"]

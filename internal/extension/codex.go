@@ -1,4 +1,4 @@
-package harness
+package extension
 
 import (
 	"encoding/json"
@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Codex detects and configures the Codex agent framework.
+// Codex detects the Codex agent framework.
 type Codex struct{}
 
 func (c Codex) Name() string { return "codex" }
@@ -19,33 +19,21 @@ func (c Codex) Detect(workDir string) bool {
 	return false
 }
 
-func (c Codex) Layers(workDir string) []LayerDef {
-	agentPatterns := []string{"AGENTS.md", ".codex/**"}
+func (c Codex) Contribute(workDir string) Contribution {
+	agentPatterns := []string{".codex/**"}
 
 	// Add external session rollout directories matching this workspace
 	for _, dir := range codexSessionDirs(workDir) {
 		agentPatterns = append(agentPatterns, dir+"/")
 	}
 
-	return []LayerDef{
-		DepsLayer(CommonDepsPatterns),
-		AgentLayer(agentPatterns),
-		ProjectLayer(CommonSourcePatterns),
-	}
-}
-
-func (c Codex) SessionConfig(workDir string) (*SessionConfig, error) {
-	return BaseSessionConfig(c.Name(), workDir), nil
-}
-
-func (c Codex) Ignore() []string {
-	return append(CommonIgnorePatterns, CommonCredentialFiles...)
-}
-
-func (c Codex) SecretPatterns() []string { return CommonSecretPatterns }
-func (c Codex) DefaultHooks() map[string]string {
-	return map[string]string{
-		"post_restore": "test -f .codex/setup.sh && sh .codex/setup.sh || true",
+	return Contribution{
+		Layers: map[string][]string{
+			"agent": agentPatterns,
+		},
+		Hooks: map[string]string{
+			"post_restore": "test -f .codex/setup.sh && sh .codex/setup.sh || true",
+		},
 	}
 }
 

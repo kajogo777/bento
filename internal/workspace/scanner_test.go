@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kajogo777/bento/internal/harness"
+	"github.com/kajogo777/bento/internal/extension"
 )
 
 func createFile(t *testing.T, dir, relPath, content string) {
@@ -28,7 +28,7 @@ func TestScanAssignsFilesToLayers(t *testing.T) {
 	createFile(t, dir, "go.sum", "hash")
 	createFile(t, dir, "README.md", "# readme")
 
-	layers := []harness.LayerDef{
+	layers := []extension.LayerDef{
 		{Name: "source", Patterns: []string{"src/**"}},
 		{Name: "deps", Patterns: []string{"go.mod", "go.sum"}},
 		{Name: "docs", Patterns: []string{"*.md"}},
@@ -58,7 +58,7 @@ func TestScanIgnoredFilesExcluded(t *testing.T) {
 	createFile(t, dir, "src/debug.log", "log data")
 	createFile(t, dir, ".DS_Store", "")
 
-	layers := []harness.LayerDef{
+	layers := []extension.LayerDef{
 		{Name: "source", Patterns: []string{"src/**"}},
 		{Name: "meta", Patterns: []string{".DS_Store"}},
 	}
@@ -83,7 +83,7 @@ func TestScanUnmatchedFilesExcluded(t *testing.T) {
 	createFile(t, dir, "src/main.go", "package main")
 	createFile(t, dir, "random.xyz", "unknown")
 
-	layers := []harness.LayerDef{
+	layers := []extension.LayerDef{
 		{Name: "source", Patterns: []string{"src/**"}},
 	}
 
@@ -111,7 +111,7 @@ func TestScanFirstLayerWins(t *testing.T) {
 
 	createFile(t, dir, "src/main.go", "package main")
 
-	layers := []harness.LayerDef{
+	layers := []extension.LayerDef{
 		{Name: "first", Patterns: []string{"src/**"}},
 		{Name: "second", Patterns: []string{"src/**"}},
 	}
@@ -138,7 +138,7 @@ func TestScanExternalPatterns(t *testing.T) {
 	createFile(t, extDir, "session.jsonl", "data")
 	createFile(t, extDir, "sub/notes.txt", "notes")
 
-	layers := []harness.LayerDef{
+	layers := []extension.LayerDef{
 		{Name: "agent", Patterns: []string{extDir + "/"}},
 		{Name: "project", Patterns: []string{"**"}, CatchAll: true},
 	}
@@ -170,7 +170,7 @@ func TestScanExternalPatterns(t *testing.T) {
 func TestScanRejectsPathTraversalInExternalPatterns(t *testing.T) {
 	dir := t.TempDir()
 
-	layers := []harness.LayerDef{
+	layers := []extension.LayerDef{
 		{Name: "agent", Patterns: []string{"~/../../etc/passwd"}},
 	}
 

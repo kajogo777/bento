@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/kajogo777/bento/internal/harness"
+	"github.com/kajogo777/bento/internal/extension"
 )
 
 // ExternalFile represents a file from outside the workspace.
@@ -25,12 +25,12 @@ type ScanResult struct {
 // Scanner walks a workspace directory tree and assigns files to layers.
 type Scanner struct {
 	workDir string
-	layers  []harness.LayerDef
+	layers  []extension.LayerDef
 	ignore  *IgnoreMatcher
 }
 
 // NewScanner creates a new Scanner for the given workspace directory.
-func NewScanner(workDir string, layers []harness.LayerDef, ignorePatterns []string) *Scanner {
+func NewScanner(workDir string, layers []extension.LayerDef, ignorePatterns []string) *Scanner {
 	return &Scanner{
 		workDir: workDir,
 		layers:  layers,
@@ -54,7 +54,7 @@ func (s *Scanner) Scan() (map[string]*ScanResult, error) {
 	for _, layer := range s.layers {
 		lp[layer.Name] = &layerPatterns{}
 		for _, p := range layer.Patterns {
-			if harness.IsExternalPattern(p) {
+			if extension.IsExternalPattern(p) {
 				// Reject path traversal
 				if strings.Contains(p, "..") {
 					continue
@@ -117,7 +117,7 @@ func (s *Scanner) Scan() (map[string]*ScanResult, error) {
 	//   - no separate annotation is needed for restore
 	for _, layer := range s.layers {
 		for _, extPattern := range lp[layer.Name].external {
-			source := harness.ExpandHome(extPattern)
+			source := extension.ExpandHome(extPattern)
 			source = strings.TrimSuffix(source, "/")
 
 			info, err := os.Stat(source)

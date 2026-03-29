@@ -7,19 +7,19 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/kajogo777/bento/internal/harness"
+	"github.com/kajogo777/bento/internal/extension"
 )
 
 func TestPeriodicDirsFromLayer_WorkspaceDirs(t *testing.T) {
 	dir := t.TempDir()
 	// Create dirs that match patterns.
-	os.MkdirAll(filepath.Join(dir, "node_modules"), 0755)
-	os.MkdirAll(filepath.Join(dir, ".venv"), 0755)
+	_ = os.MkdirAll(filepath.Join(dir, "node_modules"), 0755)
+	_ = os.MkdirAll(filepath.Join(dir, ".venv"), 0755)
 
-	layer := harness.LayerDef{
+	layer := extension.LayerDef{
 		Name:        "deps",
 		Patterns:    []string{"node_modules/**", ".venv/**", "*.go"},
-		WatchMethod: harness.WatchPeriodic,
+		WatchMethod: extension.WatchPeriodic,
 	}
 
 	dirs := periodicDirsFromLayer(dir, layer)
@@ -31,10 +31,10 @@ func TestPeriodicDirsFromLayer_WorkspaceDirs(t *testing.T) {
 func TestPeriodicDirsFromLayer_MissingDir(t *testing.T) {
 	dir := t.TempDir()
 	// Don't create node_modules — should be skipped.
-	layer := harness.LayerDef{
+	layer := extension.LayerDef{
 		Name:        "deps",
 		Patterns:    []string{"node_modules/**"},
-		WatchMethod: harness.WatchPeriodic,
+		WatchMethod: extension.WatchPeriodic,
 	}
 
 	dirs := periodicDirsFromLayer(dir, layer)
@@ -46,10 +46,10 @@ func TestPeriodicDirsFromLayer_MissingDir(t *testing.T) {
 func TestPeriodicDirsFromLayer_GlobOnly(t *testing.T) {
 	dir := t.TempDir()
 	// Patterns with wildcards in the directory part are not extractable.
-	layer := harness.LayerDef{
+	layer := extension.LayerDef{
 		Name:        "custom",
 		Patterns:    []string{"**/*.go", "src/**/test"},
-		WatchMethod: harness.WatchPeriodic,
+		WatchMethod: extension.WatchPeriodic,
 	}
 
 	dirs := periodicDirsFromLayer(dir, layer)
@@ -65,9 +65,7 @@ func TestLayerFingerprint_EmptyDir(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if h == 0 {
-		// FNV of empty input is non-zero (offset basis), but no entries means
-		// we hash nothing, so the result is the FNV offset basis.
-		// Just verify it doesn't error.
+		t.Log("fingerprint is zero — unusual but not an error for empty dir")
 	}
 }
 
@@ -87,7 +85,7 @@ func TestLayerFingerprint_DetectsChange(t *testing.T) {
 	h1, _ := layerFingerprint(dir)
 
 	// Add a file.
-	os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0644)
 	// Need a small sleep to ensure mtime differs.
 	time.Sleep(10 * time.Millisecond)
 

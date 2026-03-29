@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/kajogo777/bento/internal/config"
-	"github.com/kajogo777/bento/internal/harness"
+	"github.com/kajogo777/bento/internal/extension"
 	"github.com/kajogo777/bento/internal/registry"
 	"github.com/kajogo777/bento/internal/workspace"
 	"github.com/spf13/cobra"
@@ -32,14 +32,39 @@ func loadConfigAndStore(dir string) (*config.BentoConfig, registry.Store, error)
 	return cfg, store, nil
 }
 
-// resolveHarness returns the harness based on config.
-// If layers are defined in config, use them directly.
-// Otherwise, resolve by agent name (auto-detect or named).
-func resolveHarness(dir string, cfg *config.BentoConfig) harness.Harness {
+// resolveExtensions returns the merge result from active extensions.
+// If custom layers are defined in bento.yaml, they take precedence and bypass extensions.
+func resolveExtensions(dir string, cfg *config.BentoConfig) extension.MergeResult {
 	if len(cfg.Layers) > 0 {
-		return harness.NewConfigLayerHarness(cfg.Layers)
+		return extension.MergeResult{
+			Layers: configToLayerDefs(cfg.Layers),
+		}
 	}
-	return harness.ResolveAgent(dir, cfg.Agent)
+	return extension.ResolveAndMerge(dir, cfg.Extensions)
+}
+
+// configToLayerDefs converts bento.yaml layer definitions to extension.LayerDefs.
+func configToLayerDefs(layers []config.LayerConfig) []extension.LayerDef {
+	defs := make([]extension.LayerDef, 0, len(layers))
+	for _, l := range layers {
+		catchAll := l.CatchAll || l.Name == "project"
+		watchMethod := l.Watch
+		if watchMethod == "" {
+			switch l.Name {
+			case "deps", "agent":
+				watchMethod = extension.WatchPeriodic
+			default:
+				watchMethod = extension.WatchRealtime
+			}
+		}
+		defs = append(defs, extension.LayerDef{
+			Name:        l.Name,
+			Patterns:    l.Patterns,
+			CatchAll:    catchAll,
+			WatchMethod: watchMethod,
+		})
+	}
+	return defs
 }
 
 // diffFileMaps compares two maps of filename->hash, returning added, removed, and modified files.

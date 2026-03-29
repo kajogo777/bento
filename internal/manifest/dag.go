@@ -10,13 +10,13 @@ import (
 
 // CheckpointInfo holds the metadata extracted from a manifest's annotations.
 type CheckpointInfo struct {
-	Digest   string
-	Tag      string
-	Sequence int
-	Parent   string
-	Message  string
-	Created  string
-	Agent    string
+	Digest     string
+	Tag        string
+	Sequence   int
+	Parent     string
+	Message    string
+	Created    string
+	Extensions string
 }
 
 // ParseCheckpointInfo extracts checkpoint metadata from a serialized OCI manifest.
@@ -35,7 +35,7 @@ func ParseCheckpointInfo(manifestBytes []byte) (*CheckpointInfo, error) {
 	info.Created = m.Annotations[AnnotationCreated]
 	info.Parent = m.Annotations[AnnotationCheckpointParent]
 	info.Message = m.Annotations[AnnotationCheckpointMessage]
-	info.Agent = m.Annotations[AnnotationAgent]
+	info.Extensions = m.Annotations[AnnotationExtensions]
 
 	if seqStr, ok := m.Annotations[AnnotationCheckpointSeq]; ok {
 		seq, err := strconv.Atoi(seqStr)

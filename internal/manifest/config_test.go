@@ -7,15 +7,13 @@ import (
 func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 	cfg := &BentoConfigObj{
 		SchemaVersion:    "1.0",
-		Agent:            "claude",
-		AgentVersion:     "3.5",
+		Extensions:       []string{"claude-code", "node"},
 		Task:             "build-feature",
 		WorkspaceID:      "ws-abc123def456",
 		ParentCheckpoint: "sha256:aabbcc",
 		Checkpoint:       5,
 		Created:          "2025-01-15T10:00:00Z",
 		Status:           "completed",
-		Harness:          "docker",
 		GitSha:           "deadbeef",
 		GitBranch:        "main",
 		Message:          "checkpoint after refactor",
@@ -48,11 +46,8 @@ func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 	if got.SchemaVersion != cfg.SchemaVersion {
 		t.Errorf("SchemaVersion: got %q, want %q", got.SchemaVersion, cfg.SchemaVersion)
 	}
-	if got.Agent != cfg.Agent {
-		t.Errorf("Agent: got %q, want %q", got.Agent, cfg.Agent)
-	}
-	if got.AgentVersion != cfg.AgentVersion {
-		t.Errorf("AgentVersion: got %q, want %q", got.AgentVersion, cfg.AgentVersion)
+	if len(got.Extensions) != 2 || got.Extensions[0] != "claude-code" || got.Extensions[1] != "node" {
+		t.Errorf("Extensions: got %v, want [claude-code, node]", got.Extensions)
 	}
 	if got.Task != cfg.Task {
 		t.Errorf("Task: got %q, want %q", got.Task, cfg.Task)
@@ -71,9 +66,6 @@ func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 	}
 	if got.Status != cfg.Status {
 		t.Errorf("Status: got %q, want %q", got.Status, cfg.Status)
-	}
-	if got.Harness != cfg.Harness {
-		t.Errorf("Harness: got %q, want %q", got.Harness, cfg.Harness)
 	}
 	if got.GitSha != cfg.GitSha {
 		t.Errorf("GitSha: got %q, want %q", got.GitSha, cfg.GitSha)
@@ -152,11 +144,8 @@ func TestMarshalUnmarshalRoundtrip_OptionalFieldsEmpty(t *testing.T) {
 	}
 
 	// Optional fields should be zero values.
-	if got.Agent != "" {
-		t.Errorf("Agent should be empty, got %q", got.Agent)
-	}
-	if got.AgentVersion != "" {
-		t.Errorf("AgentVersion should be empty, got %q", got.AgentVersion)
+	if len(got.Extensions) > 0 {
+		t.Errorf("Extensions should be empty, got %v", got.Extensions)
 	}
 	if got.Task != "" {
 		t.Errorf("Task should be empty, got %q", got.Task)
@@ -169,9 +158,6 @@ func TestMarshalUnmarshalRoundtrip_OptionalFieldsEmpty(t *testing.T) {
 	}
 	if got.Status != "" {
 		t.Errorf("Status should be empty, got %q", got.Status)
-	}
-	if got.Harness != "" {
-		t.Errorf("Harness should be empty, got %q", got.Harness)
 	}
 	if got.GitSha != "" {
 		t.Errorf("GitSha should be empty, got %q", got.GitSha)

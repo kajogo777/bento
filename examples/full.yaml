@@ -1,5 +1,5 @@
-# bento.yaml for a Claude Code project
-agent: auto
+# Full bento.yaml showing all config fields.
+# Extensions auto-detect agents and frameworks — no need to list them.
 task: "refactor auth module"
 
 store: ~/.bento/store
@@ -14,9 +14,21 @@ env:
     source: file
     path: /run/secrets/api-key
 
+ignore:
+  - "*.log"
+  - "tmp/"
+
 hooks:
+  pre_save: "make clean"
   post_restore: "npm install"
+  pre_push: "npm test"
+  timeout: 300
 
 retention:
   keep_last: 10
   keep_tagged: true
+
+watch:
+  debounce: 10
+  message: "auto-save"
+  skip_secret_scan: false

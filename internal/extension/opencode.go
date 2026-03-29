@@ -1,13 +1,12 @@
-package harness
+package extension
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
-// OpenCode detects and configures the OpenCode agent framework.
+// OpenCode detects the OpenCode agent framework.
 type OpenCode struct{}
 
 func (o OpenCode) Name() string { return "opencode" }
@@ -22,35 +21,20 @@ func (o OpenCode) Detect(workDir string) bool {
 	return false
 }
 
-func (o OpenCode) Layers(workDir string) []LayerDef {
-	agentPatterns := []string{"AGENTS.md", ".opencode/**", "opencode.json"}
+func (o OpenCode) Contribute(workDir string) Contribution {
+	agentPatterns := []string{".opencode/**", "opencode.json"}
 
 	// Add external session/project/snapshot dirs scoped by git root commit hash
 	for _, dir := range openCodeExternalDirs(workDir) {
 		agentPatterns = append(agentPatterns, dir+"/")
 	}
 
-	return []LayerDef{
-		DepsLayer(CommonDepsPatterns),
-		AgentLayer(agentPatterns),
-		ProjectLayer(CommonSourcePatterns),
+	return Contribution{
+		Layers: map[string][]string{
+			"agent": agentPatterns,
+		},
 	}
 }
-
-func (o OpenCode) SessionConfig(workDir string) (*SessionConfig, error) {
-	cfg := BaseSessionConfig(o.Name(), workDir)
-	if out, err := exec.Command("opencode", "--version").Output(); err == nil {
-		cfg.AgentVersion = strings.TrimSpace(string(out))
-	}
-	return cfg, nil
-}
-
-func (o OpenCode) Ignore() []string {
-	return append(CommonIgnorePatterns, CommonCredentialFiles...)
-}
-
-func (o OpenCode) SecretPatterns() []string  { return CommonSecretPatterns }
-func (o OpenCode) DefaultHooks() map[string]string { return nil }
 
 func openCodeExternalDirs(workDir string) []string {
 	dataDir := os.Getenv("XDG_DATA_HOME")

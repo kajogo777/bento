@@ -303,12 +303,8 @@ func configFromArtifact(obj *manifest.BentoConfigObj) *config.BentoConfig {
 	cfg := &config.BentoConfig{
 		ID:     newID,
 		Store:  config.DefaultStorePath(),
-		Agent:  obj.Harness,
 		Task:   obj.Task,
 		Remote: obj.Remote,
-	}
-	if cfg.Agent == "" {
-		cfg.Agent = "auto"
 	}
 
 	// Env vars and secret references

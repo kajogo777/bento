@@ -14,17 +14,17 @@ import (
 
 // BentoConfig represents the bento.yaml configuration file.
 type BentoConfig struct {
-	ID        string              `yaml:"id,omitempty"`
-	Agent     string              `yaml:"agent,omitempty"`
-	Task      string              `yaml:"task,omitempty"`
-	Store     string              `yaml:"store,omitempty"`
-	Remote    string              `yaml:"remote,omitempty"`
-	Layers    []LayerConfig       `yaml:"layers,omitempty"`
-	Ignore    []string            `yaml:"ignore,omitempty"`
-	Env       map[string]EnvEntry `yaml:"env,omitempty"`
-	Hooks     HooksConfig         `yaml:"hooks,omitempty"`
-	Retention RetentionConfig     `yaml:"retention,omitempty"`
-	Watch     WatchConfig         `yaml:"watch,omitempty"`
+	ID         string              `yaml:"id,omitempty"`
+	Extensions []string            `yaml:"extensions,omitempty"`
+	Task       string              `yaml:"task,omitempty"`
+	Store      string              `yaml:"store,omitempty"`
+	Remote     string              `yaml:"remote,omitempty"`
+	Layers     []LayerConfig       `yaml:"layers,omitempty"`
+	Ignore     []string            `yaml:"ignore,omitempty"`
+	Env        map[string]EnvEntry `yaml:"env,omitempty"`
+	Hooks      HooksConfig         `yaml:"hooks,omitempty"`
+	Retention  RetentionConfig     `yaml:"retention,omitempty"`
+	Watch      WatchConfig         `yaml:"watch,omitempty"`
 }
 
 // LayerConfig defines a layer in bento.yaml.
@@ -180,6 +180,13 @@ var DefaultIgnorePatterns = []string{
 	"bento.yaml",
 	".bentoignore",
 	"bin/**",
+	".git/**",
+	".env", ".env.local", ".env.*.local",
+	"*.pem", "*.key", "*.p12", "token.json", "credentials",
+	"auth.json", "oauth_tokens", "credentials.json",
+	"*.sqlite", "*.db", "*.sqlite-shm", "*.sqlite-wal",
+	".DS_Store", "Thumbs.db",
+	"*.swp", "*.swo", "*~",
 }
 
 // GenerateWorkspaceID creates a new workspace identifier in the format ws-<random>.

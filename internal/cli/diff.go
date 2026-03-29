@@ -99,10 +99,10 @@ func diffWorkspace(dir string, args []string) error {
 	var m ocispec.Manifest
 	_ = json.Unmarshal(manifestBytes, &m)
 
-	h := resolveHarness(dir, cfg)
-	layerDefs := h.Layers(dir)
+	resolved := resolveExtensions(dir, cfg)
+	layerDefs := resolved.Layers
 
-	ignorePatterns := append(config.DefaultIgnorePatterns, h.Ignore()...)
+	ignorePatterns := append(config.DefaultIgnorePatterns, resolved.Ignore...)
 	ignorePatterns = append(ignorePatterns, cfg.Ignore...)
 	if bentoIgnore, err := workspace.LoadBentoIgnore(dir); err == nil {
 		ignorePatterns = append(ignorePatterns, bentoIgnore...)
@@ -420,9 +420,6 @@ func diffFileWorkspace(dir string, args []string, filePath string, cfg *config.B
 	}
 
 	// Read current workspace file
-	h := resolveHarness(dir, cfg)
-	_ = h // harness resolved for consistency but file is read directly
-
 	var newContent []byte
 	wsPath := filepath.Join(dir, filepath.FromSlash(filePath))
 	if data, err := os.ReadFile(wsPath); err == nil {
