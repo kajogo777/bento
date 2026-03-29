@@ -33,7 +33,6 @@ func (c ClaudeCode) Contribute(workDir string) Contribution {
 		Layers: map[string][]string{
 			"agent": agentPatterns,
 		},
-		Ignore: []string{".claude/credentials", ".claude/oauth_tokens"},
 	}
 }
 
