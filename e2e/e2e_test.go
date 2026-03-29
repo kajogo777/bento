@@ -143,6 +143,7 @@ func TestInspect(t *testing.T) {
 
 	run(t, dir, "save", "--skip-secret-scan", "-m", "inspect me")
 
+	// Default: summary only (no file listing).
 	out := run(t, dir, "inspect")
 	if !strings.Contains(out, "sequence 1") {
 		t.Errorf("inspect should show sequence 1, got:\n%s", out)
@@ -150,8 +151,18 @@ func TestInspect(t *testing.T) {
 	if !strings.Contains(out, "inspect me") {
 		t.Errorf("inspect should show message, got:\n%s", out)
 	}
-	if !strings.Contains(out, "main.go") {
-		t.Errorf("inspect should list main.go in layers, got:\n%s", out)
+	if !strings.Contains(out, "Total size:") {
+		t.Errorf("inspect should show total size, got:\n%s", out)
+	}
+	// File names should NOT appear without --files.
+	if strings.Contains(out, "main.go") {
+		t.Errorf("inspect without --files should not list individual files, got:\n%s", out)
+	}
+
+	// With --files: show file listing.
+	outFiles := run(t, dir, "inspect", "--files")
+	if !strings.Contains(outFiles, "main.go") {
+		t.Errorf("inspect --files should list main.go, got:\n%s", outFiles)
 	}
 }
 

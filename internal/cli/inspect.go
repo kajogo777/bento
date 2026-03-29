@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -67,6 +66,8 @@ func printFileTree(files []string, indent string) {
 }
 
 func newInspectCmd() *cobra.Command {
+	var flagFiles bool
+
 	cmd := &cobra.Command{
 		Use:   "inspect [ref]",
 		Short: "Show checkpoint metadata and layers",
@@ -101,9 +102,24 @@ func newInspectCmd() *cobra.Command {
 				return fmt.Errorf("opening store: %w", err)
 			}
 
-			manifestBytes, configBytes, layers, err := store.LoadCheckpoint(tag)
+			// Load manifest + config (lightweight, no layer blob downloads).
+			manifestBytes, configBytes, err := store.LoadManifest(tag)
 			if err != nil {
 				return fmt.Errorf("loading checkpoint %s: %w", ref, err)
+			}
+
+			// Only load layer blobs when --files is requested.
+			var layers []registry.LayerData
+			if flagFiles {
+				_, _, layers, err = store.LoadCheckpoint(tag)
+				if err != nil {
+					return fmt.Errorf("loading layer data for %s: %w", ref, err)
+				}
+				defer func() {
+					for i := range layers {
+						layers[i].Cleanup()
+					}
+				}()
 			}
 
 			// Parse checkpoint info
@@ -151,60 +167,61 @@ func newInspectCmd() *cobra.Command {
 				}
 			}
 
-			// Cleanup temp files when done.
-			defer func() {
-				for i := range layers {
-					layers[i].Cleanup()
-				}
-			}()
-
-			// Display layer file trees
+			// Display layer summary and optional file trees
 			fmt.Println("\nLayers:")
-			for i, ld := range layers {
+			var totalSize int64
+			for i := range m.Layers {
+				layerDesc := m.Layers[i]
 				layerName := fmt.Sprintf("layer-%d", i)
-				layerDigest := ld.Digest
-				if i < len(m.Layers) {
-					if name, ok := m.Layers[i].Annotations[manifest.AnnotationTitle]; ok {
-						layerName = name
-					}
+				if name, ok := layerDesc.Annotations[manifest.AnnotationTitle]; ok {
+					layerName = name
+				}
+				layerDigest := string(layerDesc.Digest)
+				layerSize := layerDesc.Size
+				totalSize += layerSize
+
+				// Get file count from annotation.
+				fileCount := 0
+				if fc, ok := layerDesc.Annotations["dev.bento.layer.file-count"]; ok {
+					fmt.Sscanf(fc, "%d", &fileCount)
 				}
 
-				r, err := ld.NewReader()
+				// If --files, read actual file list from layer blob.
 				var files []string
-				var layerSize int64
-				if err == nil {
-					files, _ = workspace.ListLayerFilesFromReader(r)
-					_ = r.Close()
-				}
-				sort.Strings(files)
-
-				// Get size from the temp file stat, or Data len for in-memory layers.
-				if ld.Path != "" {
-					if fi, err := os.Stat(ld.Path); err == nil {
-						layerSize = fi.Size()
+				if flagFiles && i < len(layers) {
+					r, err := layers[i].NewReader()
+					if err == nil {
+						files, _ = workspace.ListLayerFilesFromReader(r)
+						_ = r.Close()
 					}
-				} else {
-					layerSize = int64(len(ld.Data))
+					sort.Strings(files)
+					fileCount = len(files)
 				}
 
 				fileWord := "files"
-				if len(files) == 1 {
+				if fileCount == 1 {
 					fileWord = "file"
 				}
 				fmt.Printf("\n  [%d/%d] %s — %d %s, %s\n",
-					i+1, len(layers), layerName, len(files), fileWord, formatSize(int(layerSize)))
+					i+1, len(m.Layers), layerName, fileCount, fileWord, formatSize(int(layerSize)))
 				fmt.Printf("  %s digest: %s%s\n", colorDim, truncateDigest(layerDigest), colorReset)
 
-				if len(files) == 0 {
-					fmt.Printf("    (empty)\n")
-				} else {
-					printFileTree(files, "    ")
+				if flagFiles {
+					if len(files) == 0 {
+						fmt.Printf("    (empty)\n")
+					} else {
+						printFileTree(files, "    ")
+					}
 				}
 			}
+
+			fmt.Printf("\nTotal size: %s\n", formatSize(int(totalSize)))
 
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&flagFiles, "files", false, "show file listing for each layer")
 
 	return cmd
 }

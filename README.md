@@ -233,7 +233,8 @@ bento list                                    List checkpoints
 bento diff <ref1> <ref2>                      Compare two checkpoints
 bento fork <ref> [-m <message>]               Branch from a checkpoint
 bento tag <ref> <new-tag>                     Tag a checkpoint
-bento inspect [ref]                           Show metadata and file tree
+bento inspect [ref]                           Show metadata and layer summary
+bento inspect [ref] --files                   Show metadata with file listing
 bento push [<remote>]                         Push to registry
 bento watch [-m <message>] [--debounce <s>]   Watch and auto-checkpoint on changes
 bento gc [--keep-last <n>] [--keep-tagged]    Clean up old checkpoints and blobs
