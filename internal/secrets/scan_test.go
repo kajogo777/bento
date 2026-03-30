@@ -206,7 +206,7 @@ func TestScanFile_Fingerprint(t *testing.T) {
 	if fp == "" {
 		t.Fatal("expected non-empty fingerprint")
 	}
-	if !strings.HasPrefix(fp, path+":") {
+	if !strings.HasPrefix(fp, filepath.ToSlash(path)+":") {
 		t.Errorf("fingerprint should start with file path, got %q", fp)
 	}
 }

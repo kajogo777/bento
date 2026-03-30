@@ -140,18 +140,19 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// relativePath returns path relative to baseDir. If baseDir is empty, the
-// relative computation fails, or the result escapes the base (starts with
-// ".."), the original absolute path is returned unchanged.
+// relativePath returns path relative to baseDir using forward slashes.
+// If baseDir is empty, the relative computation fails, or the result
+// escapes the base (starts with ".."), the original path is returned
+// with forward slashes.
 func relativePath(baseDir, path string) string {
 	if baseDir == "" {
-		return path
+		return filepath.ToSlash(path)
 	}
 	rel, err := filepath.Rel(baseDir, path)
 	if err != nil || strings.HasPrefix(rel, "..") {
-		return path
+		return filepath.ToSlash(path)
 	}
-	return rel
+	return filepath.ToSlash(rel)
 }
 
 // fingerprint builds a gitleaks-compatible fingerprint for a finding.
