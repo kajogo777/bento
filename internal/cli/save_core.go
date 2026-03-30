@@ -93,7 +93,19 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 				allFiles = append(allFiles, filepath.Join(opts.Dir, f))
 			}
 		}
+		if !opts.Quiet {
+			secretScanner.SetProgressFunc(func(scanned, total int) {
+				fmt.Printf("\rSecret scan: %d/%d files...", scanned, total)
+			})
+		}
 		scanHits, err := secretScanner.ScanFiles(allFiles)
+		if !opts.Quiet {
+			if err == nil && len(scanHits) == 0 {
+				fmt.Printf("\rSecret scan: %d files clean    \n", len(allFiles))
+			} else {
+				fmt.Println() // newline after progress
+			}
+		}
 		if err != nil {
 			return nil, fmt.Errorf("secret scan error: %w", err)
 		}

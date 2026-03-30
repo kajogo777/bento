@@ -3,6 +3,8 @@ package secrets
 import (
 	"fmt"
 	"os"
+	"runtime"
+	"sync"
 
 	"github.com/zricethezav/gitleaks/v8/config"
 	"github.com/zricethezav/gitleaks/v8/detect"
@@ -18,9 +20,14 @@ type ScanResult struct {
 	Match   string
 }
 
+// ProgressFunc is called after each file is scanned.
+// scanned is the number of files completed so far, total is the total count.
+type ProgressFunc func(scanned, total int)
+
 // Scanner scans files for secret patterns using gitleaks.
 type Scanner struct {
-	detector *detect.Detector
+	detector   *detect.Detector
+	onProgress ProgressFunc
 }
 
 // NewSecretScanner creates a Scanner backed by gitleaks. The patterns argument
@@ -38,6 +45,11 @@ func NewSecretScanner(patterns []string) (*Scanner, error) {
 // This allows callers to extend or override the default ruleset.
 func NewSecretScannerWithConfig(cfg config.Config) *Scanner {
 	return &Scanner{detector: detect.NewDetector(cfg)}
+}
+
+// SetProgressFunc registers a callback invoked after each file is scanned.
+func (s *Scanner) SetProgressFunc(fn ProgressFunc) {
+	s.onProgress = fn
 }
 
 // findingsToResults converts gitleaks findings to ScanResult values.
@@ -74,15 +86,59 @@ func (s *Scanner) ScanFile(path string) ([]ScanResult, error) {
 	return findingsToResults(findings, path), nil
 }
 
-// ScanFiles scans multiple files and returns all secret matches found.
+// ScanFiles scans multiple files concurrently and returns all secret matches found.
 func (s *Scanner) ScanFiles(files []string) ([]ScanResult, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+
+	type fileResult struct {
+		results []ScanResult
+		err     error
+	}
+
+	workers := runtime.NumCPU()
+	if workers > len(files) {
+		workers = len(files)
+	}
+
+	resultsCh := make([]fileResult, len(files))
+	fileCh := make(chan int, len(files))
+	for i := range files {
+		fileCh <- i
+	}
+	close(fileCh)
+
+	var scanned int
+	var progressMu sync.Mutex
+
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for i := range fileCh {
+				results, err := s.ScanFile(files[i])
+				resultsCh[i] = fileResult{results: results, err: err}
+
+				if s.onProgress != nil {
+					progressMu.Lock()
+					scanned++
+					s.onProgress(scanned, len(files))
+					progressMu.Unlock()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Collect results in original file order.
 	var allResults []ScanResult
-	for _, file := range files {
-		results, err := s.ScanFile(file)
-		if err != nil {
-			return allResults, err
+	for _, r := range resultsCh {
+		if r.err != nil {
+			return allResults, r.err
 		}
-		allResults = append(allResults, results...)
+		allResults = append(allResults, r.results...)
 	}
 	return allResults, nil
 }
