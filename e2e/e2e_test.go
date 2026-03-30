@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -289,6 +290,84 @@ func TestGC(t *testing.T) {
 	remaining := countCheckpointLines(listAfter)
 	if remaining > 2 {
 		t.Errorf("after GC keep-last=1, expected ≤2 entries, got %d:\n%s", remaining, listAfter)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestSaveAfterGC_SequenceMonotonic: sequence numbers never go backwards
+// after GC prunes old checkpoints. Regression test for the bug where
+// seq was computed as len(unique digests)+1, causing tag collisions after GC.
+// ---------------------------------------------------------------------------
+
+func TestSaveAfterGC_SequenceMonotonic(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	// Save 3 checkpoints with different content.
+	for i := 0; i < 3; i++ {
+		writeFile(t, dir, "file.txt", fmt.Sprintf("content-%d", i+1))
+		out := run(t, dir, "save", "--skip-secret-scan", "-m", fmt.Sprintf("save-%d", i+1))
+		expected := fmt.Sprintf("cp-%d", i+1)
+		if !strings.Contains(out, expected) {
+			t.Fatalf("save %d: expected %s in output, got:\n%s", i+1, expected, out)
+		}
+	}
+
+	// Verify we have cp-1, cp-2, cp-3.
+	listBefore := run(t, dir, "list")
+	for i := 1; i <= 3; i++ {
+		tag := fmt.Sprintf("cp-%d", i)
+		if !strings.Contains(listBefore, tag) {
+			t.Errorf("expected %s before GC, list:\n%s", tag, listBefore)
+		}
+	}
+
+	// GC keeping only the last 1. Due to same-second timestamps, which
+	// specific checkpoint survives is non-deterministic, but the key
+	// invariant is: the next save must produce a tag HIGHER than any
+	// surviving cp-N tag.
+	run(t, dir, "gc", "--keep-last", "1")
+
+	listAfterGC := run(t, dir, "list")
+	t.Logf("list after GC:\n%s", listAfterGC)
+
+	// Find the highest surviving cp-N tag.
+	highestSurviving := 0
+	for i := 1; i <= 3; i++ {
+		if strings.Contains(listAfterGC, fmt.Sprintf("cp-%d", i)) {
+			highestSurviving = i
+		}
+	}
+	if highestSurviving == 0 {
+		t.Fatalf("no cp-N tags survived GC:\n%s", listAfterGC)
+	}
+
+	// Count unique digests after GC — this is what the old buggy code used.
+	// If the old code would produce a LOWER sequence than our fix, the test
+	// validates the regression.
+	digestCount := countCheckpointLines(listAfterGC)
+
+	// Save a new checkpoint.
+	writeFile(t, dir, "file.txt", "after-gc-content")
+	out := run(t, dir, "save", "--skip-secret-scan", "-m", "after gc")
+
+	expectedTag := fmt.Sprintf("cp-%d", highestSurviving+1)
+	if !strings.Contains(out, expectedTag) {
+		t.Errorf("save after GC should produce %s (monotonic from highest surviving tag), got:\n%s", expectedTag, out)
+	}
+
+	// The old buggy code would have produced cp-(digestCount+1). If that
+	// differs from our expected tag, the test is actually catching the bug.
+	buggyTag := fmt.Sprintf("cp-%d", digestCount+1)
+	if buggyTag != expectedTag {
+		t.Logf("regression validated: old code would produce %s, fixed code produces %s", buggyTag, expectedTag)
+	}
+
+	// Save once more to confirm continued monotonic behavior.
+	writeFile(t, dir, "file.txt", "after-gc-content-2")
+	out2 := run(t, dir, "save", "--skip-secret-scan", "-m", "after gc 2")
+	expectedTag2 := fmt.Sprintf("cp-%d", highestSurviving+2)
+	if !strings.Contains(out2, expectedTag2) {
+		t.Errorf("second save after GC should produce %s, got:\n%s", expectedTag2, out2)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -125,13 +126,19 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 	}
 	defer unlock()
 
-	// Determine checkpoint sequence
+	// Determine checkpoint sequence by finding the highest existing cp-N tag
+	// and incrementing. Using unique digest count is wrong because GC can
+	// reduce the count, causing sequence numbers to go backwards and collide
+	// with existing tags.
 	existing, _ := store.ListCheckpoints()
-	seen := make(map[string]bool)
+	seq := 1
 	for _, e := range existing {
-		seen[e.Digest] = true
+		if strings.HasPrefix(e.Tag, "cp-") {
+			if n, err := strconv.Atoi(e.Tag[3:]); err == nil && n >= seq {
+				seq = n + 1
+			}
+		}
 	}
-	seq := len(seen) + 1
 
 	// Find parent digest
 	parentDigest := ""

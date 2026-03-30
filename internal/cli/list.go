@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -54,6 +56,13 @@ func newListCmd() *cobra.Command {
 					}
 				}
 			}
+
+			// Sort by creation time, oldest first.
+			sort.Slice(digestOrder, func(i, j int) bool {
+				ti, _ := time.Parse(time.RFC3339, groups[digestOrder[i]].created)
+				tj, _ := time.Parse(time.RFC3339, groups[digestOrder[j]].created)
+				return ti.Before(tj)
+			})
 
 			fmt.Printf("%-20s %-20s %-22s %s\n", "TAG", "CREATED", "DIGEST", "MESSAGE")
 			for _, d := range digestOrder {
