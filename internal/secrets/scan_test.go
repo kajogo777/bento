@@ -101,9 +101,9 @@ func TestScanFiles_Multiple(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// File with a Slack bot token
+	// File with a Stripe test key
 	f3 := filepath.Join(dir, "c.env")
-	if err := os.WriteFile(f3, []byte("SLACK_TOKEN=sk_test_51H3gKLM2eZvKYlo2CjFHcJN8kOPqRsTuVwXyZ0123456789abcdef\n"), 0o644); err != nil {
+	if err := os.WriteFile(f3, []byte("STRIPE_KEY=sk_test_51H3gKLM2eZvKYlo2CjFHcJN8kOPqRsTuVwXyZ0123456789abcdef\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
