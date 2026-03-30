@@ -87,6 +87,18 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		if err != nil {
 			return nil, fmt.Errorf("initializing secret scanner: %w", err)
 		}
+
+		// Load .gitleaksignore if present.
+		ignorePath := filepath.Join(opts.Dir, ".gitleaksignore")
+		if _, statErr := os.Stat(ignorePath); statErr == nil {
+			if loadErr := secretScanner.LoadGitleaksIgnore(ignorePath); loadErr != nil {
+				return nil, fmt.Errorf("loading .gitleaksignore: %w", loadErr)
+			}
+		}
+
+		// Enable scan cache inside the store directory.
+		secretScanner.SetCachePath(filepath.Join(cfg.StorePath(), "secret-scan-cache.json"))
+
 		var allFiles []string
 		for _, sr := range scanResults {
 			for _, f := range sr.WorkspaceFiles {
@@ -113,6 +125,10 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 			fmt.Println("Secret scan found potential secrets:")
 			for _, r := range scanHits {
 				fmt.Printf("  %s:%d matched pattern: %s\n", r.File, r.Line, r.Pattern)
+			}
+			fmt.Println("\nTo suppress false positives, add fingerprints to .gitleaksignore:")
+			for _, r := range scanHits {
+				fmt.Printf("  %s\n", r.Fingerprint)
 			}
 			return nil, fmt.Errorf("aborting save due to potential secrets. Use --skip-secret-scan to bypass")
 		}

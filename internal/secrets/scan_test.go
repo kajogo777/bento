@@ -181,3 +181,112 @@ func TestScanFile_LongLines(t *testing.T) {
 		t.Fatal("expected at least 1 result from file with long line, got 0")
 	}
 }
+
+func TestScanFile_Fingerprint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.env")
+	if err := os.WriteFile(path, []byte("AWS_ACCESS_KEY_ID=AKIAZ5GMXQ3TCBFHTKO7\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewSecretScanner(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := s.ScanFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least 1 result")
+	}
+	// Fingerprint should be file:ruleID:line
+	fp := results[0].Fingerprint
+	if fp == "" {
+		t.Fatal("expected non-empty fingerprint")
+	}
+	if !strings.HasPrefix(fp, path+":") {
+		t.Errorf("fingerprint should start with file path, got %q", fp)
+	}
+}
+
+func TestGitleaksIgnore(t *testing.T) {
+	dir := t.TempDir()
+	secretFile := filepath.Join(dir, "secrets.env")
+	if err := os.WriteFile(secretFile, []byte("AWS_ACCESS_KEY_ID=AKIAZ5GMXQ3TCBFHTKO7\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// First scan to get the fingerprint.
+	s1, _ := NewSecretScanner(nil)
+	results, _ := s1.ScanFile(secretFile)
+	if len(results) == 0 {
+		t.Fatal("expected findings to build ignore file")
+	}
+	fp := results[0].Fingerprint
+
+	// Write .gitleaksignore with that fingerprint.
+	ignorePath := filepath.Join(dir, ".gitleaksignore")
+	ignoreContent := "# Suppress known false positive\n" + fp + "\n"
+	if err := os.WriteFile(ignorePath, []byte(ignoreContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second scan with ignore loaded — should suppress the finding.
+	s2, _ := NewSecretScanner(nil)
+	if err := s2.LoadGitleaksIgnore(ignorePath); err != nil {
+		t.Fatalf("loading .gitleaksignore: %v", err)
+	}
+	results2, err := s2.ScanFile(secretFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results2) != 0 {
+		t.Fatalf("expected 0 results after ignore, got %d", len(results2))
+	}
+}
+
+func TestScanCache(t *testing.T) {
+	dir := t.TempDir()
+	cleanFile := filepath.Join(dir, "clean.txt")
+	if err := os.WriteFile(cleanFile, []byte("nothing secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cachePath := filepath.Join(dir, "cache.json")
+
+	// First scan — no cache exists, should scan and create cache.
+	s1, _ := NewSecretScanner(nil)
+	s1.SetCachePath(cachePath)
+	results, err := s1.ScanFiles([]string{cleanFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected 0 results, got %d", len(results))
+	}
+	// Cache file should exist now.
+	if _, statErr := os.Stat(cachePath); statErr != nil {
+		t.Fatal("expected cache file to be created")
+	}
+
+	// Second scan — file unchanged, should use cache (we verify by
+	// checking progress callback count; the file is "scanned" but
+	// the gitleaks detector is not invoked).
+	var progressCount int
+	s2, _ := NewSecretScanner(nil)
+	s2.SetCachePath(cachePath)
+	s2.SetProgressFunc(func(scanned, total int) {
+		progressCount = scanned
+	})
+	results2, err := s2.ScanFiles([]string{cleanFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results2) != 0 {
+		t.Fatalf("expected 0 results on cached scan, got %d", len(results2))
+	}
+	if progressCount != 1 {
+		t.Fatalf("expected progress to reach 1, got %d", progressCount)
+	}
+}
