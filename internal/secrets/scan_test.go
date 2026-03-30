@@ -3,6 +3,7 @@ package secrets
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -153,5 +154,37 @@ func TestScanFile_MultiplePatterns(t *testing.T) {
 	}
 	if len(results) < 2 {
 		t.Fatalf("expected at least 2 matches on same line, got %d", len(results))
+	}
+}
+
+func TestScanFile_LongLines(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "longline.txt")
+
+	// Build a file with a line exceeding bufio.MaxScanTokenSize (64KB).
+	// Place a secret after the long padding to ensure the scanner reads
+	// the entire line rather than erroring with "token too long".
+	longLine := strings.Repeat("A", 128*1024) + " AKIAIOSFODNN7EXAMPLE1\n"
+	if err := os.WriteFile(path, []byte(longLine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewSecretScanner([]string{`AKIA[0-9A-Z]{16}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := s.ScanFile(path)
+	if err != nil {
+		t.Fatalf("unexpected error scanning file with long line: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result from long line, got %d", len(results))
+	}
+	if results[0].Line != 1 {
+		t.Errorf("expected match on line 1, got %d", results[0].Line)
+	}
+	if results[0].Match != "AKIAIOSFODNN7EXAMPLE" {
+		t.Errorf("expected match AKIAIOSFODNN7EXAMPLE, got %q", results[0].Match)
 	}
 }

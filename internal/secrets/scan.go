@@ -104,6 +104,7 @@ func (s *Scanner) ScanFile(path string) ([]ScanResult, error) {
 
 	var results []ScanResult
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024) // 1MB max line length
 	lineNum := 0
 	for scanner.Scan() {
 		lineNum++
