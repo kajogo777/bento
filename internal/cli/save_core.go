@@ -83,29 +83,26 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 
 	// Secret scan
 	if !opts.SkipSecretScan {
-		secretPatterns := extension.CommonSecretPatterns
-		if len(secretPatterns) > 0 {
-			secretScanner, err := secrets.NewSecretScanner(secretPatterns)
-			if err != nil {
-				return nil, fmt.Errorf("initializing secret scanner: %w", err)
+		secretScanner, err := secrets.NewSecretScanner(nil)
+		if err != nil {
+			return nil, fmt.Errorf("initializing secret scanner: %w", err)
+		}
+		var allFiles []string
+		for _, sr := range scanResults {
+			for _, f := range sr.WorkspaceFiles {
+				allFiles = append(allFiles, filepath.Join(opts.Dir, f))
 			}
-			var allFiles []string
-			for _, sr := range scanResults {
-				for _, f := range sr.WorkspaceFiles {
-					allFiles = append(allFiles, filepath.Join(opts.Dir, f))
-				}
+		}
+		scanHits, err := secretScanner.ScanFiles(allFiles)
+		if err != nil {
+			return nil, fmt.Errorf("secret scan error: %w", err)
+		}
+		if len(scanHits) > 0 {
+			fmt.Println("Secret scan found potential secrets:")
+			for _, r := range scanHits {
+				fmt.Printf("  %s:%d matched pattern: %s\n", r.File, r.Line, r.Pattern)
 			}
-			scanHits, err := secretScanner.ScanFiles(allFiles)
-			if err != nil {
-				return nil, fmt.Errorf("secret scan error: %w", err)
-			}
-			if len(scanHits) > 0 {
-				fmt.Println("Secret scan found potential secrets:")
-				for _, r := range scanHits {
-					fmt.Printf("  %s:%d matched pattern: %s\n", r.File, r.Line, r.Pattern)
-				}
-				return nil, fmt.Errorf("aborting save due to potential secrets. Use --skip-secret-scan to bypass")
-			}
+			return nil, fmt.Errorf("aborting save due to potential secrets. Use --skip-secret-scan to bypass")
 		}
 	}
 

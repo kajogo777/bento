@@ -1,26 +1,14 @@
 package secrets
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
-)
 
-// DefaultPatterns are the built-in secret detection patterns.
-// does not provide its own.
-var DefaultPatterns = []string{
-	`(?i)AKIA[0-9A-Z]{16}`,                      // AWS access key
-	`(?i)sk-[a-zA-Z0-9]{20,}`,                    // OpenAI/Anthropic API key
-	`ghp_[a-zA-Z0-9]{36}`,                        // GitHub PAT
-	`glpat-[a-zA-Z0-9\-]{20,}`,                   // GitLab PAT
-	`-----BEGIN (RSA |EC )?PRIVATE KEY`,           // Private keys
-	`(?i)(password|passwd|pwd)\s*[:=]\s*[^\s${\}][^\s]*`, // Password assignments (excludes template vars)
-}
+	"github.com/zricethezav/gitleaks/v8/config"
+	"github.com/zricethezav/gitleaks/v8/detect"
+	"github.com/zricethezav/gitleaks/v8/report"
+	"github.com/zricethezav/gitleaks/v8/sources"
+)
 
 // ScanResult represents a single secret match found in a file.
 type ScanResult struct {
@@ -30,102 +18,60 @@ type ScanResult struct {
 	Match   string
 }
 
-// Scanner scans files for secret patterns.
+// Scanner scans files for secret patterns using gitleaks.
 type Scanner struct {
-	patterns []*regexp.Regexp
+	detector *detect.Detector
 }
 
-// NewSecretScanner creates a Scanner from the given regex pattern strings. If
-// compilation of any pattern fails, an error is returned.
+// NewSecretScanner creates a Scanner backed by gitleaks. The patterns argument
+// is accepted for API compatibility but ignored — gitleaks' ~200+ built-in
+// rules are used instead. Pass nil or an empty slice; the result is the same.
 func NewSecretScanner(patterns []string) (*Scanner, error) {
-	compiled := make([]*regexp.Regexp, 0, len(patterns))
-	for _, p := range patterns {
-		re, err := regexp.Compile(p)
-		if err != nil {
-			return nil, fmt.Errorf("compiling secret pattern %q: %w", p, err)
+	detector, err := detect.NewDetectorDefaultConfig()
+	if err != nil {
+		return nil, fmt.Errorf("initializing gitleaks detector: %w", err)
+	}
+	return &Scanner{detector: detector}, nil
+}
+
+// NewSecretScannerWithConfig creates a Scanner with a custom gitleaks config.
+// This allows callers to extend or override the default ruleset.
+func NewSecretScannerWithConfig(cfg config.Config) *Scanner {
+	return &Scanner{detector: detect.NewDetector(cfg)}
+}
+
+// findingsToResults converts gitleaks findings to ScanResult values.
+func findingsToResults(findings []report.Finding, path string) []ScanResult {
+	results := make([]ScanResult, 0, len(findings))
+	for _, f := range findings {
+		file := f.File
+		if file == "" {
+			file = path
 		}
-		compiled = append(compiled, re)
+		results = append(results, ScanResult{
+			File:    file,
+			Line:    f.StartLine,
+			Pattern: f.RuleID,
+			Match:   f.Secret,
+		})
 	}
-	return &Scanner{patterns: compiled}, nil
+	return results
 }
 
-// isBinary checks if a file appears to be binary by looking for null bytes
-// in the first 512 bytes.
-func isBinary(f *os.File) (bool, error) {
-	buf := make([]byte, 512)
-	n, err := f.Read(buf)
-	if err != nil && err != io.EOF {
-		return false, err
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return false, err
-	}
-	return bytes.ContainsRune(buf[:n], 0), nil
-}
-
-// shouldSkipFile returns true for files unlikely to contain real secrets.
-func shouldSkipFile(path string) bool {
-	base := filepath.Base(path)
-	ext := filepath.Ext(path)
-
-	// Test files contain fake secrets by design
-	if strings.HasSuffix(base, "_test.go") || strings.HasSuffix(base, ".test.js") ||
-		strings.HasSuffix(base, ".test.ts") || strings.HasSuffix(base, "_test.py") ||
-		strings.HasSuffix(base, ".spec.js") || strings.HasSuffix(base, ".spec.ts") {
-		return true
-	}
-
-	// Documentation and spec files
-	if ext == ".md" || ext == ".rst" || ext == ".adoc" {
-		return true
-	}
-
-	return false
-}
-
-// ScanFile scans a single file line by line and returns any secret matches.
-// Binary files and test/doc files are skipped.
+// ScanFile scans a single file and returns any secret matches.
+// Binary files are automatically skipped by gitleaks.
 func (s *Scanner) ScanFile(path string) ([]ScanResult, error) {
-	f, err := os.Open(path)
+	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening file %s: %w", path, err)
 	}
-	defer func() { _ = f.Close() }()
 
-	if shouldSkipFile(path) {
-		return nil, nil
+	fragment := sources.Fragment{
+		Raw:      string(content),
+		FilePath: path,
 	}
-
-	if binary, err := isBinary(f); err != nil {
-		return nil, fmt.Errorf("checking file %s: %w", path, err)
-	} else if binary {
-		return nil, nil
-	}
-
-	var results []ScanResult
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024) // 1MB max line length
-	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Text()
-		for _, re := range s.patterns {
-			if match := re.FindString(line); match != "" {
-				results = append(results, ScanResult{
-					File:    path,
-					Line:    lineNum,
-					Pattern: re.String(),
-					Match:   match,
-				})
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return results, fmt.Errorf("scanning file %s: %w", path, err)
-	}
-
-	return results, nil
+	findings := s.detector.Detect(detect.Fragment(fragment))
+	return findingsToResults(findings, path), nil
 }
 
 // ScanFiles scans multiple files and returns all secret matches found.
