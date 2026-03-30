@@ -17,7 +17,6 @@ import (
 	"github.com/zricethezav/gitleaks/v8/config"
 	"github.com/zricethezav/gitleaks/v8/detect"
 	"github.com/zricethezav/gitleaks/v8/report"
-	"github.com/zricethezav/gitleaks/v8/sources"
 )
 
 // ScanResult represents a single secret match found in a file.
@@ -194,11 +193,7 @@ func (s *Scanner) ScanFile(path string) ([]ScanResult, error) {
 		return nil, fmt.Errorf("opening file %s: %w", path, err)
 	}
 
-	fragment := sources.Fragment{
-		Raw:      string(content),
-		FilePath: path,
-	}
-	findings := s.detector.Detect(detect.Fragment(fragment))
+	findings := s.detector.DetectString(string(content))
 	return s.findingsToResults(findings, path), nil
 }
 

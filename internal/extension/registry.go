@@ -1,10 +1,5 @@
 package extension
 
-import (
-	"os/exec"
-	"strings"
-)
-
 // allBuiltinExtensions returns every built-in extension in detection order.
 func allBuiltinExtensions() []Extension {
 	return []Extension{
@@ -85,15 +80,4 @@ func ActiveExtensionNames(workDir string, explicit []string) []string {
 		names[i] = ext.Name()
 	}
 	return names
-}
-
-// execGit runs a git command in the given directory and returns trimmed output.
-func execGit(workDir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = workDir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
 }
