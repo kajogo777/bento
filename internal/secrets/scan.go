@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -37,7 +38,8 @@ type Scanner struct {
 	detector   *detect.Detector
 	onProgress ProgressFunc
 	cachePath  string
-	ignore     map[string]struct{} // fingerprints to suppress
+	baseDir    string                // workspace root for relative fingerprints
+	ignore     map[string]struct{}   // fingerprints to suppress
 }
 
 // NewSecretScanner creates a Scanner backed by gitleaks. The patterns argument
@@ -67,6 +69,12 @@ func (s *Scanner) SetProgressFunc(fn ProgressFunc) {
 // The cache is saved after a successful scan with no findings.
 func (s *Scanner) SetCachePath(path string) {
 	s.cachePath = path
+}
+
+// SetBaseDir sets the workspace root directory. When set, fingerprints use
+// paths relative to this directory, making .gitleaksignore portable.
+func (s *Scanner) SetBaseDir(dir string) {
+	s.baseDir = dir
 }
 
 // LoadGitleaksIgnore reads a .gitleaksignore file and registers its
@@ -133,9 +141,23 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// relativePath returns path relative to baseDir. If baseDir is empty, the
+// relative computation fails, or the result escapes the base (starts with
+// ".."), the original absolute path is returned unchanged.
+func relativePath(baseDir, path string) string {
+	if baseDir == "" {
+		return path
+	}
+	rel, err := filepath.Rel(baseDir, path)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return path
+	}
+	return rel
+}
+
 // fingerprint builds a gitleaks-compatible fingerprint for a finding.
-func fingerprint(file, ruleID string, line int) string {
-	return fmt.Sprintf("%s:%s:%d", file, ruleID, line)
+func (s *Scanner) fingerprint(file, ruleID string, line int) string {
+	return fmt.Sprintf("%s:%s:%d", relativePath(s.baseDir, file), ruleID, line)
 }
 
 // findingsToResults converts gitleaks findings to ScanResult values,
@@ -147,7 +169,7 @@ func (s *Scanner) findingsToResults(findings []report.Finding, path string) []Sc
 		if file == "" {
 			file = path
 		}
-		fp := fingerprint(file, f.RuleID, f.StartLine)
+		fp := s.fingerprint(file, f.RuleID, f.StartLine)
 		if s.ignore != nil {
 			if _, ok := s.ignore[fp]; ok {
 				continue

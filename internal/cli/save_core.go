@@ -99,6 +99,9 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		// Enable scan cache inside the store directory.
 		secretScanner.SetCachePath(filepath.Join(cfg.StorePath(), "secret-scan-cache.json"))
 
+		// Use relative paths in fingerprints.
+		secretScanner.SetBaseDir(opts.Dir)
+
 		var allFiles []string
 		for _, sr := range scanResults {
 			for _, f := range sr.WorkspaceFiles {
@@ -124,9 +127,9 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		if len(scanHits) > 0 {
 			fmt.Printf("Secret scan found %d potential secret(s):\n\n", len(scanHits))
 			for _, r := range scanHits {
-				fmt.Printf("  %s  (%s)\n", r.Fingerprint, r.Pattern)
+				fmt.Printf("  %s\n", r.Fingerprint)
 			}
-			fmt.Println("\nTo suppress false positives, copy the fingerprints above into .gitleaksignore (one per line).")
+			fmt.Println("\nTo suppress false positives, copy the lines above into .gitleaksignore (one per line).")
 			return nil, fmt.Errorf("aborting save due to potential secrets. Use --skip-secret-scan to bypass")
 		}
 	}
