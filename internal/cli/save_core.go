@@ -122,14 +122,11 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 			return nil, fmt.Errorf("secret scan error: %w", err)
 		}
 		if len(scanHits) > 0 {
-			fmt.Println("Secret scan found potential secrets:")
+			fmt.Printf("Secret scan found %d potential secret(s):\n\n", len(scanHits))
 			for _, r := range scanHits {
-				fmt.Printf("  %s:%d matched pattern: %s\n", r.File, r.Line, r.Pattern)
+				fmt.Printf("  %s  (%s)\n", r.Fingerprint, r.Pattern)
 			}
-			fmt.Println("\nTo suppress false positives, add fingerprints to .gitleaksignore:")
-			for _, r := range scanHits {
-				fmt.Printf("  %s\n", r.Fingerprint)
-			}
+			fmt.Println("\nTo suppress false positives, copy the fingerprints above into .gitleaksignore (one per line).")
 			return nil, fmt.Errorf("aborting save due to potential secrets. Use --skip-secret-scan to bypass")
 		}
 	}
