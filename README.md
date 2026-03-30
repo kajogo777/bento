@@ -201,7 +201,19 @@ bento env show                                               # inspect config
 bento env export -o .env                                     # generate .env file
 ```
 
-A pre-save scan catches credentials before they're stored.
+A pre-save scan powered by [gitleaks](https://github.com/zricethezav/gitleaks) (~200+ rules) catches credentials before they're stored. Files are scanned concurrently with a SHA256 cache so repeat saves skip unchanged files.
+
+To suppress false positives, add a `.gitleaksignore` file to your workspace root with one fingerprint per line (`file:ruleID:line`). When a scan fails, bento prints the fingerprints in copy-pasteable format:
+
+```
+Secret scan found 3 potential secret(s):
+
+  .stakpak/session/cached-page.txt:generic-api-key:42
+  config/dev.env:aws-access-token:7
+  config/dev.env:private-key:15
+
+To suppress false positives, copy the lines above into .gitleaksignore (one per line).
+```
 
 ## CLI Reference
 

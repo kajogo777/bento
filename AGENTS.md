@@ -19,7 +19,7 @@ internal/
   workspace/                 → file scanning, layer packing (tar+gzip), .bentoignore
   registry/                  → OCI store (local image layout + remote push)
   manifest/                  → OCI manifest/config construction, annotations, DAG
-  secrets/                   → secret scanning (regex), env hydration, providers
+  secrets/                   → secret scanning (gitleaks), env hydration, providers
   hooks/                     → lifecycle hook execution (pre_save, post_restore, etc.)
   policy/                    → garbage collection (retention tiers, blob pruning)
   watcher/                   → file-system watcher for auto-checkpointing
@@ -35,7 +35,7 @@ internal/
 
 4. **Three core layers** - deps (rarely changes, large), agent (changes often, small), project (catch-all). Extensions can add more layers (e.g., `build-cache`).
 
-5. **Secret safety** - Pre-save regex scanning, credential file exclusion, env references (never store secret values).
+5. **Secret safety** - Pre-save scanning via [gitleaks](https://github.com/zricethezav/gitleaks) (~200+ rules), `.gitleaksignore` for false positives, SHA256 scan cache, credential file exclusion, env references (never store secret values).
 
 ## Extension System
 
@@ -151,7 +151,7 @@ watch:
 4. Run pre_save hook (abort on failure)
 5. Collect ignore patterns (common + extensions + config + .bentoignore)
 6. Scan workspace - assign files to layers
-7. Secret scan - abort if credentials found
+7. Secret scan (gitleaks, ~200+ rules, concurrent, cached) - abort if credentials found
 8. Acquire file lock (.save-lock)
 9. Pack layers concurrently (tar+gzip, parallel up to NumCPU)
 10. Compare layer digests with parent - skip if all unchanged
