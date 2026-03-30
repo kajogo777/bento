@@ -2,6 +2,8 @@
 
 **Portable agent workspaces. Pack, ship, resume.**
 
+![bento demo](docs/demo.gif)
+
 Bento packages AI agent workspace state into portable, layered OCI artifacts. Save a checkpoint of your code, agent memory, and dependencies. Push it to any container registry. Open it anywhere.
 
 Works with any agent. Works on macOS, Linux, and Windows. Works offline. One binary.
