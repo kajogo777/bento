@@ -14,6 +14,7 @@ func allBuiltinExtensions() []Extension {
 		OpenCode{},
 		OpenClaw{},
 		Cursor{},
+		Stakpak{},  // Stakpak agent framework
 		AgentsMD{}, // cross-agent AGENTS.md (always checked)
 
 		// Deps extensions

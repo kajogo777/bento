@@ -120,7 +120,7 @@ bento save -m "multi-agent"
 
 Each extension contributes patterns to the right layer. Multiple extensions merge naturally -- their patterns are unioned into the same layer. Extensions capture a superset of all known storage paths across agent versions, so state is never silently missed when a user runs an older or newer release. Directories that do not exist on disk cost nothing (no files matched = no bytes in the layer).
 
-Built-in agent extensions: **Claude Code**, **Codex**, **OpenCode**, **OpenClaw**, **Cursor**, **AGENTS.md** (cross-agent).
+Built-in agent extensions: **Claude Code**, **Codex**, **OpenCode**, **OpenClaw**, **Cursor**, **Stakpak**, **AGENTS.md** (cross-agent).
 Built-in deps extensions: **Node** (npm, yarn, pnpm, bun, deno), **Python** (pip, uv, pipenv, poetry), **Go**, **Rust**, **Ruby**, **Elixir**, **OCaml**.
 Built-in tool extensions: **tool-versions** (asdf / mise).
 
@@ -339,6 +339,7 @@ Yes. Checkpoints are portable across macOS, Linux, and Windows.
   - [x] OpenCode (with session capture)
   - [x] OpenClaw (with session capture)
   - [x] Cursor
+  - [x] Stakpak
   - [ ] GitHub Copilot
 - [x] Remote registry push/pull
 - [ ] Store schemes (`oci://`, `file://`)

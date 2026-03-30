@@ -69,6 +69,7 @@ On every `save`/`diff`/`watch`, all extensions are auto-detected, their contribu
 | `opencode` | `.opencode/` or `opencode.json` | `.opencode/**`, `opencode.json`, `~/.local/share/opencode/opencode.db` (global), `~/.local/share/opencode/storage/` (legacy), `~/.config/opencode/commands/`, `~/.opencode/commands/` |
 | `openclaw` | `SOUL.md` or `IDENTITY.md` | `SOUL.md`, `MEMORY.md`, `memory/**`, `skills/**`, `canvas/**`, `~/.openclaw/openclaw.json`, `~/.openclaw/agents/<id>/sessions/`, `~/.openclaw/workspace/skills/` |
 | `cursor` | `.cursor/` or `.cursorrules` | `.cursor/rules/**`, `.cursor/mcp.json`, `.cursorrules`, `.cursorignore`, `~/.cursor/mcp.json`, `~/Library/.../Cursor/User/workspaceStorage/<hash>/` |
+| `stakpak` | `.stakpak/` | `.stakpak/config.toml`, `.stakpak/session/**`, `~/.stakpak/data/local.db`, `~/.stakpak/checks/`, `~/.stakpak/triggers/`, `~/.stakpak/sessions/` |
 | `agents-md` | `AGENTS.md` | `AGENTS.md` |
 
 **Deps extensions** (contribute to `deps` layer):

@@ -331,3 +331,97 @@ func extractAgentLayerDigest(inspectOutput string) string {
 	}
 	return ""
 }
+
+// ---------------------------------------------------------------------------
+// TestStakpakExtension: .stakpak/ files land in the agent layer
+// ---------------------------------------------------------------------------
+
+func TestStakpakExtension(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	// Seed Stakpak marker files.
+	writeFile(t, dir, ".stakpak/config.toml", "# project config\n")
+	writeFile(t, dir, ".stakpak/session/checkpoint", "abc123\n")
+	writeFile(t, dir, ".stakpak/session/messages.json", `{"messages":[]}`+"\n")
+	writeFile(t, dir, ".stakpak/session/subagents/prompt_test.txt", "test prompt\n")
+	writeFile(t, dir, ".stakpak/session/backups/uuid-1/file.go", "package main\n")
+
+	out := run(t, dir, "save", "--skip-secret-scan", "-m", "stakpak test")
+
+	if !strings.Contains(out, "stakpak") {
+		t.Logf("save output: %s", out)
+	}
+
+	// Inspect with --files to verify agent layer contents.
+	inspectOut := run(t, dir, "inspect", "--files")
+
+	for _, expected := range []string{
+		".stakpak/config.toml",
+		".stakpak/session/checkpoint",
+		".stakpak/session/messages.json",
+		".stakpak/session/subagents/prompt_test.txt",
+		".stakpak/session/backups/uuid-1/file.go",
+	} {
+		if !strings.Contains(inspectOut, expected) {
+			t.Errorf("inspect should list %q in agent layer, got:\n%s", expected, inspectOut)
+		}
+	}
+
+	// Verify round-trip.
+	dst := t.TempDir()
+	run(t, dir, "open", "cp-1", dst)
+
+	for _, rel := range []string{
+		".stakpak/config.toml",
+		".stakpak/session/checkpoint",
+		".stakpak/session/messages.json",
+		".stakpak/session/subagents/prompt_test.txt",
+		".stakpak/session/backups/uuid-1/file.go",
+	} {
+		srcData, err := os.ReadFile(filepath.Join(dir, rel))
+		if err != nil {
+			t.Fatalf("reading src %s: %v", rel, err)
+		}
+		dstData, err := os.ReadFile(filepath.Join(dst, rel))
+		if err != nil {
+			t.Fatalf("reading dst %s: %v", rel, err)
+		}
+		if string(srcData) != string(dstData) {
+			t.Errorf("file %s mismatch after restore:\nsrc: %q\ndst: %q", rel, srcData, dstData)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestStakpakSecretsExcluded: secrets.json and warden CA must never be captured
+// ---------------------------------------------------------------------------
+
+func TestStakpakSecretsExcluded(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	// Seed Stakpak workspace marker with session files.
+	writeFile(t, dir, ".stakpak/config.toml", "# project config\n")
+	writeFile(t, dir, ".stakpak/session/checkpoint", "abc123\n")
+	writeFile(t, dir, ".stakpak/session/secrets.json", `{"[REDACTED]":"actual-api-key-value"}`+"\n")
+	writeFile(t, dir, ".stakpak/warden/ca/warden_ca.key", "-----BEGIN PRIVATE KEY-----\nfake\n")
+	writeFile(t, dir, ".stakpak/warden/ca/warden_ca.crt", "-----BEGIN CERTIFICATE-----\nfake\n")
+	writeFile(t, dir, ".stakpak/warden/warden_logs.db", "logs\n")
+
+	run(t, dir, "save", "--skip-secret-scan", "-m", "secrets test")
+
+	// Inspect with --files — secrets and warden must NOT appear.
+	inspectOut := run(t, dir, "inspect", "--files")
+
+	for _, forbidden := range []string{"secrets.json", "warden_ca.key", "warden_ca.crt", "warden_logs.db"} {
+		if strings.Contains(inspectOut, forbidden) {
+			t.Errorf("secret/warden file %q should be excluded from checkpoint, but found in:\n%s", forbidden, inspectOut)
+		}
+	}
+
+	// The config.toml and checkpoint SHOULD be captured.
+	for _, expected := range []string{".stakpak/config.toml", ".stakpak/session/checkpoint"} {
+		if !strings.Contains(inspectOut, expected) {
+			t.Errorf("%q should be included in checkpoint, got:\n%s", expected, inspectOut)
+		}
+	}
+}
