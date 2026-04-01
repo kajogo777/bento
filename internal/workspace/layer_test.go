@@ -134,3 +134,109 @@ func buildTarGzBytes(t *testing.T, files map[string]string) []byte {
 	}
 	return buf.Bytes()
 }
+
+func TestPackBytesToTempLayer(t *testing.T) {
+	content := []byte("encrypted-secrets-blob-here")
+	result, err := PackBytesToTempLayer("secrets.enc", content)
+	if err != nil {
+		t.Fatalf("PackBytesToTempLayer failed: %v", err)
+	}
+	defer func() { _ = os.Remove(result.Path) }()
+
+	// Verify temp file exists.
+	if _, err := os.Stat(result.Path); err != nil {
+		t.Fatalf("temp file not created: %v", err)
+	}
+
+	// Verify digests are non-empty.
+	if result.GzipDigest == "" || !strings.HasPrefix(result.GzipDigest, "sha256:") {
+		t.Errorf("invalid GzipDigest: %q", result.GzipDigest)
+	}
+	if result.DiffID == "" || !strings.HasPrefix(result.DiffID, "sha256:") {
+		t.Errorf("invalid DiffID: %q", result.DiffID)
+	}
+	if result.Size <= 0 {
+		t.Errorf("expected positive size, got %d", result.Size)
+	}
+
+	// Extract and verify content round-trips.
+	f, err := os.Open(result.Path)
+	if err != nil {
+		t.Fatalf("opening temp file: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	extracted, err := ExtractFileContentFromLayer(f, "secrets.enc", 10*1024*1024)
+	if err != nil {
+		t.Fatalf("extracting content: %v", err)
+	}
+	if string(extracted) != string(content) {
+		t.Errorf("content mismatch: got %q, want %q", extracted, content)
+	}
+}
+
+func TestPackBytesToTempLayer_EmptyContent(t *testing.T) {
+	result, err := PackBytesToTempLayer("empty.bin", []byte{})
+	if err != nil {
+		t.Fatalf("PackBytesToTempLayer failed: %v", err)
+	}
+	defer func() { _ = os.Remove(result.Path) }()
+
+	if result.Size <= 0 {
+		t.Errorf("expected positive size even for empty content, got %d", result.Size)
+	}
+}
+
+func TestPackLayerWithFileOverrides(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Create original file.
+	original := "original-secret-content"
+	scrubbed := "scrubbed-placeholder-content"
+	filePath := filepath.Join(workDir, "config.json")
+	if err := os.WriteFile(filePath, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create override temp file.
+	tmpFile, err := os.CreateTemp("", "override-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tmpFile.Write([]byte(scrubbed)); err != nil {
+		t.Fatal(err)
+	}
+	_ = tmpFile.Close()
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+	overrides := map[string]string{
+		"config.json": tmpFile.Name(),
+	}
+
+	result, err := PackLayerWithExternalToTemp(workDir, []string{"config.json"}, nil, false, overrides)
+	if err != nil {
+		t.Fatalf("PackLayerWithExternalToTemp failed: %v", err)
+	}
+	defer func() { _ = os.Remove(result.Path) }()
+
+	// Extract and verify the packed content is the scrubbed version.
+	f, err := os.Open(result.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	extracted, err := ExtractFileContentFromLayer(f, "config.json", 10*1024*1024)
+	if err != nil {
+		t.Fatalf("extracting: %v", err)
+	}
+	if string(extracted) != scrubbed {
+		t.Errorf("packed content should be scrubbed version, got %q", extracted)
+	}
+
+	// Verify original file on disk is untouched.
+	diskContent, _ := os.ReadFile(filePath)
+	if string(diskContent) != original {
+		t.Errorf("original file was modified: %q", diskContent)
+	}
+}

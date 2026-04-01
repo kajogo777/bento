@@ -50,7 +50,18 @@ type PackResult struct {
 // loading the result into memory. It computes both the gzip digest (for OCI
 // descriptor) and the uncompressed tar digest (for OCI config diff_id) in a
 // single streaming pass.
-func PackLayerWithExternalToTemp(workDir string, files []string, extFiles []ExternalFile, allowMissingExternal bool) (*PackResult, error) {
+//
+// fileOverrides maps relative file paths to absolute paths of replacement
+// content. When a workspace file has an override, the content is read from
+// the override path instead of the workspace, but the tar header uses the
+// original file's metadata. This is used by secret scrubbing to pack
+// scrubbed content without modifying files on disk.
+func PackLayerWithExternalToTemp(workDir string, files []string, extFiles []ExternalFile, allowMissingExternal bool, fileOverrides ...map[string]string) (*PackResult, error) {
+	// Merge optional overrides into a single map.
+	var overrides map[string]string
+	if len(fileOverrides) > 0 && fileOverrides[0] != nil {
+		overrides = fileOverrides[0]
+	}
 	tmpFile, err := os.CreateTemp("", "bento-layer-*.tar.gz")
 	if err != nil {
 		return nil, fmt.Errorf("creating temp file: %w", err)
@@ -91,14 +102,28 @@ func PackLayerWithExternalToTemp(workDir string, files []string, extFiles []Exte
 			header.AccessTime = time.Time{}
 			header.ChangeTime = time.Time{}
 
+			// Determine the actual file to read content from.
+			// If there's a scrub override, use the override path and
+			// update the header size to match.
+			readPath := absPath
+			if overrides != nil {
+				if override, ok := overrides[normalized]; ok {
+					readPath = override
+					if oInfo, oErr := os.Stat(override); oErr == nil {
+						header.Size = oInfo.Size()
+					}
+				}
+			}
+
 			if err := tw.WriteHeader(header); err != nil {
 				return fmt.Errorf("write header %s: %w", normalized, err)
 			}
 
-			f, err := os.Open(absPath)
+			f, err := os.Open(readPath)
 			if err != nil {
 				return fmt.Errorf("open %s: %w", normalized, err)
 			}
+
 			if _, err := io.Copy(tw, f); err != nil {
 				_ = f.Close()
 				return fmt.Errorf("copy %s: %w", normalized, err)
@@ -566,4 +591,74 @@ func HashFileStreaming(path string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// PackBytesToTempLayer creates a tar.gz archive containing a single file with
+// the given name and content. Returns a PackResult with the temp file path and
+// digests. Used by the OCI secrets backend to pack encrypted secrets as a layer.
+func PackBytesToTempLayer(fileName string, content []byte) (*PackResult, error) {
+	tmpFile, err := os.CreateTemp("", "bento-enc-layer-*.tar.gz")
+	if err != nil {
+		return nil, fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	gzipHasher := sha256.New()
+	mw := io.MultiWriter(tmpFile, gzipHasher)
+
+	gw, err := gzip.NewWriterLevel(mw, gzip.DefaultCompression)
+	if err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("gzip writer: %w", err)
+	}
+	gw.OS = 0xFF
+
+	uncompHasher := sha256.New()
+	tw := tar.NewWriter(io.MultiWriter(gw, uncompHasher))
+
+	header := &tar.Header{
+		Name:    fileName,
+		Size:    int64(len(content)),
+		Mode:    0600,
+		ModTime: time.Time{},
+	}
+	if err := tw.WriteHeader(header); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("write header: %w", err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("write content: %w", err)
+	}
+
+	if err := tw.Close(); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("close tar: %w", err)
+	}
+	if err := gw.Close(); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("close gzip: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("close temp file: %w", err)
+	}
+
+	info, err := os.Stat(tmpPath)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return nil, fmt.Errorf("stat temp file: %w", err)
+	}
+
+	return &PackResult{
+		Path:       tmpPath,
+		Size:       info.Size(),
+		GzipDigest: "sha256:" + hex.EncodeToString(gzipHasher.Sum(nil)),
+		DiffID:     "sha256:" + hex.EncodeToString(uncompHasher.Sum(nil)),
+	}, nil
 }

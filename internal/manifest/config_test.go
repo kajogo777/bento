@@ -175,3 +175,84 @@ func TestUnmarshalConfig_InvalidJSON(t *testing.T) {
 		t.Fatal("expected error for invalid JSON, got nil")
 	}
 }
+
+func TestMarshalUnmarshalRoundtrip_ScrubRecords(t *testing.T) {
+	cfg := &BentoConfigObj{
+		SchemaVersion: "1.0",
+		Checkpoint:    3,
+		Created:       "2025-06-01T10:00:00Z",
+		ScrubRecords: []ScrubFileRecord{
+			{
+				Path: ".mcp.json",
+				Replacements: []ScrubReplacement{
+					{Placeholder: "__BENTO_SCRUBBED[a1b2c3d4e5f6]__", RuleID: "openai-api-key"},
+					{Placeholder: "__BENTO_SCRUBBED[112233445566]__", RuleID: "github-token"},
+				},
+			},
+			{
+				Path: "config/app.yaml",
+				Replacements: []ScrubReplacement{
+					{Placeholder: "__BENTO_SCRUBBED[aabbccddeeff]__", RuleID: "generic-api-key"},
+				},
+			},
+		},
+		RestoreHint:    "Re-open with --secret-key <KEY>",
+	}
+
+	data, err := MarshalConfig(cfg)
+	if err != nil {
+		t.Fatalf("MarshalConfig failed: %v", err)
+	}
+
+	got, err := UnmarshalConfig(data)
+	if err != nil {
+		t.Fatalf("UnmarshalConfig failed: %v", err)
+	}
+
+	if len(got.ScrubRecords) != 2 {
+		t.Fatalf("ScrubRecords length: got %d, want 2", len(got.ScrubRecords))
+	}
+	if got.ScrubRecords[0].Path != ".mcp.json" {
+		t.Errorf("ScrubRecords[0].Path: got %q, want %q", got.ScrubRecords[0].Path, ".mcp.json")
+	}
+	if len(got.ScrubRecords[0].Replacements) != 2 {
+		t.Fatalf("ScrubRecords[0].Replacements length: got %d, want 2", len(got.ScrubRecords[0].Replacements))
+	}
+	if got.ScrubRecords[0].Replacements[0].Placeholder != "__BENTO_SCRUBBED[a1b2c3d4e5f6]__" {
+		t.Errorf("Placeholder: got %q", got.ScrubRecords[0].Replacements[0].Placeholder)
+	}
+	if got.ScrubRecords[0].Replacements[0].RuleID != "openai-api-key" {
+		t.Errorf("RuleID: got %q", got.ScrubRecords[0].Replacements[0].RuleID)
+	}
+	if got.ScrubRecords[1].Path != "config/app.yaml" {
+		t.Errorf("ScrubRecords[1].Path: got %q", got.ScrubRecords[1].Path)
+	}
+	if got.RestoreHint != "Re-open with --secret-key <KEY>" {
+		t.Errorf("RestoreHint: got %q", got.RestoreHint)
+	}
+}
+
+func TestMarshalUnmarshalRoundtrip_NoScrubRecords(t *testing.T) {
+	cfg := &BentoConfigObj{
+		SchemaVersion: "1.0",
+		Checkpoint:    1,
+		Created:       "2025-06-01T10:00:00Z",
+	}
+
+	data, err := MarshalConfig(cfg)
+	if err != nil {
+		t.Fatalf("MarshalConfig failed: %v", err)
+	}
+
+	got, err := UnmarshalConfig(data)
+	if err != nil {
+		t.Fatalf("UnmarshalConfig failed: %v", err)
+	}
+
+	if len(got.ScrubRecords) != 0 {
+		t.Errorf("ScrubRecords should be empty, got %v", got.ScrubRecords)
+	}
+	if got.RestoreHint != "" {
+		t.Errorf("RestoreHint should be empty, got %q", got.RestoreHint)
+	}
+}

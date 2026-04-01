@@ -203,6 +203,7 @@ func NewRootCmd(version string) *cobra.Command {
 		newEnvCmd(),
 		newAddCmd(),
 		newWatchCmd(),
+		newSecretsCmd(),
 	)
 
 	return rootCmd

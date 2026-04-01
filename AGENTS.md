@@ -19,7 +19,7 @@ internal/
   workspace/                 → file scanning, layer packing (tar+gzip), .bentoignore
   registry/                  → OCI store (local image layout + remote push)
   manifest/                  → OCI manifest/config construction, annotations, DAG
-  secrets/                   → secret scanning (gitleaks), env hydration, providers
+  secrets/                   → secret scanning (gitleaks), env hydration, providers, scrubbing, backends
   hooks/                     → lifecycle hook execution (pre_save, post_restore, etc.)
   policy/                    → garbage collection (retention tiers, blob pruning)
   watcher/                   → file-system watcher for auto-checkpointing
@@ -35,7 +35,7 @@ internal/
 
 4. **Three core layers** - deps (rarely changes, large), agent (changes often, small), project (catch-all). Extensions can add more layers (e.g., `build-cache`).
 
-5. **Secret safety** - Pre-save scanning via [gitleaks](https://github.com/zricethezav/gitleaks) (~200+ rules), `.gitleaksignore` for false positives, SHA256 scan cache, credential file exclusion, env references (never store secret values).
+5. **Secret safety** - Pre-save scanning via [gitleaks](https://github.com/zricethezav/gitleaks) (~200+ rules), automatic scrubbing of detected secrets (replaced with unique placeholders in OCI layers), secrets stored locally and encrypted with a one-time key per checkpoint, `.gitleaksignore` for false positives, SHA256 scan cache, credential file exclusion. Key is shown at push/export time, not save time. See `specs/secret-scrubbing.md` for the full design.
 
 ## Extension System
 
@@ -151,11 +151,15 @@ watch:
 4. Run pre_save hook (abort on failure)
 5. Collect ignore patterns (common + extensions + config + .bentoignore)
 6. Scan workspace - assign files to layers
-7. Secret scan (gitleaks, ~200+ rules, concurrent, cached) - abort if credentials found
+7. Secret scan (gitleaks, ~200+ rules, concurrent, cached)
+   - If secrets found: scrub them (replace with __BENTO_SCRUBBED[id]__ placeholders)
+   - Write scrubbed content to temp files for packing (real files on disk untouched)
+   - Store secret values locally (plaintext + encrypted envelope)
+   - Store scrub records in OCI manifest metadata
 8. Acquire file lock (.save-lock)
-9. Pack layers concurrently (tar+gzip, parallel up to NumCPU)
+9. Pack layers concurrently (tar+gzip, parallel up to NumCPU) using scrubbed overrides
 10. Compare layer digests with parent - skip if all unchanged
-11. Build OCI config + manifest
+11. Build OCI config + manifest (includes scrub records, backend name, restore hint)
 12. Store to local OCI layout, tag as cp-N and latest
 13. Run post_save hook (warn on failure, don't abort)
 ```
@@ -177,6 +181,7 @@ watch:
 | `bento env` | Manage env vars and secret refs |
 | `bento watch` | Auto-checkpoint on file changes |
 | `bento add` | Add a file to a layer |
+| `bento secrets export` | Export encrypted secret envelope for a checkpoint |
 
 ## Testing
 
@@ -263,6 +268,17 @@ Bento artifacts must remain valid OCI images. Never break `docker pull`, `COPY -
 2. Add validation in `BentoConfig.Validate()`
 3. Add unit tests for valid and invalid values
 4. If it affects the OCI manifest, update `internal/manifest/config.go`
+
+### Secret Scrubbing Internals
+
+Secret scrubbing requires no configuration. Secrets detected by gitleaks are
+automatically scrubbed during save and restored during open. Key components:
+
+- `internal/secrets/scrub.go` — `ScrubFile()` and `HydrateFile()` core functions
+- `internal/secrets/backend/oci.go` — `EncryptSecrets()` and `DecryptSecrets()` (NaCl secretbox)
+- `internal/secrets/backend/local.go` — local plaintext + encrypted envelope storage
+- One encryption key per checkpoint (shown at save time, used for all sharing)
+- See `specs/secret-scrubbing.md` for the full design
 
 ### Cross-Platform
 

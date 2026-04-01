@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/kajogo777/bento/internal/registry"
 	"github.com/kajogo777/bento/internal/secrets"
+	"github.com/kajogo777/bento/internal/secrets/backend"
 	"github.com/kajogo777/bento/internal/workspace"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"golang.org/x/sync/errgroup"
@@ -39,6 +41,7 @@ type SaveResult struct {
 	Seq     int    // checkpoint sequence number
 	Skipped bool   // true if save was elided because nothing changed
 	Reason  string // human-readable reason when Skipped is true
+	Hint    string // backend-specific restore hint (display variant, may contain secrets)
 }
 
 // ExecuteSave performs a full save operation: scan, pack, build manifest, store.
@@ -81,7 +84,15 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		return nil, fmt.Errorf("scanning workspace: %w", err)
 	}
 
-	// Secret scan
+	// Secret scan and scrub
+	var scrubRecords []manifest.ScrubFileRecord
+	var scrubRestoreHint string
+	var scrubSecrets map[string]string // placeholder → value, stored after seq is known
+	// fileOverrides maps normalized relative path → temp file with scrubbed content.
+	// Passed to PackLayerWithExternalToTemp so scrubbed content is packed
+	// instead of the real files on disk.
+	fileOverrides := make(map[string]string)
+
 	if !opts.SkipSecretScan {
 		secretScanner, err := secrets.NewSecretScanner(nil)
 		if err != nil {
@@ -125,14 +136,79 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 			return nil, fmt.Errorf("secret scan error: %w", err)
 		}
 		if len(scanHits) > 0 {
-			fmt.Printf("Secret scan found %d potential secret(s):\n\n", len(scanHits))
-			for _, r := range scanHits {
-				fmt.Printf("  %s\n", r.Fingerprint)
+			// Group findings by file (relative path).
+			hitsByFile := make(map[string][]secrets.ScanResult)
+			for _, h := range scanHits {
+				rel := h.File
+				if filepath.IsAbs(rel) {
+					if r, err := filepath.Rel(opts.Dir, rel); err == nil {
+						rel = filepath.ToSlash(r)
+					}
+				}
+				hitsByFile[rel] = append(hitsByFile[rel], h)
 			}
-			fmt.Println("\nTo suppress false positives, copy the lines above into .gitleaksignore (one per line).")
-			return nil, fmt.Errorf("aborting save due to potential secrets. Use --skip-secret-scan to bypass")
+
+			// Scrub each file and collect placeholder→value mappings.
+			allSecrets := make(map[string]string)
+			for relPath, hits := range hitsByFile {
+				absPath := filepath.Join(opts.Dir, filepath.FromSlash(relPath))
+				content, readErr := os.ReadFile(absPath)
+				if readErr != nil {
+					return nil, fmt.Errorf("reading %s for scrubbing: %w", relPath, readErr)
+				}
+
+				scrubbed, replacements := secrets.ScrubFile(content, hits)
+				if len(replacements) == 0 {
+					continue
+				}
+
+				// Write scrubbed content to temp file.
+				tmpFile, tmpErr := os.CreateTemp("", "bento-scrub-*")
+				if tmpErr != nil {
+					return nil, fmt.Errorf("creating scrub temp file: %w", tmpErr)
+				}
+				if _, wErr := tmpFile.Write(scrubbed); wErr != nil {
+					_ = tmpFile.Close()
+					return nil, fmt.Errorf("writing scrub temp file: %w", wErr)
+				}
+				_ = tmpFile.Close()
+
+				normalized := workspace.NormalizePath(relPath)
+				fileOverrides[normalized] = tmpFile.Name()
+
+				// Build scrub record for manifest.
+				record := manifest.ScrubFileRecord{Path: relPath}
+				for _, r := range replacements {
+					allSecrets[r.Placeholder] = r.Secret()
+					record.Replacements = append(record.Replacements, manifest.ScrubReplacement{
+						Placeholder: r.Placeholder,
+						RuleID:      r.RuleID,
+					})
+				}
+				scrubRecords = append(scrubRecords, record)
+			}
+
+			// Collect secrets for storage after seq is known.
+			if len(allSecrets) > 0 {
+				scrubSecrets = allSecrets
+			}
+
+			if !opts.Quiet {
+				fmt.Printf("Scrubbed %d secret(s). Fingerprints:\n", len(scanHits))
+				for _, h := range scanHits {
+					fmt.Printf("  %s\n", h.Fingerprint)
+				}
+				fmt.Println("\nIf any are false positives, copy the fingerprint into .gitleaksignore and re-save.")
+			}
 		}
 	}
+
+	// Defer cleanup of scrub temp files.
+	defer func() {
+		for _, tmp := range fileOverrides {
+			_ = os.Remove(tmp)
+		}
+	}()
 
 	// Collect active extension names for manifest metadata
 	activeExtensions := extension.ActiveExtensionNames(opts.Dir, cfg.Extensions)
@@ -214,7 +290,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 			wsFiles := sr.WorkspaceFiles
 			extFiles := sr.ExternalFiles
 
-			packed, err := workspace.PackLayerWithExternalToTemp(opts.Dir, wsFiles, extFiles, opts.AllowMissingExternal)
+			packed, err := workspace.PackLayerWithExternalToTemp(opts.Dir, wsFiles, extFiles, opts.AllowMissingExternal, fileOverrides)
 			if err != nil {
 				return fmt.Errorf("packing layer %s: %w", ld.Name, err)
 			}
@@ -391,6 +467,44 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		}
 	}
 
+	// Store scrubbed secrets locally and generate encrypted envelope.
+	var secretKey string
+	if len(scrubSecrets) > 0 {
+		tag := fmt.Sprintf("cp-%d", seq)
+		if opts.Tag != "" {
+			tag = opts.Tag
+		}
+		backendKey := cfg.ID + "/" + tag
+
+		// Store plaintext in local backend (for same-machine opens).
+		localBe := backend.DefaultBackend()
+		ctx := context.Background()
+		if _, pushErr := localBe.Put(ctx, backendKey, scrubSecrets); pushErr != nil {
+			return nil, fmt.Errorf("storing secrets locally: %w", pushErr)
+		}
+
+		// Generate encrypted envelope (for sharing / push --include-secrets).
+		ciphertext, sk, encErr := backend.EncryptSecrets(scrubSecrets)
+		if encErr != nil {
+			return nil, fmt.Errorf("encrypting secrets: %w", encErr)
+		}
+		secretKey = sk
+
+		// Store the encrypted envelope alongside the plaintext for push to use later.
+		envBe := &backend.LocalBackend{}
+		envKey := backendKey + ".enc"
+		_, _ = envBe.Put(ctx, envKey, map[string]string{"ciphertext": ciphertext, "secretKey": secretKey})
+
+		_, persistHint := localBe.Hint(backendKey, nil)
+		scrubRestoreHint = persistHint
+	}
+
+	// Embed scrub records in manifest.
+	if len(scrubRecords) > 0 {
+		cfgObj.ScrubRecords = scrubRecords
+		cfgObj.RestoreHint = scrubRestoreHint
+	}
+
 	manifestBytes, configBytes, err := manifest.BuildManifest(cfgObj, layerInfos)
 	if err != nil {
 		return nil, fmt.Errorf("building manifest: %w", err)
@@ -431,10 +545,21 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		}
 	}
 
+	// Collect backend hint for caller to display.
+	var saveHint string
+	if len(scrubRecords) > 0 {
+		tag := fmt.Sprintf("cp-%d", seq)
+		if opts.Tag != "" {
+			tag = opts.Tag
+		}
+		saveHint = fmt.Sprintf("To share secrets with the checkpoint:\n   Via registry:  bento push --include-secrets\n   Via file:      bento secrets export %s > bundle.enc", tag)
+	}
+
 	return &SaveResult{
 		Tag:    tag,
 		Digest: manifestDigest,
 		Seq:    seq,
+		Hint:   saveHint,
 	}, nil
 }
 

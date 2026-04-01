@@ -22,9 +22,9 @@ type BentoConfig struct {
 	Layers     []LayerConfig       `yaml:"layers,omitempty"`
 	Ignore     []string            `yaml:"ignore,omitempty"`
 	Env        map[string]EnvEntry `yaml:"env,omitempty"`
-	Hooks      HooksConfig         `yaml:"hooks,omitempty"`
-	Retention  RetentionConfig     `yaml:"retention,omitempty"`
-	Watch      WatchConfig         `yaml:"watch,omitempty"`
+	Hooks          HooksConfig          `yaml:"hooks,omitempty"`
+	Retention      RetentionConfig      `yaml:"retention,omitempty"`
+	Watch          WatchConfig          `yaml:"watch,omitempty"`
 }
 
 // LayerConfig defines a layer in bento.yaml.

@@ -108,13 +108,13 @@ Layers with watch: off are not monitored (still included in saves).`,
 					return nil
 				}
 
-				fmt.Printf("✓ %s (checkpoint %s)\n", result.Tag, time.Now().Format("15:04:05"))
+				fmt.Printf("OK %s (checkpoint %s)\n", result.Tag, time.Now().Format("15:04:05"))
 
 				// Run tiered GC after successful save.
 				if len(tiers) > 0 {
 					deleted, gcErr := policy.TieredGC(store, tiers, true)
 					if gcErr != nil {
-						fmt.Fprintf(os.Stderr, "⚠ auto-gc failed: %v\n", gcErr)
+						fmt.Fprintf(os.Stderr, "Warning: auto-gc failed: %v\n", gcErr)
 					} else if len(deleted) > 0 {
 						fmt.Printf("  gc: pruned %d old checkpoint(s)\n", len(deleted))
 					}

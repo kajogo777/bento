@@ -159,7 +159,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 			if pending {
 				pending = false
 				if err := w.cfg.SaveFunc(); err != nil {
-					fmt.Fprintf(os.Stderr, "⚠ auto-save failed: %v\n", err) //nolint:errcheck
+					fmt.Fprintf(os.Stderr, "Warning: auto-save failed: %v\n", err) //nolint:errcheck
 				}
 				// If events arrived during save, schedule another save.
 				if pending {
@@ -176,7 +176,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 				pending = true
 				debounce.Reset(w.cfg.DebounceDuration)
 			}
-			fmt.Fprintf(os.Stderr, "⚠ watcher error: %v\n", err) //nolint:errcheck
+			fmt.Fprintf(os.Stderr, "Warning: watcher error: %v\n", err) //nolint:errcheck
 		}
 	}
 }

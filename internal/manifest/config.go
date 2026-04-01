@@ -35,6 +35,28 @@ type BentoConfigObj struct {
 	Hooks     *HooksDef       `json:"hooks,omitempty"`
 	Ignore    []string        `json:"ignore,omitempty"`
 	Retention *RetentionDef   `json:"retention,omitempty"`
+
+	// Secret scrubbing metadata. See specs/secret-scrubbing.md.
+
+	// ScrubRecords lists files that had secrets scrubbed, with their
+	// placeholder IDs and the gitleaks rule that triggered each scrub.
+	ScrubRecords []ScrubFileRecord `json:"scrubRecords,omitempty"`
+
+	// RestoreHint is a human-readable instruction for restoring secrets.
+	// Displayed by `bento open` when hydration fails.
+	RestoreHint string `json:"restoreHint,omitempty"`
+}
+
+// ScrubFileRecord groups all secret replacements for a single file.
+type ScrubFileRecord struct {
+	Path         string              `json:"path"`         // relative file path
+	Replacements []ScrubReplacement  `json:"replacements"` // all scrubs in this file
+}
+
+// ScrubReplacement records a single placeholder substitution.
+type ScrubReplacement struct {
+	Placeholder string `json:"placeholder"` // "__BENTO_SCRUBBED[a1b2c3d4e5f6]__"
+	RuleID      string `json:"ruleID"`      // "openai-api-key" (diagnostics only)
 }
 
 // LayerDef describes a custom layer definition for embedding in the OCI config.

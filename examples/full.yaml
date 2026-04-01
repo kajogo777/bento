@@ -32,3 +32,8 @@ watch:
   debounce: 10
   message: "auto-save"
   skip_secret_scan: false
+
+# Secret scrubbing requires no configuration. Secrets detected by gitleaks
+# are automatically scrubbed from checkpoints during save and restored on
+# open. A one-time encryption key is shown after each save for sharing.
+# See specs/secret-scrubbing.md for details.

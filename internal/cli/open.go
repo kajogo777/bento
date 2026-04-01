@@ -14,6 +14,7 @@ import (
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/kajogo777/bento/internal/registry"
 	"github.com/kajogo777/bento/internal/secrets"
+	"github.com/kajogo777/bento/internal/secrets/backend"
 	"github.com/kajogo777/bento/internal/workspace"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
@@ -22,9 +23,12 @@ import (
 
 func newOpenCmd() *cobra.Command {
 	var (
-		flagLayers     string
-		flagSkipLayers string
-		flagForce      bool
+		flagLayers             string
+		flagSkipLayers         string
+		flagForce              bool
+		flagSecretKey          string
+		flagSecretsFile        string
+		flagAllowMissingSecrets bool
 	)
 
 	cmd := &cobra.Command{
@@ -168,6 +172,69 @@ func newOpenCmd() *cobra.Command {
 				}
 			}
 
+			// Pre-check: if checkpoint has scrubbed secrets, verify we can resolve
+			// them BEFORE writing any files. This prevents leaving broken files
+			// on disk when secrets are unavailable.
+			var secretValues map[string]string
+			var hasScrubRecords bool
+			if bentoCfg, parseErr := manifest.UnmarshalConfig(configBytes); parseErr == nil && len(bentoCfg.ScrubRecords) > 0 {
+				hasScrubRecords = true
+				secretKey := flagSecretKey
+				if secretKey == "" {
+					secretKey = os.Getenv("BENTO_SECRET_KEY")
+				}
+
+				backendKey := bentoCfg.WorkspaceID + "/" + tag
+				ctx := context.Background()
+
+				// Try 1: local backend (same-machine opens).
+				localBe := backend.DefaultBackend()
+				secretValues, _ = localBe.Get(ctx, backendKey, nil)
+
+				// Try 2: OCI encrypted layer (pushed with --include-secrets).
+				if secretValues == nil && secretKey != "" {
+					var ociManifest ocispec.Manifest
+					if jsonErr := json.Unmarshal(manifestBytes, &ociManifest); jsonErr == nil {
+						for li, ld := range ociManifest.Layers {
+							if ld.Annotations[manifest.AnnotationSecretsEncrypted] == "true" && li < len(layers) {
+								r, rErr := layers[li].NewReader()
+								if rErr == nil {
+									cipherBytes, exErr := workspace.ExtractFileContentFromLayer(r, "secrets.enc", 10*1024*1024)
+									_ = r.Close()
+									if exErr == nil {
+										secretValues, _ = backend.DecryptSecrets(string(cipherBytes), secretKey)
+									}
+								}
+								break
+							}
+						}
+					}
+				}
+
+				// Try 3: secrets file (shared out of band).
+				if secretValues == nil && flagSecretsFile != "" && secretKey != "" {
+					ciphertext, readErr := os.ReadFile(flagSecretsFile)
+					if readErr != nil {
+						fmt.Printf("Warning: reading secrets file %s: %v\n", flagSecretsFile, readErr)
+					} else {
+						secretValues, _ = backend.DecryptSecrets(string(ciphertext), secretKey)
+					}
+				}
+
+				// If secrets unavailable and not allowed to proceed, fail NOW before writing files.
+				if secretValues == nil && !flagAllowMissingSecrets {
+					fmt.Printf("\nError: %d scrubbed secret(s) cannot be resolved.\n", len(bentoCfg.ScrubRecords))
+					fmt.Println("\nTo restore secrets, re-run with the secret key:")
+					fmt.Printf("  bento open --secret-key <KEY> %s\n", ref)
+					fmt.Println("\nIf you have a secrets file from the sender:")
+					fmt.Printf("  bento open --secret-key <KEY> --secrets-file bundle.enc %s\n", ref)
+					fmt.Println("\nTo open anyway with placeholders:")
+					fmt.Printf("  bento open --allow-missing-secrets %s\n", ref)
+					fmt.Println("\nAsk the sender for the key (shown when they ran bento push or bento secrets export).")
+					return fmt.Errorf("secrets not available — provide --secret-key to hydrate")
+				}
+			}
+
 			// Unpack layers (stream each layer directly to disk, no full load into memory)
 			fmt.Printf("Restoring checkpoint %s (sequence %d)...\n", tag, info.Sequence)
 			for i := range layersToRestore {
@@ -219,6 +286,33 @@ func newOpenCmd() *cobra.Command {
 				}
 			}
 
+			// Hydrate scrubbed secrets (already resolved in pre-check above).
+			if hasScrubRecords && secretValues != nil {
+				hydrated := 0
+				for _, rec := range func() []manifest.ScrubFileRecord {
+					if bc, err := manifest.UnmarshalConfig(configBytes); err == nil {
+						return bc.ScrubRecords
+					}
+					return nil
+				}() {
+					filePath := filepath.Join(targetDir, filepath.FromSlash(rec.Path))
+					content, readErr := os.ReadFile(filePath)
+					if readErr != nil {
+						continue
+					}
+					content = secrets.HydrateFile(content, secretValues)
+					if writeErr := os.WriteFile(filePath, content, 0644); writeErr != nil {
+						continue
+					}
+					hydrated += len(rec.Replacements)
+				}
+				if hydrated > 0 {
+					fmt.Printf("Hydrated %d secret(s)\n", hydrated)
+				}
+			} else if hasScrubRecords && flagAllowMissingSecrets {
+				fmt.Println("Warning: secrets not available. Files contain placeholders.")
+			}
+
 			// Validate secret references can resolve (dry-run hydration)
 			if cfgErr == nil && cfg != nil && len(cfg.Env) > 0 {
 				ctx := context.Background()
@@ -249,6 +343,9 @@ func newOpenCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flagLayers, "layers", "", "comma-separated layer names to restore")
 	cmd.Flags().StringVar(&flagSkipLayers, "skip-layers", "", "comma-separated layer names to skip")
 	cmd.Flags().BoolVar(&flagForce, "force", false, "overwrite existing files without confirmation")
+	cmd.Flags().StringVar(&flagSecretKey, "secret-key", "", "decryption key for encrypted secrets (or set BENTO_SECRET_KEY)")
+	cmd.Flags().StringVar(&flagSecretsFile, "secrets-file", "", "path to encrypted secrets bundle from sender")
+	cmd.Flags().BoolVar(&flagAllowMissingSecrets, "allow-missing-secrets", false, "open even if secrets cannot be hydrated (files will contain placeholders)")
 
 	return cmd
 }

@@ -183,7 +183,7 @@ func TestWatchMultipleChanges(t *testing.T) {
 	t.Logf("watch output:\n%s", output)
 
 	// Should have exactly 1 checkpoint (debounced).
-	cpCount := strings.Count(output, "✓ cp-")
+	cpCount := strings.Count(output, "OK cp-")
 	if cpCount != 1 {
 		t.Errorf("expected 1 debounced checkpoint, got %d. output:\n%s", cpCount, output)
 	}
@@ -220,7 +220,7 @@ func TestWatchSubdirectoryChanges(t *testing.T) {
 	output := outBuf.String()
 	t.Logf("watch output:\n%s", output)
 
-	if !strings.Contains(output, "✓ cp-") {
+	if !strings.Contains(output, "OK cp-") {
 		t.Errorf("expected checkpoint from subdirectory change, got:\n%s", output)
 	}
 }
@@ -257,7 +257,7 @@ func TestWatchIgnoredDirNoTrigger(t *testing.T) {
 	t.Logf("watch output:\n%s", output)
 
 	// Should NOT have any checkpoints — .git is ignored.
-	if strings.Contains(output, "✓ cp-") {
+	if strings.Contains(output, "OK cp-") {
 		t.Errorf("expected no checkpoint from .git change, got:\n%s", output)
 	}
 }
@@ -362,7 +362,7 @@ layers:
 	t.Logf("watch output:\n%s", output)
 
 	// Should have exactly 1 checkpoint (from src/ change, not dist/).
-	cpCount := strings.Count(output, "✓ cp-")
+	cpCount := strings.Count(output, "OK cp-")
 	if cpCount != 1 {
 		t.Errorf("expected 1 checkpoint (from src/ only), got %d. output:\n%s", cpCount, output)
 	}
