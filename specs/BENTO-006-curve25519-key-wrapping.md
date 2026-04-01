@@ -72,6 +72,11 @@ convention. A Curve25519 public key is exactly 32 bytes → 43 base64url chars.
 - `bento-sk-` — secret/private key (never leaves the machine)
 - `bento-dk-` — data encryption key (symmetric, for backward-compat sharing)
 
+**Prefix migration:** the existing symmetric key format `bento-sk-` is renamed
+to `bento-dk-`. Implementations MUST accept both prefixes on input (parsing)
+for backward compatibility. New keys MUST be emitted with `bento-dk-`. The
+`--secret-key` CLI flag accepts either prefix.
+
 **Comparison with WireGuard:** WireGuard uses standard base64 (with padding) for
 its Curve25519 keys, yielding 44-char strings. Bento uses base64url (no padding)
 for URL/CLI safety, yielding 43-char strings. Same curve, same key size, same
@@ -102,7 +107,17 @@ File permissions: `0600`. Directory permissions: `0700`.
 
 ```
 ~/.bento/keys/recipients/
-  <name>.pub             # plain text, one public key per file
+  <name>.pub             # plain text file containing one bento-pk-... string
+```
+
+**`.pub` file format:** a single line containing the `bento-pk-...` string.
+Leading/trailing whitespace is trimmed. Lines starting with `#` are ignored
+(comments). Blank lines are ignored. Only the first non-comment, non-blank
+line is used. Example:
+
+```
+# Alice's bento public key (added 2026-04-01)
+bento-pk-<base64url, 43 chars>
 ```
 
 Or in `bento.yaml`:
@@ -325,65 +340,246 @@ wrapping; otherwise, fall back to symmetric key.
 
 ## Implementation
 
-### Files
+### Keypair Generation
 
-```
-internal/secrets/backend/
-  oci.go              # Add WrapDEK(), UnwrapDEK(), multi-recipient envelope
-  oci_test.go         # Test wrapping/unwrapping, multi-recipient, round-trip
-
-internal/keys/
-  keys.go             # Keypair generation, loading, storage
-  keys_test.go
-  recipients.go       # Recipient management (add, remove, list, resolve)
-  recipients_test.go
-
-internal/cli/
-  keys.go             # bento keys generate|list|public|add-recipient|remove-recipient
-  save_core.go        # Wire in recipient resolution + DEK wrapping
-  open.go             # Wire in private key discovery + DEK unwrapping
-  push.go             # Wire in --recipient flag
-
-internal/config/
-  config.go           # Add Recipients field + validation
-```
-
-### Core Functions
+Keypairs are generated using `golang.org/x/crypto/nacl/box.GenerateKey`, which
+internally uses `crypto/rand` and `curve25519.ScalarBaseMult`:
 
 ```go
 package keys
 
-// GenerateKeypair creates a new Curve25519 keypair.
-func GenerateKeypair() (publicKey, privateKey [32]byte, err error)
+import (
+    "crypto/rand"
+    "encoding/base64"
+    "fmt"
+    "golang.org/x/crypto/nacl/box"
+)
+
+// GenerateKeypair creates a new Curve25519 keypair using crypto/rand.
+// Returns the public and private keys as 32-byte arrays.
+func GenerateKeypair() (publicKey, privateKey [32]byte, err error) {
+    pub, priv, err := box.GenerateKey(rand.Reader)
+    if err != nil {
+        return [32]byte{}, [32]byte{}, fmt.Errorf("generating keypair: %w", err)
+    }
+    return *pub, *priv, nil
+}
+
+const (
+    PrefixPublicKey  = "bento-pk-"
+    PrefixPrivateKey = "bento-sk-"
+    PrefixDataKey    = "bento-dk-"
+    // Legacy prefix — accepted on input, never emitted.
+    LegacyPrefixSymmetricKey = "bento-sk-"
+)
 
 // FormatPublicKey encodes a public key as "bento-pk-<base64url>".
-func FormatPublicKey(key [32]byte) string
+func FormatPublicKey(key [32]byte) string {
+    return PrefixPublicKey + base64.RawURLEncoding.EncodeToString(key[:])
+}
 
 // FormatPrivateKey encodes a private key as "bento-sk-<base64url>".
-func FormatPrivateKey(key [32]byte) string
+func FormatPrivateKey(key [32]byte) string {
+    return PrefixPrivateKey + base64.RawURLEncoding.EncodeToString(key[:])
+}
+
+// FormatDataKey encodes a symmetric DEK as "bento-dk-<base64url>".
+func FormatDataKey(key [32]byte) string {
+    return PrefixDataKey + base64.RawURLEncoding.EncodeToString(key[:])
+}
 
 // ParsePublicKey decodes a "bento-pk-..." string to 32 bytes.
-func ParsePublicKey(s string) ([32]byte, error)
+// Returns an error if the prefix is wrong or the key is not 32 bytes.
+func ParsePublicKey(s string) ([32]byte, error) {
+    return parseKey(s, PrefixPublicKey, "public key")
+}
 
 // ParsePrivateKey decodes a "bento-sk-..." string to 32 bytes.
-func ParsePrivateKey(s string) ([32]byte, error)
+// Returns an error if the prefix is wrong or the key is not 32 bytes.
+func ParsePrivateKey(s string) ([32]byte, error) {
+    return parseKey(s, PrefixPrivateKey, "private key")
+}
 
-// LoadPrivateKey loads the user's private key from ~/.bento/keys/.
-// Tries "default" first, then iterates named keys.
-func LoadPrivateKey() ([32]byte, [32]byte, error) // returns (pub, priv, err)
+// ParseDataKey decodes a "bento-dk-..." or legacy "bento-sk-..." string
+// to 32 bytes. Accepts both prefixes for backward compatibility.
+func ParseDataKey(s string) ([32]byte, error) {
+    if strings.HasPrefix(s, PrefixDataKey) {
+        return parseKey(s, PrefixDataKey, "data key")
+    }
+    // Accept legacy bento-sk- prefix for backward compat with old envelopes.
+    if strings.HasPrefix(s, LegacyPrefixSymmetricKey) {
+        return parseKey(s, LegacyPrefixSymmetricKey, "data key (legacy)")
+    }
+    return [32]byte{}, fmt.Errorf("invalid data key: must start with %q or %q",
+        PrefixDataKey, LegacyPrefixSymmetricKey)
+}
+
+func parseKey(s, prefix, label string) ([32]byte, error) {
+    if !strings.HasPrefix(s, prefix) {
+        return [32]byte{}, fmt.Errorf("invalid %s: must start with %q", label, prefix)
+    }
+    b, err := base64.RawURLEncoding.DecodeString(s[len(prefix):])
+    if err != nil {
+        return [32]byte{}, fmt.Errorf("invalid %s: %w", label, err)
+    }
+    if len(b) != 32 {
+        return [32]byte{}, fmt.Errorf("invalid %s: expected 32 bytes, got %d", label, len(b))
+    }
+    var key [32]byte
+    copy(key[:], b)
+    return key, nil
+}
 ```
+
+### Key Loading and Storage
+
+```go
+// LoadDefaultKeypair loads the user's default keypair from the platform-
+// specific keys directory. Returns (publicKey, privateKey, error).
+//
+// Search order:
+//   1. ~/.bento/keys/default.json (macOS)
+//      ~/.local/share/bento/keys/default.json (Linux)
+//      %LOCALAPPDATA%\bento\keys\default.json (Windows)
+//   2. If no default, iterate named keypairs alphabetically, use first found.
+//   3. If no keypairs exist, return ErrNoKeypair.
+func LoadDefaultKeypair() ([32]byte, [32]byte, error)
+
+// SaveKeypair writes a keypair to the keys directory.
+// Creates the directory (0700) and file (0600) if they don't exist.
+func SaveKeypair(name string, pub, priv [32]byte) error
+
+// ErrNoKeypair is returned when no keypair is found on disk.
+var ErrNoKeypair = errors.New("no keypair found — run 'bento keys generate' first")
+```
+
+**Platform-specific key paths** (mirrors the existing secrets directory
+convention from `internal/secrets/backend/local.go`):
+
+| Platform | Keys directory |
+|----------|---------------|
+| macOS | `~/.bento/keys/` |
+| Linux | `~/.local/share/bento/keys/` (or `$XDG_DATA_HOME/bento/keys/`) |
+| Windows | `%LOCALAPPDATA%\bento\keys\` |
+
+### Recipient Resolution
+
+When `--recipient` flags or `bento.yaml` recipients are provided, the
+implementation resolves each entry to a public key:
+
+```go
+// ResolveRecipients resolves a list of recipient specifiers to public keys.
+//
+// Each specifier is resolved in order:
+//   1. If it starts with "bento-pk-": parse as a literal public key
+//   2. If it matches a name in bento.yaml recipients: use that key
+//   3. If it matches a file in ~/.bento/keys/recipients/<name>.pub: read that file
+//   4. Otherwise: return an error with actionable message
+//
+// The sender's own public key is always appended (implicit self-recipient)
+// and the list is deduplicated by public key bytes.
+func ResolveRecipients(
+    specifiers []string,
+    configRecipients []ConfigRecipient,
+    senderPub [32]byte,
+) ([][32]byte, error)
+```
+
+**Resolution order for `--recipient alice`:**
+1. Check `bento.yaml` `recipients` list for `name: alice`
+2. Check `~/.bento/keys/recipients/alice.pub`
+3. If not found: error with `"unknown recipient \"alice\" — add with: bento keys add-recipient alice <bento-pk-...>"`
+
+**Resolution order for `--recipient bento-pk-...`:**
+1. Parse directly as a public key
+2. If parse fails: error with `"invalid public key — must start with bento-pk-"`
+
+### Error Handling: Missing Keypair on Save
+
+When recipients are configured but the sender has no keypair:
+
+```
+$ bento save -m "my work"
+Error: recipients configured but no keypair found.
+
+Generate a keypair first:
+  bento keys generate
+
+Then retry:
+  bento save -m "my work"
+```
+
+The save MUST fail — not silently skip wrapping, not auto-generate. The user
+must explicitly generate a keypair because it's a long-lived identity. The
+error message tells them exactly what to do.
+
+**Exception:** if no recipients are configured (no `bento.yaml` recipients,
+no `--recipient` flags), the save proceeds without wrapping, exactly as today.
+No keypair is needed for the symmetric-only flow.
+
+### DEK Extraction for Wrapping
+
+The current `EncryptSecrets()` returns the DEK as a formatted string
+(`bento-dk-...`). The wrapping flow needs the raw 32-byte DEK. Two approaches:
+
+**Option A (recommended):** refactor `EncryptSecrets` to also return raw bytes:
+
+```go
+// EncryptSecrets encrypts secrets and returns the ciphertext, formatted key
+// string, and raw 32-byte DEK (for key wrapping).
+func EncryptSecrets(secrets map[string]string) (ciphertext, formattedKey string, rawDEK [32]byte, err error)
+```
+
+**Option B:** parse the formatted key back to bytes using `ParseDataKey()`.
+This works but is a round-trip through string encoding for no reason.
+
+The implementation SHOULD use Option A. The `rawDEK` is passed to `WrapDEK()`
+for each recipient. The `formattedKey` is still stored in the local `.enc.json`
+for backward compatibility with the `--secret-key` flow.
+
+### WrapDEK / UnwrapDEK
 
 ```go
 package backend
 
+import "golang.org/x/crypto/nacl/box"
+
 // WrapDEK wraps a 32-byte DEK to a recipient's Curve25519 public key
-// using NaCl authenticated boxes. The sender's public key is included
-// in the envelope for provenance verification.
-func WrapDEK(dek [32]byte, recipientPub [32]byte, senderPub, senderPriv [32]byte) ([]byte, error)
+// using NaCl authenticated boxes (crypto_box).
+//
+// The sender's keypair is required for authenticated encryption.
+// Returns 72 bytes: 24-byte nonce || 48-byte box.Seal output.
+func WrapDEK(dek [32]byte, recipientPub [32]byte, senderPub, senderPriv [32]byte) ([]byte, error) {
+    var nonce [24]byte
+    if _, err := rand.Read(nonce[:]); err != nil {
+        return nil, fmt.Errorf("generating nonce: %w", err)
+    }
+    out := box.Seal(nonce[:], dek[:], &nonce, &recipientPub, &senderPriv)
+    return out, nil // 24 + 32 + box.Overhead(16) = 72 bytes
+}
 
 // UnwrapDEK unwraps a DEK using the recipient's private key and the
-// sender's public key (from the envelope).
-func UnwrapDEK(wrapped []byte, senderPub, recipientPub, recipientPriv [32]byte) ([32]byte, error)
+// sender's public key (from the envelope's "sender" field).
+//
+// Input: 72 bytes (24-byte nonce || 48-byte ciphertext).
+// Returns the 32-byte DEK or an error if decryption fails.
+func UnwrapDEK(wrapped []byte, senderPub, recipientPub, recipientPriv [32]byte) ([32]byte, error) {
+    if len(wrapped) != 72 {
+        return [32]byte{}, fmt.Errorf("invalid wrapped DEK: expected 72 bytes, got %d", len(wrapped))
+    }
+    var nonce [24]byte
+    copy(nonce[:], wrapped[:24])
+    plaintext, ok := box.Open(nil, wrapped[24:], &nonce, &senderPub, &recipientPriv)
+    if !ok {
+        return [32]byte{}, fmt.Errorf("DEK unwrap failed — wrong key or corrupted data")
+    }
+    if len(plaintext) != 32 {
+        return [32]byte{}, fmt.Errorf("invalid DEK: expected 32 bytes, got %d", len(plaintext))
+    }
+    var dek [32]byte
+    copy(dek[:], plaintext)
+    return dek, nil
+}
 
 // MultiRecipientEnvelope is the on-disk/in-OCI format for wrapped secrets.
 type MultiRecipientEnvelope struct {
@@ -397,6 +593,78 @@ type WrappedKeyEntry struct {
     Recipient  string `json:"recipient"`   // "bento-pk-..."
     WrappedDEK string `json:"wrappedDEK"`  // base64url(72 bytes)
 }
+```
+
+### CLI: `bento keys` Subcommand
+
+Register `keys` as a subcommand of the root command in `NewRootCmd()`
+(`internal/cli/root.go`), alongside `save`, `open`, `push`, etc.
+
+```go
+// internal/cli/keys.go
+
+func newKeysCmd() *cobra.Command {
+    cmd := &cobra.Command{
+        Use:   "keys",
+        Short: "Manage Curve25519 keypairs for secret sharing",
+    }
+    cmd.AddCommand(
+        newKeysGenerateCmd(),
+        newKeysListCmd(),
+        newKeysPublicCmd(),
+        newKeysAddRecipientCmd(),
+        newKeysRemoveRecipientCmd(),
+    )
+    return cmd
+}
+```
+
+### `bento keys list` Output
+
+```
+$ bento keys list
+Keypairs:
+  default    bento-pk-<base64url, 43 chars>    (created 2026-04-01)
+  work       bento-pk-<base64url, 43 chars>    (created 2026-03-15)
+
+Recipients:
+  alice      bento-pk-<base64url, 43 chars>    (from bento.yaml)
+  bob        bento-pk-<base64url, 43 chars>    (from ~/.bento/keys/recipients/bob.pub)
+```
+
+If no keypairs exist:
+
+```
+$ bento keys list
+No keypairs found. Generate one with:
+  bento keys generate
+```
+
+### Files
+
+```
+internal/keys/
+  keys.go             # GenerateKeypair, Format*, Parse*, Load*, Save*
+  keys_test.go        # Round-trip, invalid input, platform paths
+  recipients.go       # ResolveRecipients, LoadRecipientFile, AddRecipient, RemoveRecipient
+  recipients_test.go  # Resolution order, dedup, error cases
+
+internal/secrets/backend/
+  oci.go              # Add WrapDEK(), UnwrapDEK(), MultiRecipientEnvelope
+                      # Modify EncryptSecrets() to return rawDEK
+                      # Modify Put()/Get() to handle both old and new envelope formats
+                      # Update prefix: emit bento-dk-, accept bento-sk- on parse
+  oci_test.go         # Wrapping round-trip, multi-recipient, backward compat
+
+internal/cli/
+  root.go             # Register newKeysCmd()
+  keys.go             # bento keys generate|list|public|add-recipient|remove-recipient
+  save_core.go        # After EncryptSecrets: resolve recipients, wrap DEK, build envelope
+  open.go             # Before --secret-key fallback: try key wrapping auto-discovery
+  push.go             # Wire in --recipient flag, display sealed-by info
+
+internal/config/
+  config.go           # Add Recipients []ConfigRecipient field + validation
 ```
 
 ## Migration & Backward Compatibility
