@@ -93,7 +93,11 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 	// instead of the real files on disk.
 	fileOverrides := make(map[string]string)
 
-	if !opts.SkipSecretScan {
+	if opts.SkipSecretScan {
+		if !opts.Quiet {
+			fmt.Println("Secret scan: skipped")
+		}
+	} else {
 		secretScanner, err := secrets.NewSecretScanner(nil)
 		if err != nil {
 			return nil, fmt.Errorf("initializing secret scanner: %w", err)
@@ -491,9 +495,11 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		secretKey = sk
 
 		// Store the encrypted envelope alongside the plaintext for push to use later.
-		envBe := &backend.LocalBackend{}
 		envKey := backendKey + ".enc"
-		_, _ = envBe.Put(ctx, envKey, map[string]string{"ciphertext": ciphertext, "secretKey": secretKey})
+		if _, envErr := localBe.Put(ctx, envKey, map[string]string{"ciphertext": ciphertext, "secretKey": secretKey}); envErr != nil {
+			fmt.Printf("Warning: storing encrypted envelope: %v\n", envErr)
+			fmt.Println("  bento push --include-secrets may not work for this checkpoint.")
+		}
 
 		_, persistHint := localBe.Hint(backendKey, nil)
 		scrubRestoreHint = persistHint

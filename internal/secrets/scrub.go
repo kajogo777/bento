@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"sort"
 )
 
 // Replacement records a single secret scrub within a file.
@@ -81,6 +82,13 @@ func ScrubFile(content []byte, findings []ScanResult) (scrubbed []byte, replacem
 			ordered = append(ordered, d)
 		}
 	}
+
+	// Sort by secret length descending so that longer secrets are replaced
+	// before shorter ones that may be substrings. Without this, replacing
+	// "key1" before "key1234" would corrupt the longer secret.
+	sort.Slice(ordered, func(i, j int) bool {
+		return len(ordered[i].secret) > len(ordered[j].secret)
+	})
 
 	for _, d := range ordered {
 		result = bytes.ReplaceAll(result, []byte(d.secret), []byte(d.placeholder))

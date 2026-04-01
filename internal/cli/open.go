@@ -177,8 +177,11 @@ func newOpenCmd() *cobra.Command {
 			// on disk when secrets are unavailable.
 			var secretValues map[string]string
 			var hasScrubRecords bool
-			if bentoCfg, parseErr := manifest.UnmarshalConfig(configBytes); parseErr == nil && len(bentoCfg.ScrubRecords) > 0 {
+			var scrubRecords []manifest.ScrubFileRecord
+			bentoCfg, parseErr := manifest.UnmarshalConfig(configBytes)
+			if parseErr == nil && len(bentoCfg.ScrubRecords) > 0 {
 				hasScrubRecords = true
+				scrubRecords = bentoCfg.ScrubRecords
 				secretKey := flagSecretKey
 				if secretKey == "" {
 					secretKey = os.Getenv("BENTO_SECRET_KEY")
@@ -219,18 +222,29 @@ func newOpenCmd() *cobra.Command {
 					} else {
 						secretValues, _ = backend.DecryptSecrets(string(ciphertext), secretKey)
 					}
+				} else if secretValues == nil && flagSecretsFile != "" && secretKey == "" {
+					fmt.Printf("Warning: --secrets-file provided but --secret-key is required to decrypt it\n")
 				}
 
 				// If secrets unavailable and not allowed to proceed, fail NOW before writing files.
 				if secretValues == nil && !flagAllowMissingSecrets {
-					fmt.Printf("\nError: %d scrubbed secret(s) cannot be resolved.\n", len(bentoCfg.ScrubRecords))
+					totalSecrets := 0
+					for _, rec := range scrubRecords {
+						totalSecrets += len(rec.Replacements)
+					}
+					// Build the ref+target suffix for copy-pasteable commands.
+					openArgs := ref
+					if len(args) > 1 {
+						openArgs = ref + " " + args[1]
+					}
+					fmt.Printf("\nError: %d scrubbed secret(s) in %d file(s) cannot be resolved.\n", totalSecrets, len(scrubRecords))
 					fmt.Println("\nTo restore secrets, re-run with the secret key:")
-					fmt.Printf("  bento open --secret-key <KEY> %s\n", ref)
+					fmt.Printf("  bento open --secret-key <KEY> %s\n", openArgs)
 					fmt.Println("\nIf you have a secrets file from the sender:")
-					fmt.Printf("  bento open --secret-key <KEY> --secrets-file bundle.enc %s\n", ref)
+					fmt.Printf("  bento open --secret-key <KEY> --secrets-file bundle.enc %s\n", openArgs)
 					fmt.Println("\nTo open anyway with placeholders:")
-					fmt.Printf("  bento open --allow-missing-secrets %s\n", ref)
-					fmt.Println("\nAsk the sender for the key (shown when they ran bento push or bento secrets export).")
+					fmt.Printf("  bento open --allow-missing-secrets %s\n", openArgs)
+					fmt.Println("\nAsk the sender for the key (shown when they ran bento push --include-secrets or bento secrets export).")
 					return fmt.Errorf("secrets not available — provide --secret-key to hydrate")
 				}
 			}
@@ -261,7 +275,7 @@ func newOpenCmd() *cobra.Command {
 			// get a fully functional workspace that can save/push/diff immediately.
 			// See specs/portable-config.md for the full specification.
 			if _, statErr := os.Stat(filepath.Join(targetDir, "bento.yaml")); os.IsNotExist(statErr) {
-				if bentoCfg, parseErr := manifest.UnmarshalConfig(configBytes); parseErr == nil {
+				if parseErr == nil {
 					newCfg := configFromArtifact(bentoCfg)
 					if err := config.Save(targetDir, newCfg); err != nil {
 						fmt.Printf("Warning: generating bento.yaml: %v\n", err)
@@ -289,19 +303,18 @@ func newOpenCmd() *cobra.Command {
 			// Hydrate scrubbed secrets (already resolved in pre-check above).
 			if hasScrubRecords && secretValues != nil {
 				hydrated := 0
-				for _, rec := range func() []manifest.ScrubFileRecord {
-					if bc, err := manifest.UnmarshalConfig(configBytes); err == nil {
-						return bc.ScrubRecords
-					}
-					return nil
-				}() {
+				for _, rec := range scrubRecords {
 					filePath := filepath.Join(targetDir, filepath.FromSlash(rec.Path))
+					fi, statErr := os.Stat(filePath)
+					if statErr != nil {
+						continue
+					}
 					content, readErr := os.ReadFile(filePath)
 					if readErr != nil {
 						continue
 					}
 					content = secrets.HydrateFile(content, secretValues)
-					if writeErr := os.WriteFile(filePath, content, 0644); writeErr != nil {
+					if writeErr := os.WriteFile(filePath, content, fi.Mode()); writeErr != nil {
 						continue
 					}
 					hydrated += len(rec.Replacements)

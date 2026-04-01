@@ -40,9 +40,6 @@ func newSaveCmd() *cobra.Command {
 				return nil
 			}
 
-			if flagSkipSecretScan {
-				fmt.Printf("Secret scan: skipped\n")
-			}
 			fmt.Printf("Tagged: %s, latest\n", result.Tag)
 
 			if result.Hint != "" {

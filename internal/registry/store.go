@@ -47,7 +47,8 @@ type LayerData struct {
 	// Mutually exclusive with Data. Call Cleanup() to remove the temp file.
 	Path   string
 	Digest string
-	Size   int64 // byte size, required when Digest is pre-computed
+	Size   int64  // byte size, required when Digest is pre-computed
+	DiffID string // "sha256:<hex>" of uncompressed tar bytes (OCI config diff_id), optional
 }
 
 // BlobSize returns the size of the layer content.

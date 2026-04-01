@@ -28,15 +28,16 @@ func newPushCmd() *cobra.Command {
 		Long: `Push local checkpoints to an OCI registry. Uses Docker credential
 helpers for authentication (docker login, crane auth, etc).
 
-If the checkpoint has scrubbed secrets, you'll be prompted to include them.
+If the checkpoint has scrubbed secrets, use --include-secrets to pack them
+(encrypted) into the OCI artifact. Without it, secrets are omitted and the
+recipient must obtain them separately.
+
 Included secrets are always encrypted — they cannot be read without the
-secret key (shown during save). Use --include-secrets or --no-secrets to
-skip the prompt (for CI/scripts).
+secret key (shown when you run push --include-secrets or secrets export).
 
 Examples:
   bento push
   bento push --include-secrets
-  bento push --no-secrets
   bento push --tag cp-3`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -95,67 +96,68 @@ Examples:
 				}
 
 				// Check if OCI layer already exists.
-					var ociManifest ocispec.Manifest
-					hasSecretsLayer := false
-					if jsonErr := json.Unmarshal(manifestBytes, &ociManifest); jsonErr == nil {
-						for _, ld := range ociManifest.Layers {
-							if ld.Annotations[manifest.AnnotationSecretsEncrypted] == "true" {
-								hasSecretsLayer = true
-								break
-							}
+				var ociManifest ocispec.Manifest
+				hasSecretsLayer := false
+				if jsonErr := json.Unmarshal(manifestBytes, &ociManifest); jsonErr == nil {
+					for _, ld := range ociManifest.Layers {
+						if ld.Annotations[manifest.AnnotationSecretsEncrypted] == "true" {
+							hasSecretsLayer = true
+							break
 						}
 					}
+				}
 
-					if !hasSecretsLayer {
-						// Read the encrypted envelope from local storage.
-						cpTag := fmt.Sprintf("cp-%d", pushCheckpoint)
-						envKey := cfg.ID + "/" + cpTag + ".enc"
-						localBe := backend.DefaultBackend()
-						ctx := context.Background()
-						envelope, getErr := localBe.Get(ctx, envKey, nil)
-						if getErr != nil {
-							return fmt.Errorf("no encrypted envelope found for %s — save with secrets first", cpTag)
-						}
-
-						ciphertext := envelope["ciphertext"]
-						if ciphertext == "" {
-							return fmt.Errorf("encrypted envelope is empty for %s", cpTag)
-						}
-
-						// Pack as OCI layer and inject into the checkpoint.
-						packed, packErr := workspace.PackBytesToTempLayer("secrets.enc", []byte(ciphertext))
-						if packErr != nil {
-							return fmt.Errorf("packing secrets layer: %w", packErr)
-						}
-						defer func() { _ = os.Remove(packed.Path) }()
-
-						secretsLayer := registry.LayerData{
-							MediaType: manifest.LayerMediaType,
-							Path:      packed.Path,
-							Digest:    packed.GzipDigest,
-							Size:      packed.Size,
-						}
-
-						localStore := store.(*registry.LocalStore)
-						if injectErr := localStore.InjectLayer(tag, secretsLayer, map[string]string{
-							manifest.AnnotationTitle:            "secrets",
-							manifest.AnnotationSecretsEncrypted: "true",
-						}); injectErr != nil {
-							return fmt.Errorf("injecting secrets layer: %w", injectErr)
-						}
-
-						secretKey := envelope["secretKey"]
-						pushSecretKey = secretKey
-
-						// Also update the cp-N tag to point to the new manifest.
-						if cpTag != tag {
-							if newDigest, resolveErr := store.ResolveTag(tag); resolveErr == nil {
-								_ = store.Tag(newDigest, cpTag)
-							}
-						}
-					} else {
-						fmt.Println("Encrypted secrets layer already present.")
+				if !hasSecretsLayer {
+					// Read the encrypted envelope from local storage.
+					cpTag := fmt.Sprintf("cp-%d", pushCheckpoint)
+					envKey := cfg.ID + "/" + cpTag + ".enc"
+					localBe := backend.DefaultBackend()
+					ctx := context.Background()
+					envelope, getErr := localBe.Get(ctx, envKey, nil)
+					if getErr != nil {
+						return fmt.Errorf("no encrypted envelope found for %s — save with secrets first", cpTag)
 					}
+
+					ciphertext := envelope["ciphertext"]
+					if ciphertext == "" {
+						return fmt.Errorf("encrypted envelope is empty for %s", cpTag)
+					}
+
+					// Pack as OCI layer and inject into the checkpoint.
+					packed, packErr := workspace.PackBytesToTempLayer("secrets.enc", []byte(ciphertext))
+					if packErr != nil {
+						return fmt.Errorf("packing secrets layer: %w", packErr)
+					}
+					defer func() { _ = os.Remove(packed.Path) }()
+
+					secretsLayer := registry.LayerData{
+						MediaType: manifest.LayerMediaType,
+						Path:      packed.Path,
+						Digest:    packed.GzipDigest,
+						Size:      packed.Size,
+						DiffID:    packed.DiffID,
+					}
+
+					localStore := store.(*registry.LocalStore)
+					if injectErr := localStore.InjectLayer(tag, secretsLayer, map[string]string{
+						manifest.AnnotationTitle:            "secrets",
+						manifest.AnnotationSecretsEncrypted: "true",
+					}); injectErr != nil {
+						return fmt.Errorf("injecting secrets layer: %w", injectErr)
+					}
+
+					secretKey := envelope["secretKey"]
+					pushSecretKey = secretKey
+
+					// Also update the cp-N tag to point to the new manifest.
+					if cpTag != tag {
+						if newDigest, resolveErr := store.ResolveTag(tag); resolveErr == nil {
+							_ = store.Tag(newDigest, cpTag)
+						}
+					}
+				} else {
+					fmt.Println("Encrypted secrets layer already present.")
+				}
 			}
 
 			// Determine which tags to push

@@ -19,6 +19,12 @@ import (
 	"github.com/zricethezav/gitleaks/v8/report"
 )
 
+// maxScanFileSize is the maximum file size (in bytes) that will be scanned for
+// secrets. Files larger than this are skipped — they're almost certainly not
+// config/source files containing API keys. This prevents OOM when workspaces
+// contain large binaries, databases, or media files.
+const maxScanFileSize = 2 * 1024 * 1024 // 2 MB
+
 // ScanResult represents a single secret match found in a file.
 type ScanResult struct {
 	File        string
@@ -186,9 +192,48 @@ func (s *Scanner) findingsToResults(findings []report.Finding, path string) []Sc
 	return results
 }
 
+// shouldSkipFile returns true (with a reason) if the file should not be scanned.
+// Skips binary files and files larger than maxScanFileSize.
+func shouldSkipFile(path string) (skip bool, reason string) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return true, "stat error"
+	}
+	if info.Size() > maxScanFileSize {
+		return true, fmt.Sprintf("too large (%d bytes > %d limit)", info.Size(), maxScanFileSize)
+	}
+	if info.Size() == 0 {
+		return true, "empty"
+	}
+
+	// Sniff the first 512 bytes for NUL bytes — a strong indicator of binary content.
+	// This is the same heuristic used by git and many other tools.
+	f, err := os.Open(path)
+	if err != nil {
+		return true, "open error"
+	}
+	defer func() { _ = f.Close() }()
+
+	buf := make([]byte, 512)
+	n, _ := f.Read(buf)
+	for _, b := range buf[:n] {
+		if b == 0 {
+			return true, "binary file"
+		}
+	}
+	return false, ""
+}
+
 // ScanFile scans a single file and returns any secret matches.
-// Binary files are automatically skipped by gitleaks.
+// Binary files and files larger than maxScanFileSize are skipped.
 func (s *Scanner) ScanFile(path string) ([]ScanResult, error) {
+	if skip, reason := shouldSkipFile(path); skip {
+		if reason == "stat error" || reason == "open error" {
+			return nil, fmt.Errorf("opening file %s: %s", path, reason)
+		}
+		return nil, nil
+	}
+
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening file %s: %w", path, err)
@@ -259,6 +304,18 @@ func (s *Scanner) ScanFiles(files []string) ([]ScanResult, error) {
 			defer wg.Done()
 			for i := range fileCh {
 				path := files[i]
+
+				// Skip binary and oversized files before any I/O.
+				if skip, _ := shouldSkipFile(path); skip {
+					resultsCh[i] = fileResult{}
+					if s.onProgress != nil {
+						progressMu.Lock()
+						scanned++
+						s.onProgress(scanned, len(files))
+						progressMu.Unlock()
+					}
+					continue
+				}
 
 				// Hash the file and check cache.
 				h, hashErr := hashFile(path)

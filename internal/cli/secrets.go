@@ -30,7 +30,7 @@ func newSecretsExportCmd() *cobra.Command {
 		Short: "Export encrypted secret envelope for a checkpoint",
 		Long: `Export the encrypted secret envelope for a checkpoint to stdout.
 The output is already encrypted — share it via any channel.
-The recipient needs the secret key (shown during save) to decrypt.
+The secret key is printed to stderr for easy separation.
 
   bento secrets export cp-3 > bundle.enc`,
 		Args: cobra.ExactArgs(1),
@@ -68,7 +68,7 @@ The recipient needs the secret key (shown during save) to decrypt.
 			secretKey := envelope["secretKey"]
 			if secretKey != "" {
 				fmt.Fprintf(os.Stderr, "Secret key: %s\n", secretKey)
-				fmt.Fprintf(os.Stderr, "Recipient: bento open --secret-key %s --secrets-file bundle.enc <ref>\n", secretKey)
+				fmt.Fprintf(os.Stderr, "Recipient: bento open --secret-key %s --secrets-file bundle.enc %s\n", secretKey, tag)
 			}
 
 			fmt.Fprint(os.Stdout, ciphertext)

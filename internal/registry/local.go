@@ -367,12 +367,8 @@ func (s *LocalStore) InjectLayer(tag string, layer LayerData, annotations map[st
 	m.Layers = append(m.Layers, layerDesc)
 
 	// Update the OCI config to add the new layer's diffID.
-	// Read the layer content to compute the uncompressed digest.
-	// For the secrets layer, the diffID is computed from the tar content.
-	// Since we have the gzip digest but need the uncompressed digest,
-	// and PackBytesToTempLayer already computed it, we use the gzip digest
-	// as a placeholder diffID. This is acceptable because the secrets layer
-	// is not extracted by Docker — it's only read by bento.
+	// Use the proper uncompressed tar digest when available (from PackResult.DiffID),
+	// falling back to the gzip digest for backward compatibility.
 	configBytes, err := s.fetchBlob(m.Config)
 	if err != nil {
 		return fmt.Errorf("reading config: %w", err)
@@ -382,7 +378,11 @@ func (s *LocalStore) InjectLayer(tag string, layer LayerData, annotations map[st
 	if err := json.Unmarshal(configBytes, &imageConfig); err != nil {
 		return fmt.Errorf("parsing config: %w", err)
 	}
-	imageConfig.RootFS.DiffIDs = append(imageConfig.RootFS.DiffIDs, layerDigest)
+	diffID := layerDigest
+	if layer.DiffID != "" {
+		diffID = digest.Digest(layer.DiffID)
+	}
+	imageConfig.RootFS.DiffIDs = append(imageConfig.RootFS.DiffIDs, diffID)
 
 	newConfigBytes, err := json.Marshal(imageConfig)
 	if err != nil {

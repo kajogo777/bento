@@ -290,3 +290,181 @@ func TestScanCache(t *testing.T) {
 		t.Fatalf("expected progress to reach 1, got %d", progressCount)
 	}
 }
+
+func TestScanFile_SkipsBinaryFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "binary.dat")
+
+	// Write a file with NUL bytes (binary indicator).
+	content := []byte("some text\x00more binary\x00data")
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewSecretScanner(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := s.ScanFile(path)
+	if err != nil {
+		t.Fatalf("binary file should not cause error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("binary file should return no results, got %d", len(results))
+	}
+}
+
+func TestScanFile_SkipsLargeFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.txt")
+
+	// Create a file just over the limit.
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write maxScanFileSize + 1 bytes of text content.
+	buf := make([]byte, 4096)
+	for i := range buf {
+		buf[i] = 'A'
+	}
+	written := int64(0)
+	for written <= maxScanFileSize {
+		n, wErr := f.Write(buf)
+		if wErr != nil {
+			_ = f.Close()
+			t.Fatal(wErr)
+		}
+		written += int64(n)
+	}
+	_ = f.Close()
+
+	s, err := NewSecretScanner(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := s.ScanFile(path)
+	if err != nil {
+		t.Fatalf("large file should not cause error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("large file should return no results, got %d", len(results))
+	}
+}
+
+func TestScanFile_SkipsEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.txt")
+	if err := os.WriteFile(path, []byte{}, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewSecretScanner(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := s.ScanFile(path)
+	if err != nil {
+		t.Fatalf("empty file should not cause error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("empty file should return no results, got %d", len(results))
+	}
+}
+
+func TestScanFiles_SkipsBinaryAndLarge(t *testing.T) {
+	dir := t.TempDir()
+
+	// Text file with a secret — should be scanned.
+	secretFile := filepath.Join(dir, "config.env")
+	os.WriteFile(secretFile, []byte("AWS_ACCESS_KEY_ID=AKIAIOSFODNN7FSECRET\n"), 0644)
+
+	// Binary file — should be skipped.
+	binaryFile := filepath.Join(dir, "image.png")
+	os.WriteFile(binaryFile, []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), 0644)
+
+	// Large text file — should be skipped.
+	largeFile := filepath.Join(dir, "huge.log")
+	f, _ := os.Create(largeFile)
+	buf := make([]byte, 4096)
+	for i := range buf {
+		buf[i] = 'X'
+	}
+	written := int64(0)
+	for written <= maxScanFileSize {
+		n, _ := f.Write(buf)
+		written += int64(n)
+	}
+	_ = f.Close()
+
+	s, err := NewSecretScanner(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var progressCount int
+	s.SetProgressFunc(func(scanned, total int) {
+		progressCount = scanned
+	})
+
+	results, err := s.ScanFiles([]string{secretFile, binaryFile, largeFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Only the secret file should produce results.
+	if len(results) == 0 {
+		t.Error("expected at least 1 result from the text file with a secret")
+	}
+	for _, r := range results {
+		if r.File == binaryFile {
+			t.Error("binary file should not produce results")
+		}
+		if r.File == largeFile {
+			t.Error("large file should not produce results")
+		}
+	}
+
+	// Progress should account for all 3 files.
+	if progressCount != 3 {
+		t.Errorf("progress should reach 3 (all files), got %d", progressCount)
+	}
+}
+
+func TestShouldSkipFile_Heuristics(t *testing.T) {
+	dir := t.TempDir()
+
+	tests := []struct {
+		name    string
+		content []byte
+		size    int64 // if >0, create file of this size instead of using content
+		want    bool
+		reason  string
+	}{
+		{"text file", []byte("hello world\nline2\n"), 0, false, ""},
+		{"binary with NUL", []byte("text\x00binary"), 0, true, "binary file"},
+		{"empty file", []byte{}, 0, true, "empty"},
+		{"json config", []byte(`{"key": "value"}`), 0, false, ""},
+		{"yaml config", []byte("key: value\nlist:\n  - item\n"), 0, false, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, tt.name+".dat")
+			if err := os.WriteFile(path, tt.content, 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			skip, reason := shouldSkipFile(path)
+			if skip != tt.want {
+				t.Errorf("shouldSkipFile(%q) = %v, want %v (reason: %s)", tt.name, skip, tt.want, reason)
+			}
+			if tt.want && tt.reason != "" && reason != tt.reason {
+				t.Errorf("reason = %q, want %q", reason, tt.reason)
+			}
+		})
+	}
+}
