@@ -17,7 +17,7 @@ this proposal only replaces *how the DEK is delivered* to recipients.
 ## Motivation
 
 Today, sharing secrets across machines requires the sender to communicate a
-`bento-sk-...` symmetric key string out-of-band (Slack, email, etc.). This has
+`bento-dk-...` symmetric key string out-of-band (Slack, email, etc.). This has
 several friction points:
 
 1. **Manual key exchange** — the sender must copy the key and send it to each
@@ -54,18 +54,19 @@ team manifest.
 
 ```
 $ bento keys generate
-Private key: bento-priv-<base64(32 bytes)>   (44 chars after prefix)
-Public key:  bento-pub-<base64(32 bytes)>    (44 chars after prefix)
+Private key: bento-sk-<base64(32 bytes)>   (44 chars after prefix)
+Public key:  bento-pk-<base64(32 bytes)>    (44 chars after prefix)
 
 Keys saved to ~/.bento/keys/default.json
 ```
 
-**Key encoding:** raw base64url (no padding), matching the existing `bento-sk-`
+**Key encoding:** raw base64url (no padding), matching the existing `bento-dk-`
 convention. A Curve25519 public key is exactly 32 bytes → 43 base64url chars.
 
 **Key prefixes:**
-- `bento-pub-` — public key (safe to share, commit, publish)
-- `bento-priv-` — private key (never leaves the machine)
+- `bento-pk-` — public key (safe to share, commit, publish)
+- `bento-sk-` — secret/private key (never leaves the machine)
+- `bento-dk-` — data encryption key (symmetric, for backward-compat sharing)
 
 **Comparison with WireGuard:** WireGuard uses standard base64 (with padding) for
 its Curve25519 keys, yielding 44-char strings. Bento uses base64url (no padding)
@@ -85,8 +86,8 @@ Each file:
 ```json
 {
   "name": "default",
-  "publicKey": "bento-pub-<base64url>",
-  "privateKey": "bento-priv-<base64url>",
+  "publicKey": "bento-pk-<base64url>",
+  "privateKey": "bento-sk-<base64url>",
   "created": "2026-04-01T12:00:00Z"
 }
 ```
@@ -105,9 +106,9 @@ Or in `bento.yaml`:
 ```yaml
 recipients:
   - name: alice
-    key: bento-pub-<base64url>
+    key: bento-pk-<base64url>
   - name: bob
-    key: bento-pub-<base64url>
+    key: bento-pk-<base64url>
 ```
 
 ## Cryptographic Design
@@ -163,15 +164,15 @@ Base64url-encoded: 96 chars.
 ```json
 {
   "v": 1,
-  "sender": "bento-pub-<sender's public key>",
+  "sender": "bento-pk-<sender's public key>",
   "ciphertext": "<base64url(nonce || secretbox.Seal(secrets))>",
   "wrappedKeys": [
     {
-      "recipient": "bento-pub-<base64url>",
+      "recipient": "bento-pk-<base64url>",
       "wrappedDEK": "<base64url(72 bytes)>"
     },
     {
-      "recipient": "bento-pub-<base64url>",
+      "recipient": "bento-pk-<base64url>",
       "wrappedDEK": "<base64url(72 bytes)>"
     }
   ]
@@ -184,7 +185,7 @@ verify which keypair sealed the checkpoint.
 
 The `ciphertext` field is identical to today's format — the secrets encrypted
 with the DEK via NaCl secretbox. The `wrappedKeys` array replaces the need to
-share `bento-sk-...` out-of-band.
+share `bento-dk-...` out-of-band.
 
 ## Save Flow Changes
 
@@ -245,7 +246,7 @@ bento keys list
 bento keys public [--name <name>]
 
 # Import a recipient's public key
-bento keys add-recipient <name> <bento-pub-...>
+bento keys add-recipient <name> <bento-pk-...>
 
 # Remove a recipient
 bento keys remove-recipient <name>
@@ -256,7 +257,7 @@ bento keys remove-recipient <name>
 ```bash
 # Push with key wrapping (recipients from bento.yaml or flags)
 bento push --include-secrets
-bento push --include-secrets --recipient bento-pub-...
+bento push --include-secrets --recipient bento-pk-...
 bento push --include-secrets --recipient alice --recipient bob
 
 # Open auto-discovers private key
@@ -280,14 +281,14 @@ bento open ghcr.io/org/project:cp-1 ./workspace
 # Optional: default recipients for --include-secrets
 recipients:
   - name: alice
-    key: bento-pub-dG9tIGlzIGEgZ29vZCBjYXQgYW5kIGhlIGxpa2Vz
+    key: bento-pk-<alice's public key>
   - name: bob
-    key: bento-pub-c2FsbHkgaXMgYSBnb29kIGRvZyBhbmQgc2hlIGxp
+    key: bento-pk-<bob's public key>
 ```
 
 ### Validation
 
-- `recipients[].key` MUST start with `bento-pub-`
+- `recipients[].key` MUST start with `bento-pk-`
 - Decoded key MUST be exactly 32 bytes
 - `recipients[].name` MUST be unique within the list
 - Duplicate public keys across different names: warning (not error)
@@ -301,7 +302,7 @@ New annotation on the secrets layer descriptor:
 | Key | Description |
 |-----|-------------|
 | `dev.bento.secrets.key-wrapping` | `"curve25519"` when wrapped keys are present |
-| `dev.bento.secrets.sender` | Sender's public key (`bento-pub-...`) for provenance |
+| `dev.bento.secrets.sender` | Sender's public key (`bento-pk-...`) for provenance |
 
 ### Envelope Storage
 
@@ -348,16 +349,16 @@ package keys
 // GenerateKeypair creates a new Curve25519 keypair.
 func GenerateKeypair() (publicKey, privateKey [32]byte, err error)
 
-// FormatPublicKey encodes a public key as "bento-pub-<base64url>".
+// FormatPublicKey encodes a public key as "bento-pk-<base64url>".
 func FormatPublicKey(key [32]byte) string
 
-// FormatPrivateKey encodes a private key as "bento-priv-<base64url>".
+// FormatPrivateKey encodes a private key as "bento-sk-<base64url>".
 func FormatPrivateKey(key [32]byte) string
 
-// ParsePublicKey decodes a "bento-pub-..." string to 32 bytes.
+// ParsePublicKey decodes a "bento-pk-..." string to 32 bytes.
 func ParsePublicKey(s string) ([32]byte, error)
 
-// ParsePrivateKey decodes a "bento-priv-..." string to 32 bytes.
+// ParsePrivateKey decodes a "bento-sk-..." string to 32 bytes.
 func ParsePrivateKey(s string) ([32]byte, error)
 
 // LoadPrivateKey loads the user's private key from ~/.bento/keys/.
@@ -380,13 +381,13 @@ func UnwrapDEK(wrapped []byte, senderPub, recipientPub, recipientPriv [32]byte) 
 // MultiRecipientEnvelope is the on-disk/in-OCI format for wrapped secrets.
 type MultiRecipientEnvelope struct {
     Version     int              `json:"v"`
-    Sender      string           `json:"sender"`              // "bento-pub-..." (sender's public key)
+    Sender      string           `json:"sender"`              // "bento-pk-..." (sender's public key)
     Ciphertext  string           `json:"ciphertext"`
     WrappedKeys []WrappedKeyEntry `json:"wrappedKeys,omitempty"`
 }
 
 type WrappedKeyEntry struct {
-    Recipient  string `json:"recipient"`   // "bento-pub-..."
+    Recipient  string `json:"recipient"`   // "bento-pk-..."
     WrappedDEK string `json:"wrappedDEK"`  // base64url(72 bytes)
 }
 ```
@@ -440,23 +441,23 @@ No breaking changes. No migration needed. The feature is purely additive.
 ```
 $ bento keys generate
 Generated keypair "default":
-  Public key:  bento-pub-dG9tIGlzIGEgZ29vZCBjYXQgYW5kIGhlIGxpa2Vz
+  Public key:  bento-pk-<base64url, 43 chars>
   Private key: saved to ~/.bento/keys/default.json
 
 Share your public key with teammates:
-  bento-pub-dG9tIGlzIGEgZ29vZCBjYXQgYW5kIGhlIGxpa2Vz
+  bento-pk-<base64url, 43 chars>
 ```
 
 ### Adding a Teammate
 
 ```
-$ bento keys add-recipient alice bento-pub-c2FsbHkgaXMgYSBnb29kIGRvZyBhbmQgc2hlIGxp
+$ bento keys add-recipient alice bento-pk-<alice's public key>
 Added recipient "alice"
 
 # Or in bento.yaml:
 recipients:
   - name: alice
-    key: bento-pub-c2FsbHkgaXMgYSBnb29kIGRvZyBhbmQgc2hlIGxp
+    key: bento-pk-<alice's public key>
 ```
 
 ### Push with Key Wrapping
@@ -464,9 +465,9 @@ recipients:
 ```
 $ bento push --include-secrets
 Wrapped secrets for 2 recipient(s):
-  alice  bento-pub-c2FsbH...
-  bob    bento-pub-Ym9iIH...
-Sealed by: bento-pub-dG9tIG... (default)
+  alice  bento-pk-c2FsbH...
+  bob    bento-pk-Ym9iIH...
+Sealed by: bento-pk-dG9tIG... (default)
 Pushing to ghcr.io/org/project...
 Done.
 
