@@ -721,3 +721,297 @@ func TestScrub_OpenFailsWithoutSecrets(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestScrub_OpenNoCwdCorruption: open without target dir must not corrupt cwd
+// This is the exact scenario that caused data loss.
+// ---------------------------------------------------------------------------
+
+func TestScrub_OpenNoCwdCorruption(t *testing.T) {
+	// Create a workspace with secrets and save.
+	dir := makeWorkspaceWithSecret(t)
+	run(t, dir, "save", "-m", "cwd test")
+
+	// Delete local secrets to simulate remote.
+	deleteLocalSecrets(t, dir)
+
+	// Create a "project" directory with important files.
+	projectDir := t.TempDir()
+	writeFile(t, projectDir, "important.go", "package main // DO NOT DELETE")
+	writeFile(t, projectDir, "data.json", `{"critical": true}`)
+
+	// Run open FROM the project dir without a target dir argument.
+	// This should fail without touching any files in projectDir.
+	cmd := exec.Command(bento, "open", "--dir", dir, "cp-1")
+	cmd.Dir = projectDir
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("open should fail without secrets, got:\n%s", out)
+	}
+
+	// Verify project files are untouched.
+	content, readErr := os.ReadFile(filepath.Join(projectDir, "important.go"))
+	if readErr != nil {
+		t.Fatalf("important.go was deleted or corrupted: %v", readErr)
+	}
+	if string(content) != "package main // DO NOT DELETE" {
+		t.Errorf("important.go content changed: %q", content)
+	}
+
+	content2, readErr2 := os.ReadFile(filepath.Join(projectDir, "data.json"))
+	if readErr2 != nil {
+		t.Fatalf("data.json was deleted or corrupted: %v", readErr2)
+	}
+	if string(content2) != `{"critical": true}` {
+		t.Errorf("data.json content changed: %q", content2)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestScrub_OpenIntoExistingDir: open into dir with existing files must not
+// corrupt them when secrets are unavailable
+// ---------------------------------------------------------------------------
+
+func TestScrub_OpenIntoExistingDir(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+	run(t, dir, "save", "-m", "existing dir test")
+	deleteLocalSecrets(t, dir)
+
+	// Create target dir with existing files.
+	dst := t.TempDir()
+	writeFile(t, dst, "existing.txt", "do not overwrite")
+
+	out := runExpectFail(t, dir, "open", "cp-1", dst)
+	if !strings.Contains(out, "cannot be resolved") {
+		t.Errorf("should fail with resolution error, got:\n%s", out)
+	}
+
+	// Existing file must be untouched.
+	content, err := os.ReadFile(filepath.Join(dst, "existing.txt"))
+	if err != nil {
+		t.Fatalf("existing.txt was deleted: %v", err)
+	}
+	if string(content) != "do not overwrite" {
+		t.Errorf("existing.txt was modified: %q", content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestScrub_OpenWrongKeyNoLocalSecrets: wrong key + no local = fail safely
+// ---------------------------------------------------------------------------
+
+func TestScrub_OpenWrongKeyNoLocalSecrets(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+	run(t, dir, "save", "-m", "wrong key test")
+	deleteLocalSecrets(t, dir)
+
+	dst := t.TempDir()
+	wrongKey := "bento-sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	out := runExpectFail(t, dir, "open", "--secret-key", wrongKey, "cp-1", dst)
+
+	if !strings.Contains(out, "cannot be resolved") {
+		t.Errorf("should fail with resolution error, got:\n%s", out)
+	}
+
+	// No files should be written.
+	entries, _ := os.ReadDir(dst)
+	if len(entries) > 0 {
+		t.Errorf("no files should be written with wrong key, found %d", len(entries))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestScrub_OpenSecretsFileNotFound: --secrets-file with nonexistent path
+// ---------------------------------------------------------------------------
+
+func TestScrub_OpenSecretsFileNotFound(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+	run(t, dir, "save", "-m", "missing file test")
+	deleteLocalSecrets(t, dir)
+
+	dst := t.TempDir()
+	out := runExpectFail(t, dir, "open", "--secret-key", "bento-sk-AAAA", "--secrets-file", "/tmp/nonexistent-bundle-12345.enc", "cp-1", dst)
+
+	if !strings.Contains(out, "cannot be resolved") {
+		t.Errorf("should fail, got:\n%s", out)
+	}
+
+	entries, _ := os.ReadDir(dst)
+	if len(entries) > 0 {
+		t.Errorf("no files should be written, found %d", len(entries))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestScrub_OpenSecretsFileNoKey: --secrets-file without --secret-key
+// ---------------------------------------------------------------------------
+
+func TestScrub_OpenSecretsFileNoKey(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+	run(t, dir, "save", "-m", "no key test")
+	deleteLocalSecrets(t, dir)
+
+	dst := t.TempDir()
+	// Create a fake bundle file.
+	fakeBundlePath := filepath.Join(t.TempDir(), "fake.enc")
+	os.WriteFile(fakeBundlePath, []byte("fake-ciphertext"), 0600)
+
+	out := runExpectFail(t, dir, "open", "--secrets-file", fakeBundlePath, "cp-1", dst)
+
+	if !strings.Contains(out, "cannot be resolved") {
+		t.Errorf("should fail without --secret-key, got:\n%s", out)
+	}
+
+	entries, _ := os.ReadDir(dst)
+	if len(entries) > 0 {
+		t.Errorf("no files should be written, found %d", len(entries))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestScrub_OpenAllowMissingSecrets: --allow-missing-secrets writes placeholders
+// ---------------------------------------------------------------------------
+
+func TestScrub_OpenAllowMissingSecrets(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+	run(t, dir, "save", "-m", "allow missing test")
+	deleteLocalSecrets(t, dir)
+
+	dst := t.TempDir()
+	out := run(t, dir, "open", "--allow-missing-secrets", "cp-1", dst)
+
+	if !strings.Contains(out, "placeholders") {
+		t.Errorf("should warn about placeholders, got:\n%s", out)
+	}
+
+	// Files should exist but contain placeholders.
+	content, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("file should exist: %v", err)
+	}
+	if !strings.Contains(string(content), "__BENTO_SCRUBBED") {
+		t.Error("file should contain placeholders")
+	}
+	if strings.Contains(string(content), "AKIAZ5GMXQ7KFAKETEST") {
+		t.Error("file should NOT contain real secret")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestScrub_NoSecretsDir: ~/.bento/secrets doesn't exist at all
+// ---------------------------------------------------------------------------
+
+func TestScrub_NoSecretsDir(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+	run(t, dir, "save", "-m", "no secrets dir test")
+
+	// Remove the entire secrets directory.
+	home, _ := os.UserHomeDir()
+	wsID := ""
+	bentoYAML, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
+	for _, line := range strings.Split(string(bentoYAML), "\n") {
+		if strings.HasPrefix(line, "id: ") {
+			wsID = strings.TrimPrefix(line, "id: ")
+			break
+		}
+	}
+	secretsDir := filepath.Join(home, ".bento", "secrets", wsID)
+	os.RemoveAll(secretsDir)
+
+	// Open should fail cleanly.
+	dst := t.TempDir()
+	out := runExpectFail(t, dir, "open", "cp-1", dst)
+
+	if !strings.Contains(out, "cannot be resolved") {
+		t.Errorf("should fail when secrets dir missing, got:\n%s", out)
+	}
+
+	// No files written.
+	entries, _ := os.ReadDir(dst)
+	if len(entries) > 0 {
+		t.Errorf("no files should be written, found %d", len(entries))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestScrub_OpenNoSecretsCheckpoint: open checkpoint that has no scrub records
+// ---------------------------------------------------------------------------
+
+func TestScrub_OpenNoSecretsCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := t.TempDir()
+	bentoYAML := "store: " + storeDir + "\n"
+	os.WriteFile(filepath.Join(dir, "bento.yaml"), []byte(bentoYAML), 0644)
+
+	writeFile(t, dir, "README.md", "# Clean project")
+	writeFile(t, dir, "main.go", "package main")
+
+	run(t, dir, "save", "--skip-secret-scan", "-m", "no secrets")
+
+	dst := t.TempDir()
+	out := run(t, dir, "open", "cp-1", dst)
+
+	if strings.Contains(out, "secret") && !strings.Contains(out, "Secret scan") {
+		t.Errorf("should not mention secrets for clean checkpoint, got:\n%s", out)
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dst, "README.md"))
+	if string(content) != "# Clean project" {
+		t.Errorf("file content wrong: %q", content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestScrub_ExportShowsKeyOnStderr: export key goes to stderr, ciphertext to stdout
+// ---------------------------------------------------------------------------
+
+func TestScrub_ExportShowsKeyOnStderr(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+	run(t, dir, "save", "-m", "export stderr test")
+
+	cmd := exec.Command(bento, "secrets", "export", "cp-1")
+	cmd.Dir = dir
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("export failed: %v", err)
+	}
+
+	// Stderr should have the key.
+	if !strings.Contains(stderr.String(), "bento-sk-") {
+		t.Errorf("stderr should contain secret key, got:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Recipient:") {
+		t.Errorf("stderr should contain recipient command, got:\n%s", stderr.String())
+	}
+
+	// Stdout should have ciphertext (not the key).
+	if strings.Contains(stdout.String(), "bento-sk-") {
+		t.Error("stdout should NOT contain the key")
+	}
+	if len(stdout.String()) == 0 {
+		t.Error("stdout should contain ciphertext")
+	}
+	// Ciphertext should not be readable as the secret.
+	if strings.Contains(stdout.String(), "AKIAZ5GMXQ7KFAKETEST") {
+		t.Error("stdout should be encrypted, not plaintext")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helper: deleteLocalSecrets removes the local secrets for a workspace
+// ---------------------------------------------------------------------------
+
+func deleteLocalSecrets(t *testing.T, workDir string) {
+	t.Helper()
+	home, _ := os.UserHomeDir()
+	bentoYAML, _ := os.ReadFile(filepath.Join(workDir, "bento.yaml"))
+	for _, line := range strings.Split(string(bentoYAML), "\n") {
+		if strings.HasPrefix(line, "id: ") {
+			wsID := strings.TrimPrefix(line, "id: ")
+			os.RemoveAll(filepath.Join(home, ".bento", "secrets", wsID))
+			return
+		}
+	}
+}
