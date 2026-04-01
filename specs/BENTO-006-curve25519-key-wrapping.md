@@ -45,7 +45,11 @@ team manifest.
    dependencies
 4. **Multi-recipient** — the DEK is wrapped once per recipient; adding a
    recipient is O(1) and doesn't touch the ciphertext or layers
-5. **Zero config for local** — same-machine opens still use the local plaintext
+5. **Sender is always a recipient** — the sender's own public key is
+   implicitly added to the wrapped keys list, ensuring the sender never
+   loses access to their own secrets (even after local store cleanup or
+   machine migration)
+6. **Zero config for local** — same-machine opens still use the local plaintext
    store; key wrapping only matters for cross-machine sharing
 
 ## Key Format
@@ -200,11 +204,14 @@ Current save flow (unchanged):
 
 New addition (after step 5):
   7. If recipients configured (bento.yaml or --recipient flags):
-     a. For each recipient public key:
+     a. Collect recipient list: explicit recipients + sender's own public key
+        (sender is ALWAYS included as an implicit recipient)
+     b. Deduplicate by public key (in case sender is also listed explicitly)
+     c. For each recipient public key:
         - box.Seal(DEK, nonce, recipientPubKey, senderPrivKey) → wrappedDEK
-     b. Build multi-recipient envelope:
+     d. Build multi-recipient envelope:
         {sender, ciphertext, wrappedKeys: [{recipient, wrappedDEK}, ...]}
-     c. Store envelope locally (replaces .enc.json)
+     e. Store envelope locally (replaces .enc.json)
   8. On push --include-secrets:
      - Pack the multi-recipient envelope into OCI layer
      - No --secret-key displayed (recipients use their private keys)
@@ -412,6 +419,7 @@ No breaking changes. No migration needed. The feature is purely additive.
 | No private keys in OCI | Only public keys appear in the envelope; private keys never leave `~/.bento/keys/` |
 | Authenticated encryption | NaCl `crypto_box` provides authentication + confidentiality; sender identity is cryptographically bound |
 | Sender provenance | Recipient can verify the wrapped DEK was produced by the holder of the sender's private key |
+| Sender self-access | Sender is always an implicit recipient; cannot accidentally lock themselves out |
 | Key size | 32-byte Curve25519 keys = 128-bit security level |
 
 ### Threat Model
