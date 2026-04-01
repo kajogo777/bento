@@ -114,55 +114,73 @@ recipients:
 
 ### Wrapping Scheme
 
-The DEK wrapping uses NaCl `crypto_box_seal` (anonymous sealed boxes):
+The DEK wrapping uses NaCl `crypto_box` (authenticated boxes):
 
 ```
 Wrap:
-  1. Generate ephemeral Curve25519 keypair (sender side)
-  2. Compute shared secret: X25519(ephemeral_private, recipient_public)
+  1. Generate random 24-byte nonce
+  2. Compute shared secret: X25519(sender_private, recipient_public)
   3. Derive symmetric key: HSalsa20(shared_secret, zero_nonce)
-  4. Encrypt DEK: XSalsa20-Poly1305(derived_key, DEK)
-  5. Output: ephemeral_public || ciphertext  (32 + 48 = 80 bytes)
+  4. Encrypt DEK: XSalsa20-Poly1305(derived_key, nonce, DEK)
+  5. Output: nonce || ciphertext  (24 + 48 = 72 bytes)
+  6. Store sender's public key in envelope metadata
 
 Unwrap:
-  1. Extract ephemeral_public (first 32 bytes)
-  2. Compute shared secret: X25519(recipient_private, ephemeral_public)
-  3. Derive symmetric key: HSalsa20(shared_secret, zero_nonce)
-  4. Decrypt DEK: XSalsa20-Poly1305(derived_key, ciphertext)
+  1. Read sender's public key from envelope metadata
+  2. Extract nonce (first 24 bytes)
+  3. Compute shared secret: X25519(recipient_private, sender_public)
+  4. Derive symmetric key: HSalsa20(shared_secret, zero_nonce)
+  5. Decrypt DEK: XSalsa20-Poly1305(derived_key, nonce, ciphertext)
 ```
 
-This is exactly `golang.org/x/crypto/nacl/box.SealAnonymous` /
-`box.OpenAnonymous` — a single function call in each direction.
+This is exactly `golang.org/x/crypto/nacl/box.Seal` /
+`box.Open` — a single function call in each direction.
 
-**Why `crypto_box_seal` (anonymous) instead of `crypto_box` (authenticated)?**
-The sender's identity doesn't matter for bento's threat model — we care about
-*who can decrypt*, not *who encrypted*. Anonymous sealed boxes are simpler (no
-sender keypair needed at encryption time) and avoid the need to distribute the
-sender's public key alongside the wrapped keys.
+**Why `crypto_box` (authenticated) instead of `crypto_box_seal` (anonymous)?**
+The sender's public key is cryptographically bound to the wrapped DEK, which
+gives recipients two things for free:
+
+1. **Provenance** — the envelope proves the DEK was wrapped by the holder of
+   the sender's private key. Recipients can verify who sealed the checkpoint
+   without any separate signing infrastructure.
+2. **Workspace lineage** — the sender's public key in the envelope metadata
+   acts as an identity marker, enabling checkpoint history tracing across
+   machines (e.g., "Alice created cp-1, Bob forked cp-2 from it").
+3. **Trust decisions** — recipients can maintain a list of trusted sender keys
+   and reject checkpoints from unknown senders before attempting decryption.
+
+The sender already has a keypair (from `bento keys generate`), so authenticated
+boxes add no extra setup cost. The sender's public key is stored in the envelope
+— it's a public key, safe to include in plaintext.
 
 ### Wrapped Key Format
 
-Each wrapped DEK is 80 bytes (32-byte ephemeral public key + 48-byte encrypted
-DEK). Base64url-encoded: 107 chars.
+Each wrapped DEK is 72 bytes (24-byte nonce + 48-byte authenticated ciphertext).
+Base64url-encoded: 96 chars.
 
 ### Multi-Recipient Envelope
 
 ```json
 {
   "v": 1,
+  "sender": "bento-pub-<sender's public key>",
   "ciphertext": "<base64url(nonce || secretbox.Seal(secrets))>",
   "wrappedKeys": [
     {
       "recipient": "bento-pub-<base64url>",
-      "wrappedDEK": "<base64url(80 bytes)>"
+      "wrappedDEK": "<base64url(72 bytes)>"
     },
     {
       "recipient": "bento-pub-<base64url>",
-      "wrappedDEK": "<base64url(80 bytes)>"
+      "wrappedDEK": "<base64url(72 bytes)>"
     }
   ]
 }
 ```
+
+The `sender` field is the sender's Curve25519 public key. Recipients need it
+to call `box.Open`. It also serves as a provenance identifier — recipients can
+verify which keypair sealed the checkpoint.
 
 The `ciphertext` field is identical to today's format — the secrets encrypted
 with the DEK via NaCl secretbox. The `wrappedKeys` array replaces the need to
@@ -182,9 +200,9 @@ Current save flow (unchanged):
 New addition (after step 5):
   7. If recipients configured (bento.yaml or --recipient flags):
      a. For each recipient public key:
-        - box.SealAnonymous(DEK, recipientPubKey) → wrappedDEK
+        - box.Seal(DEK, nonce, recipientPubKey, senderPrivKey) → wrappedDEK
      b. Build multi-recipient envelope:
-        {ciphertext, wrappedKeys: [{recipient, wrappedDEK}, ...]}
+        {sender, ciphertext, wrappedKeys: [{recipient, wrappedDEK}, ...]}
      c. Store envelope locally (replaces .enc.json)
   8. On push --include-secrets:
      - Pack the multi-recipient envelope into OCI layer
@@ -203,9 +221,10 @@ Current open flow (unchanged):
 New addition (between steps 1 and 2):
   1.5. Try key wrapping:
        a. Load user's private key from ~/.bento/keys/
-       b. Scan wrappedKeys for matching recipient public key
-       c. If found: box.OpenAnonymous(wrappedDEK, privateKey) → DEK
-       d. DecryptSecrets(ciphertext, DEK) → secrets → done
+       b. Read sender's public key from envelope
+       c. Scan wrappedKeys for matching recipient public key
+       d. If found: box.Open(wrappedDEK, nonce, senderPubKey, recipientPrivKey) → DEK
+       e. DecryptSecrets(ciphertext, DEK) → secrets → done
 ```
 
 The `--secret-key` flow remains as a fallback. Users without keypairs configured
@@ -282,6 +301,7 @@ New annotation on the secrets layer descriptor:
 | Key | Description |
 |-----|-------------|
 | `dev.bento.secrets.key-wrapping` | `"curve25519"` when wrapped keys are present |
+| `dev.bento.secrets.sender` | Sender's public key (`bento-pub-...`) for provenance |
 
 ### Envelope Storage
 
@@ -349,22 +369,25 @@ func LoadPrivateKey() ([32]byte, [32]byte, error) // returns (pub, priv, err)
 package backend
 
 // WrapDEK wraps a 32-byte DEK to a recipient's Curve25519 public key
-// using NaCl anonymous sealed boxes.
-func WrapDEK(dek [32]byte, recipientPub [32]byte) ([]byte, error)
+// using NaCl authenticated boxes. The sender's public key is included
+// in the envelope for provenance verification.
+func WrapDEK(dek [32]byte, recipientPub [32]byte, senderPub, senderPriv [32]byte) ([]byte, error)
 
-// UnwrapDEK unwraps a DEK using the recipient's private key.
-func UnwrapDEK(wrapped []byte, recipientPub, recipientPriv [32]byte) ([32]byte, error)
+// UnwrapDEK unwraps a DEK using the recipient's private key and the
+// sender's public key (from the envelope).
+func UnwrapDEK(wrapped []byte, senderPub, recipientPub, recipientPriv [32]byte) ([32]byte, error)
 
 // MultiRecipientEnvelope is the on-disk/in-OCI format for wrapped secrets.
 type MultiRecipientEnvelope struct {
     Version     int              `json:"v"`
+    Sender      string           `json:"sender"`              // "bento-pub-..." (sender's public key)
     Ciphertext  string           `json:"ciphertext"`
     WrappedKeys []WrappedKeyEntry `json:"wrappedKeys,omitempty"`
 }
 
 type WrappedKeyEntry struct {
     Recipient  string `json:"recipient"`   // "bento-pub-..."
-    WrappedDEK string `json:"wrappedDEK"`  // base64url(80 bytes)
+    WrappedDEK string `json:"wrappedDEK"`  // base64url(72 bytes)
 }
 ```
 
@@ -386,26 +409,29 @@ No breaking changes. No migration needed. The feature is purely additive.
 | Forward secrecy per checkpoint | Each checkpoint gets a fresh DEK; wrapping doesn't change this |
 | Recipient isolation | Each recipient's wrapped DEK is independent; compromising one doesn't affect others |
 | No private keys in OCI | Only public keys appear in the envelope; private keys never leave `~/.bento/keys/` |
-| Authenticated encryption | NaCl sealed boxes provide authentication + confidentiality |
+| Authenticated encryption | NaCl `crypto_box` provides authentication + confidentiality; sender identity is cryptographically bound |
+| Sender provenance | Recipient can verify the wrapped DEK was produced by the holder of the sender's private key |
 | Key size | 32-byte Curve25519 keys = 128-bit security level |
-| Ephemeral sender key | `crypto_box_seal` generates a fresh ephemeral keypair per wrap; no sender key reuse |
 
 ### Threat Model
 
-- **Registry compromise:** attacker gets ciphertext + wrapped DEKs. Cannot
-  decrypt without a recipient's private key. Same security as today (attacker
-  would need `bento-sk-...`), but now the "key" is a long-lived private key
-  stored securely on the recipient's machine rather than a one-time string
-  floating in a Slack DM.
+- **Registry compromise:** attacker gets ciphertext + wrapped DEKs + sender's
+  public key. Cannot decrypt without a recipient's private key. The sender's
+  public key is not sensitive — it only enables verification, not decryption.
 
 - **Recipient compromise:** attacker gets one recipient's private key. Can
   decrypt only checkpoints wrapped to that recipient. Other recipients and
   other checkpoints (with different DEKs) are unaffected.
 
+- **Sender impersonation:** an attacker who doesn't have the sender's private
+  key cannot produce wrapped DEKs that pass `box.Open` with the sender's
+  public key. Recipients can detect forged envelopes by checking the sender
+  field against a trusted list.
+
 - **Adding recipients after push:** requires re-wrapping the DEK (not
   re-encrypting the ciphertext). The sender must have the DEK (from local
-  store) to wrap it for a new recipient. This is a `bento secrets rewrap`
-  operation.
+  store) and their private key to wrap it for a new recipient. This is a
+  `bento secrets rewrap` operation.
 
 ## User Flows
 
@@ -440,6 +466,7 @@ $ bento push --include-secrets
 Wrapped secrets for 2 recipient(s):
   alice  bento-pub-c2FsbH...
   bob    bento-pub-Ym9iIH...
+Sealed by: bento-pub-dG9tIG... (default)
 Pushing to ghcr.io/org/project...
 Done.
 
