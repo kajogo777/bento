@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"github.com/kajogo777/bento/internal/workspace"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/term"
 )
 
 // SaveOptions configures a save operation. Used by both `bento save` and `bento watch`.
@@ -93,9 +95,15 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 	// instead of the real files on disk.
 	fileOverrides := make(map[string]string)
 
+	// Resolve secret scan mode from config, flags, and environment.
+	secretsMode := cfg.Secrets.Mode
 	if opts.SkipSecretScan {
+		secretsMode = config.SecretsModeOff
+	}
+
+	if secretsMode == config.SecretsModeOff {
 		if !opts.Quiet {
-			fmt.Println("Secret scan: skipped")
+			fmt.Println("Secret scan: off")
 		}
 	} else {
 		secretScanner, err := secrets.NewSecretScanner(nil)
@@ -140,69 +148,111 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 			return nil, fmt.Errorf("secret scan error: %w", err)
 		}
 		if len(scanHits) > 0 {
-			// Group findings by file (relative path).
-			hitsByFile := make(map[string][]secrets.ScanResult)
-			for _, h := range scanHits {
-				rel := h.File
-				if filepath.IsAbs(rel) {
-					if r, err := filepath.Rel(opts.Dir, rel); err == nil {
-						rel = filepath.ToSlash(r)
-					}
+			// If mode is not configured yet, prompt the user to choose.
+			if secretsMode == "" {
+				secretsMode = promptSecretsMode(scanHits, opts.Quiet)
+
+				// Persist the choice to bento.yaml.
+				cfg.Secrets.Mode = secretsMode
+				if saveErr := config.Save(opts.Dir, cfg); saveErr != nil {
+					fmt.Printf("Warning: could not persist secrets.mode to bento.yaml: %v\n", saveErr)
+				} else if !opts.Quiet {
+					fmt.Printf("Saved secrets.mode: %s in bento.yaml\n\n", secretsMode)
 				}
-				hitsByFile[rel] = append(hitsByFile[rel], h)
 			}
 
-			// Scrub each file and collect placeholder→value mappings.
-			allSecrets := make(map[string]string)
-			for relPath, hits := range hitsByFile {
-				absPath := filepath.Join(opts.Dir, filepath.FromSlash(relPath))
-				content, readErr := os.ReadFile(absPath)
-				if readErr != nil {
-					return nil, fmt.Errorf("reading %s for scrubbing: %w", relPath, readErr)
-				}
-
-				scrubbed, replacements := secrets.ScrubFile(content, hits)
-				if len(replacements) == 0 {
-					continue
-				}
-
-				// Write scrubbed content to temp file.
-				tmpFile, tmpErr := os.CreateTemp("", "bento-scrub-*")
-				if tmpErr != nil {
-					return nil, fmt.Errorf("creating scrub temp file: %w", tmpErr)
-				}
-				if _, wErr := tmpFile.Write(scrubbed); wErr != nil {
-					_ = tmpFile.Close()
-					return nil, fmt.Errorf("writing scrub temp file: %w", wErr)
-				}
-				_ = tmpFile.Close()
-
-				normalized := workspace.NormalizePath(relPath)
-				fileOverrides[normalized] = tmpFile.Name()
-
-				// Build scrub record for manifest.
-				record := manifest.ScrubFileRecord{Path: relPath}
-				for _, r := range replacements {
-					allSecrets[r.Placeholder] = r.Secret()
-					record.Replacements = append(record.Replacements, manifest.ScrubReplacement{
-						Placeholder: r.Placeholder,
-						RuleID:      r.RuleID,
-					})
-				}
-				scrubRecords = append(scrubRecords, record)
-			}
-
-			// Collect secrets for storage after seq is known.
-			if len(allSecrets) > 0 {
-				scrubSecrets = allSecrets
-			}
-
-			if !opts.Quiet {
-				fmt.Printf("Scrubbed %d secret(s). Fingerprints:\n", len(scanHits))
+			// Act on the resolved mode.
+			switch secretsMode {
+			case config.SecretsModeBlock:
+				// Block mode: abort with error and show alternatives.
+				fmt.Printf("\nBlocked: %d secret(s) detected (secrets.mode: block)\n", len(scanHits))
+				fmt.Println("Fingerprints:")
 				for _, h := range scanHits {
 					fmt.Printf("  %s\n", h.Fingerprint)
 				}
-				fmt.Println("\nIf any are false positives, copy the fingerprint into .gitleaksignore and re-save.")
+				fmt.Println("\nTo fix, either:")
+				fmt.Println("  1. Remove the secrets from your files")
+				fmt.Println("  2. Add fingerprints to .gitleaksignore (if false positives)")
+				fmt.Println("\nTo change how secrets are handled:")
+				fmt.Println("  secrets.mode: scrub   — auto-scrub secrets from checkpoints (encrypted)")
+				fmt.Println("  secrets.mode: off     — disable secret scanning")
+				return nil, fmt.Errorf("save blocked — %d secret(s) detected", len(scanHits))
+
+			case config.SecretsModeOff:
+				// User chose "off" at the prompt — skip scrubbing.
+				if !opts.Quiet {
+					fmt.Println("Secret scan: off (secrets.mode: off)")
+				}
+
+			default: // scrub (default)
+				// Group findings by file (relative path).
+				hitsByFile := make(map[string][]secrets.ScanResult)
+				for _, h := range scanHits {
+					rel := h.File
+					if filepath.IsAbs(rel) {
+						if r, err := filepath.Rel(opts.Dir, rel); err == nil {
+							rel = filepath.ToSlash(r)
+						}
+					}
+					hitsByFile[rel] = append(hitsByFile[rel], h)
+				}
+
+				// Scrub each file and collect placeholder→value mappings.
+				allSecrets := make(map[string]string)
+				for relPath, hits := range hitsByFile {
+					absPath := filepath.Join(opts.Dir, filepath.FromSlash(relPath))
+					content, readErr := os.ReadFile(absPath)
+					if readErr != nil {
+						return nil, fmt.Errorf("reading %s for scrubbing: %w", relPath, readErr)
+					}
+
+					scrubbed, replacements := secrets.ScrubFile(content, hits)
+					if len(replacements) == 0 {
+						continue
+					}
+
+					// Write scrubbed content to temp file.
+					tmpFile, tmpErr := os.CreateTemp("", "bento-scrub-*")
+					if tmpErr != nil {
+						return nil, fmt.Errorf("creating scrub temp file: %w", tmpErr)
+					}
+					if _, wErr := tmpFile.Write(scrubbed); wErr != nil {
+						_ = tmpFile.Close()
+						return nil, fmt.Errorf("writing scrub temp file: %w", wErr)
+					}
+					_ = tmpFile.Close()
+
+					normalized := workspace.NormalizePath(relPath)
+					fileOverrides[normalized] = tmpFile.Name()
+
+					// Build scrub record for manifest.
+					record := manifest.ScrubFileRecord{Path: relPath}
+					for _, r := range replacements {
+						allSecrets[r.Placeholder] = r.Secret()
+						record.Replacements = append(record.Replacements, manifest.ScrubReplacement{
+							Placeholder: r.Placeholder,
+							RuleID:      r.RuleID,
+						})
+					}
+					scrubRecords = append(scrubRecords, record)
+				}
+
+				// Collect secrets for storage after seq is known.
+				if len(allSecrets) > 0 {
+					scrubSecrets = allSecrets
+				}
+
+				if !opts.Quiet {
+					fmt.Printf("Scrubbed %d secret(s) from checkpoint (secrets.mode: scrub). Fingerprints:\n", len(scanHits))
+					for _, h := range scanHits {
+						fmt.Printf("  %s\n", h.Fingerprint)
+					}
+					fmt.Println("\nYour files on disk are not modified. Secrets are restored automatically on bento open.")
+					fmt.Println("If any are false positives, copy the fingerprint into .gitleaksignore and re-save.")
+					fmt.Println("To change how secrets are handled, set secrets.mode in bento.yaml:")
+					fmt.Println("  block — abort save when secrets are detected")
+					fmt.Println("  off   — disable secret scanning")
+				}
 			}
 		}
 	}
@@ -635,3 +685,42 @@ func repoInfoAt(dir, relPath string) *manifest.RepoInfo {
 	}
 	return info
 }
+
+// promptSecretsMode asks the user how to handle detected secrets.
+// If stdin is not a terminal (CI/pipes), defaults to "scrub".
+func promptSecretsMode(scanHits []secrets.ScanResult, quiet bool) string {
+	fmt.Printf("\nDetected %d secret(s):\n", len(scanHits))
+	for _, h := range scanHits {
+		fmt.Printf("  %s\n", h.Fingerprint)
+	}
+
+	if !term.IsTerminal(int(os.Stdin.Fd())) || quiet {
+		fmt.Println("\nNon-interactive mode: defaulting to secrets.mode: scrub")
+		fmt.Println("  Your files on disk are not modified. Secrets are only removed from the")
+		fmt.Println("  checkpoint artifact and restored automatically on bento open.")
+		return config.SecretsModeScrub
+	}
+
+	fmt.Println("\nHow should bento handle secrets in this workspace?")
+	fmt.Println()
+	fmt.Println("  [s] scrub  — replace secrets with placeholders in checkpoints only (recommended)")
+	fmt.Println("             your files on disk stay untouched; secrets are restored on bento open")
+	fmt.Println("  [b] block  — abort save until secrets are removed or added to .gitleaksignore")
+	fmt.Println("  [o] off    — disable secret scanning (secrets will be stored in checkpoints as-is)")
+	fmt.Println()
+	fmt.Print("Choose [s/b/o] (default: s): ")
+
+	reader := bufio.NewReader(os.Stdin)
+	line, _ := reader.ReadString('\n')
+	choice := strings.TrimSpace(strings.ToLower(line))
+
+	switch choice {
+	case "b", "block":
+		return config.SecretsModeBlock
+	case "o", "off":
+		return config.SecretsModeOff
+	default:
+		return config.SecretsModeScrub
+	}
+}
+

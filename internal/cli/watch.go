@@ -14,6 +14,7 @@ import (
 	"github.com/kajogo777/bento/internal/extension"
 	"github.com/kajogo777/bento/internal/policy"
 	"github.com/kajogo777/bento/internal/registry"
+	"github.com/kajogo777/bento/internal/secrets"
 	"github.com/kajogo777/bento/internal/watcher"
 	"github.com/kajogo777/bento/internal/workspace"
 	"github.com/spf13/cobra"
@@ -76,6 +77,57 @@ Layers with watch: off are not monitored (still included in saves).`,
 
 			// Resolve skip secret scan.
 			skipSecretScan := flagSkipSecretScan || cfg.Watch.SkipSecretScan
+
+			// Pre-flight: if secrets.mode is not configured, do a quick scan
+			// at startup to prompt the user before entering the watch loop.
+			// This prevents the first auto-save from failing silently in quiet mode.
+			secretsMode := cfg.Secrets.Mode
+			if skipSecretScan {
+				secretsMode = config.SecretsModeOff
+			}
+			if secretsMode == "" {
+				fmt.Println("Running pre-flight secret scan...")
+				if preScanner, scanErr := secrets.NewSecretScanner(nil); scanErr == nil {
+					preScanner.SetBaseDir(dir)
+
+					// Load .gitleaksignore if present.
+					ignorePath := filepath.Join(dir, ".gitleaksignore")
+					if _, statErr := os.Stat(ignorePath); statErr == nil {
+						_ = preScanner.LoadGitleaksIgnore(ignorePath)
+					}
+
+					// Collect workspace files from all layers.
+					scanner := workspace.NewScanner(dir, layers, ignorePatterns)
+					if scanResults, scanErr := scanner.Scan(); scanErr == nil {
+						var allFiles []string
+						for _, sr := range scanResults {
+							for _, f := range sr.WorkspaceFiles {
+								allFiles = append(allFiles, filepath.Join(dir, f))
+							}
+						}
+						if hits, scanErr := preScanner.ScanFiles(allFiles); scanErr == nil && len(hits) > 0 {
+							// Secrets found and mode not configured — prompt now.
+							chosen := promptSecretsMode(hits, false)
+							cfg.Secrets.Mode = chosen
+							if saveErr := config.Save(dir, cfg); saveErr != nil {
+								fmt.Printf("Warning: could not persist secrets.mode to bento.yaml: %v\n", saveErr)
+							} else {
+								fmt.Printf("Saved secrets.mode: %s in bento.yaml\n", chosen)
+							}
+							// Update local state for the save callback.
+							secretsMode = chosen
+							if chosen == config.SecretsModeBlock {
+								return fmt.Errorf("secrets.mode is block — resolve secrets before running watch")
+							}
+							if chosen == config.SecretsModeOff {
+								skipSecretScan = true
+							}
+						} else if scanErr == nil {
+							fmt.Println("Pre-flight secret scan: clean")
+						}
+					}
+				}
+			}
 
 			// Open store for tiered GC.
 			store, err := registry.NewStore(cfg.StorePath())

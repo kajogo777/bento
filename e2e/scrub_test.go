@@ -1259,3 +1259,103 @@ func TestScrub_OpenIntoCwdWithAllowMissing(t *testing.T) {
 		t.Error("main.go should be restored")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestScrub_SecretsModeBlock: secrets.mode: block aborts save
+// ---------------------------------------------------------------------------
+
+func TestScrub_SecretsModeBlock(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+
+	// Set secrets.mode: block.
+	bentoYAML, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
+	bentoYAML = append(bentoYAML, []byte("secrets:\n  mode: block\n")...)
+	os.WriteFile(filepath.Join(dir, "bento.yaml"), bentoYAML, 0644)
+
+	out := runExpectFail(t, dir, "save", "-m", "should block")
+
+	if !strings.Contains(out, "Blocked") {
+		t.Errorf("should say Blocked, got:\n%s", out)
+	}
+	// Should show alternatives.
+	if !strings.Contains(out, "scrub") {
+		t.Errorf("should show scrub alternative, got:\n%s", out)
+	}
+	if !strings.Contains(out, ".gitleaksignore") {
+		t.Errorf("should mention .gitleaksignore, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestScrub_SecretsModeOff: secrets.mode: off skips scanning
+// ---------------------------------------------------------------------------
+
+func TestScrub_SecretsModeOff(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+
+	bentoYAML, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
+	bentoYAML = append(bentoYAML, []byte("secrets:\n  mode: off\n")...)
+	os.WriteFile(filepath.Join(dir, "bento.yaml"), bentoYAML, 0644)
+
+	out := run(t, dir, "save", "-m", "off mode")
+
+	if strings.Contains(out, "Scrubbed") {
+		t.Errorf("off mode should not scrub, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Secret scan: off") {
+		t.Errorf("should say scan is off, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestScrub_SecretsModeScrubShowsReversibility: scrub message explains safety
+// ---------------------------------------------------------------------------
+
+func TestScrub_SecretsModeScrubShowsReversibility(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+
+	bentoYAML, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
+	bentoYAML = append(bentoYAML, []byte("secrets:\n  mode: scrub\n")...)
+	os.WriteFile(filepath.Join(dir, "bento.yaml"), bentoYAML, 0644)
+
+	out := run(t, dir, "save", "-m", "scrub mode")
+
+	if !strings.Contains(out, "files on disk are not modified") {
+		t.Errorf("should explain files are untouched, got:\n%s", out)
+	}
+	if !strings.Contains(out, "restored automatically") {
+		t.Errorf("should explain secrets are restored on open, got:\n%s", out)
+	}
+	// Should show alternatives.
+	if !strings.Contains(out, "block") {
+		t.Errorf("should show block alternative, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestScrub_SecretsModeAutoDefault: unset mode persists scrub in CI
+// ---------------------------------------------------------------------------
+
+func TestScrub_SecretsModeAutoDefault(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+	// No secrets.mode set.
+
+	out := run(t, dir, "save", "-m", "auto test")
+
+	if !strings.Contains(out, "Scrubbed") {
+		t.Errorf("should default to scrub in CI, got:\n%s", out)
+	}
+
+	// Mode should be persisted.
+	bentoYAML, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
+	if !strings.Contains(string(bentoYAML), "mode: scrub") {
+		t.Errorf("should persist mode: scrub, got:\n%s", bentoYAML)
+	}
+
+	// Second save should not re-prompt.
+	writeFile(t, dir, "README.md", "# updated\n")
+	out2 := run(t, dir, "save", "-m", "second")
+	if strings.Contains(out2, "Non-interactive") {
+		t.Errorf("second save should not show prompt, got:\n%s", out2)
+	}
+}

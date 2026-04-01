@@ -22,6 +22,7 @@ type BentoConfig struct {
 	Layers     []LayerConfig       `yaml:"layers,omitempty"`
 	Ignore     []string            `yaml:"ignore,omitempty"`
 	Env        map[string]EnvEntry `yaml:"env,omitempty"`
+	Secrets        SecretsConfig        `yaml:"secrets,omitempty"`
 	Hooks          HooksConfig          `yaml:"hooks,omitempty"`
 	Retention      RetentionConfig      `yaml:"retention,omitempty"`
 	Watch          WatchConfig          `yaml:"watch,omitempty"`
@@ -154,6 +155,33 @@ type WatchConfig struct {
 	SkipSecretScan bool   `yaml:"skip_secret_scan,omitempty"` // skip secret scanning on auto-saves
 }
 
+// Secret scan mode constants.
+const (
+	// SecretsModeScrub detects secrets and scrubs them from OCI layers,
+	// storing real values locally + encrypted. This is the default.
+	SecretsModeScrub = "scrub"
+
+	// SecretsModeBlock detects secrets and aborts the save with an error.
+	// Forces the user to remove secrets or add them to .gitleaksignore.
+	SecretsModeBlock = "block"
+
+	// SecretsModeOff disables secret scanning entirely.
+	SecretsModeOff = "off"
+)
+
+// SecretsConfig controls how bento handles secrets detected by gitleaks.
+type SecretsConfig struct {
+	// Mode controls secret handling: "scrub" (default), "block", or "off".
+	//
+	//   scrub — auto-scrub secrets from OCI layers, store locally + encrypted
+	//   block — abort save if secrets are detected (strict mode)
+	//   off   — skip secret scanning entirely
+	//
+	// When empty, the first save that detects secrets prompts the user
+	// to choose (interactive) or defaults to "scrub" (non-interactive).
+	Mode string `yaml:"mode,omitempty"`
+}
+
 // DefaultStorePath returns the platform-appropriate default store location.
 func DefaultStorePath() string {
 	switch runtime.GOOS {
@@ -249,6 +277,16 @@ func (c *BentoConfig) Validate() error {
 	for name, entry := range c.Env {
 		if entry.IsRef && entry.Source == "" {
 			return fmt.Errorf("env %q has a reference form but no source — set source: to the secret provider (e.g. env, file, exec)", name)
+		}
+	}
+
+	// Validate secrets config.
+	if c.Secrets.Mode != "" {
+		switch c.Secrets.Mode {
+		case SecretsModeScrub, SecretsModeBlock, SecretsModeOff:
+			// valid
+		default:
+			return fmt.Errorf("secrets.mode %q is invalid — must be %q, %q, or %q", c.Secrets.Mode, SecretsModeScrub, SecretsModeBlock, SecretsModeOff)
 		}
 	}
 
