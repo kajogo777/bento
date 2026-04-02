@@ -218,19 +218,31 @@ Current save flow (unchanged):
   6. Store encrypted envelope locally
 
 New addition (after step 5):
-  7. If recipients configured (bento.yaml or --recipient flags):
-     a. Collect recipient list: explicit recipients + sender's own public key
-        (sender is ALWAYS included as an implicit recipient)
+  7. If sender has a keypair (any keypair in ~/.bento/keys/):
+     a. Collect recipient list: explicit recipients (bento.yaml + --recipient)
+        + sender's own public key (ALWAYS implicit)
      b. Deduplicate by public key (in case sender is also listed explicitly)
      c. For each recipient public key:
         - box.Seal(DEK, nonce, recipientPubKey, senderPrivKey) → wrappedDEK
      d. Build multi-recipient envelope:
         {sender, ciphertext, wrappedKeys: [{recipient, wrappedDEK}, ...]}
      e. Store envelope locally (replaces .enc.json)
-  8. On push --include-secrets:
-     - Pack the multi-recipient envelope into OCI layer
-     - No --secret-key displayed (recipients use their private keys)
+  8. If sender has NO keypair AND recipients are configured:
+     - Error: "recipients configured but no keypair found"
+  9. If sender has NO keypair AND no recipients configured:
+     - Symmetric-only flow (today's behavior, bento-dk-... key)
+  10. On push --include-secrets:
+      - Pack the envelope (wrapped or symmetric) into OCI layer
+      - If wrapped: no --secret-key displayed (recipients use private keys)
+      - If symmetric: display bento-dk-... key as before
 ```
+
+**Key rule: having a keypair is sufficient to trigger wrapping.** The sender
+doesn't need explicit recipients — wrapping to self alone ensures the sender
+can always recover secrets via their private key, even after local store
+cleanup, machine migration, or `bento gc`. This eliminates the failure mode
+where a user pushes with `--include-secrets`, loses the local store, and has
+no way to decrypt their own checkpoint.
 
 ## Open Flow Changes
 
@@ -494,7 +506,17 @@ func ResolveRecipients(
 1. Parse directly as a public key
 2. If parse fails: error with `"invalid public key — must start with bento-pk-"`
 
-### Error Handling: Missing Keypair on Save
+### Error Handling: Keypair Presence on Save
+
+The wrapping trigger is the **presence of a keypair**, not the presence of
+explicit recipients. The decision matrix:
+
+| Has keypair? | Recipients configured? | Behavior |
+|---|---|---|
+| No | No | Symmetric only (today's flow, `bento-dk-...`) |
+| No | Yes | **Error:** "recipients configured but no keypair found" |
+| Yes | No | Wrap DEK to **self only** (sender is implicit recipient) |
+| Yes | Yes | Wrap DEK to all recipients + self |
 
 When recipients are configured but the sender has no keypair:
 
@@ -513,9 +535,9 @@ The save MUST fail — not silently skip wrapping, not auto-generate. The user
 must explicitly generate a keypair because it's a long-lived identity. The
 error message tells them exactly what to do.
 
-**Exception:** if no recipients are configured (no `bento.yaml` recipients,
-no `--recipient` flags), the save proceeds without wrapping, exactly as today.
-No keypair is needed for the symmetric-only flow.
+When the sender has a keypair but no explicit recipients, the save proceeds
+normally and wraps the DEK to the sender only. This ensures the sender can
+always recover their own secrets via their private key.
 
 ### DEK Extraction for Wrapping
 
