@@ -2,9 +2,7 @@ package cli
 
 import (
 	"fmt"
-	"strings"
 
-	"github.com/kajogo777/bento/internal/config"
 	"github.com/kajogo777/bento/internal/keys"
 	"github.com/spf13/cobra"
 )
@@ -12,15 +10,13 @@ import (
 func newKeysCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "keys",
-		Short: "Manage Curve25519 keypairs for secret sharing",
+		Short: "Manage keypairs (your identity)",
 	}
 	cmd.AddCommand(
 		newKeysGenerateCmd(),
 		newKeysListCmd(),
 		newKeysPublicCmd(),
 		newKeysImportCmd(),
-		newKeysAddRecipientCmd(),
-		newKeysRemoveRecipientCmd(),
 	)
 	return cmd
 }
@@ -30,7 +26,7 @@ func newKeysGenerateCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "generate",
-		Short: "Generate a new Curve25519 keypair",
+		Short: "Generate a new keypair",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := flagName
 			if name == "" {
@@ -70,7 +66,7 @@ func newKeysGenerateCmd() *cobra.Command {
 func newKeysListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List keypairs and known recipients",
+		Short: "List your keypairs",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kps, err := keys.ListKeypairs()
 			if err != nil {
@@ -78,7 +74,8 @@ func newKeysListCmd() *cobra.Command {
 			}
 
 			if len(kps) == 0 {
-				fmt.Println("No keypairs found. Generate one with:")
+				fmt.Println("No keypairs found. One will be auto-generated on first save,")
+				fmt.Println("or generate now with:")
 				fmt.Println("  bento keys generate")
 			} else {
 				fmt.Println("Keypairs:")
@@ -88,29 +85,6 @@ func newKeysListCmd() *cobra.Command {
 						created = created[:10]
 					}
 					fmt.Printf("  %-12s %s    (created %s)\n", kp.Name, kp.PublicKey, created)
-				}
-			}
-
-			// List recipients.
-			var configRecipients []keys.ConfigRecipient
-			dir, _ := cmd.Flags().GetString("dir")
-			if dir == "" {
-				dir = flagDir
-			}
-			if cfg, err := config.Load(dir); err == nil {
-				for _, r := range cfg.Recipients {
-					configRecipients = append(configRecipients, keys.ConfigRecipient{
-						Name: r.Name,
-						Key:  r.Key,
-					})
-				}
-			}
-
-			recipients := keys.ListRecipients(configRecipients, "")
-			if len(recipients) > 0 {
-				fmt.Println("\nRecipients:")
-				for _, r := range recipients {
-					fmt.Printf("  %-12s %s    (from %s)\n", r.Name, r.PublicKey, r.Source)
 				}
 			}
 
@@ -199,45 +173,4 @@ Get the private key string from the source machine:
 
 	cmd.Flags().StringVar(&flagName, "name", "", "name for the imported keypair (default: \"default\")")
 	return cmd
-}
-
-func newKeysAddRecipientCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "add-recipient <name> <bento-pk-...>",
-		Short: "Import a recipient's public key",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			pubKeyStr := args[1]
-
-			if !strings.HasPrefix(pubKeyStr, keys.PrefixPublicKey) {
-				return fmt.Errorf("invalid public key — must start with %q", keys.PrefixPublicKey)
-			}
-
-			if err := keys.AddRecipient(name, pubKeyStr); err != nil {
-				return err
-			}
-
-			fmt.Printf("Added recipient %q\n", name)
-			return nil
-		},
-	}
-}
-
-func newKeysRemoveRecipientCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "remove-recipient <name>",
-		Short: "Remove a recipient",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-
-			if err := keys.RemoveRecipient(name); err != nil {
-				return err
-			}
-
-			fmt.Printf("Removed recipient %q\n", name)
-			return nil
-		},
-	}
 }

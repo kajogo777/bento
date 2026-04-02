@@ -83,7 +83,7 @@ func resolveOne(spec string, configRecipients []ConfigRecipient, keysDir string)
 		return pk, nil
 	}
 
-	return [32]byte{}, fmt.Errorf("unknown recipient %q — add with: bento keys add-recipient %s <bento-pk-...>", spec, spec)
+	return [32]byte{}, fmt.Errorf("unknown recipient %q — add with: bento recipients add %s <bento-pk-...>", spec, spec)
 }
 
 // LoadRecipientFile reads a recipient's public key from keysDir/recipients/<name>.pub.
