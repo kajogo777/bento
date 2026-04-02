@@ -2,3 +2,6 @@ id: ws-63a472d4d6539ca7
 store: /Users/georgefahmy/.bento/store
 secrets:
   mode: scrub
+recipients:
+  - name: myrna
+    key: bento-pk-RdrCDR3J4mIcuKeyTDSXH_TAxbUS5791Pa6UpyQJiRk

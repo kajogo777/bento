@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/kajogo777/bento/internal/config"
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/kajogo777/bento/internal/registry"
+	"github.com/kajogo777/bento/internal/secrets/backend"
 	"github.com/kajogo777/bento/internal/workspace"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
@@ -71,7 +73,13 @@ func newInspectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "inspect [ref]",
 		Short: "Show checkpoint metadata and layers",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Show checkpoint metadata, layers, secrets info, and recipients.
+
+Works with both local refs and remote registry refs:
+  bento inspect                              # latest local checkpoint
+  bento inspect cp-3                         # local checkpoint
+  bento inspect ghcr.io/org/project:cp-3     # remote checkpoint`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir, err := filepath.Abs(flagDir)
 			if err != nil {
@@ -83,20 +91,46 @@ func newInspectCmd() *cobra.Command {
 				ref = args[0]
 			}
 
-			cfg, err := config.Load(dir)
-			if err != nil {
-				return fmt.Errorf("no bento.yaml found. Run `bento init` first")
+			// Determine if ref is remote (contains /) or local.
+			isRemoteRef := strings.Contains(ref, "/")
+
+			var storeName, tag string
+			var remoteRef string
+
+			if isRemoteRef {
+				// Full registry ref like "ghcr.io/myorg/ws/project:cp-1"
+				if idx := strings.LastIndex(ref, ":"); idx > 0 && !strings.Contains(ref[idx:], "/") {
+					remoteRef = ref[:idx]
+					tag = ref[idx+1:]
+				} else {
+					remoteRef = ref
+					tag = "latest"
+				}
+				// Use last path segment as local cache name
+				parts := strings.Split(remoteRef, "/")
+				storeName = parts[len(parts)-1]
+			} else {
+				var parseErr error
+				storeName, tag, parseErr = registry.ParseRef(ref)
+				if parseErr != nil {
+					return parseErr
+				}
 			}
 
-			storeName, tag, err := registry.ParseRef(ref)
-			if err != nil {
-				return err
-			}
-			if storeName == "" {
-				storeName = cfg.ID
+			storePath := ""
+			cfg, cfgErr := config.Load(dir)
+			if cfgErr == nil {
+				if storeName == "" {
+					storeName = cfg.ID
+				}
+				storePath = filepath.Join(cfg.Store, storeName)
+			} else {
+				if storeName == "" {
+					storeName = filepath.Base(dir)
+				}
+				storePath = filepath.Join(config.DefaultStorePath(), storeName)
 			}
 
-			storePath := filepath.Join(cfg.Store, storeName)
 			store, err := registry.NewStore(storePath)
 			if err != nil {
 				return fmt.Errorf("opening store: %w", err)
@@ -105,7 +139,26 @@ func newInspectCmd() *cobra.Command {
 			// Load manifest + config (lightweight, no layer blob downloads).
 			manifestBytes, configBytes, err := store.LoadManifest(tag)
 			if err != nil {
-				return fmt.Errorf("loading checkpoint %s: %w", ref, err)
+				// Try pulling from remote if local not found.
+				pullRef := remoteRef
+				if pullRef == "" && cfgErr == nil && cfg.Remote != "" {
+					pullRef = cfg.Remote + "/" + storeName
+				}
+				if pullRef != "" {
+					fmt.Printf("Pulling from %s:%s...\n", pullRef, tag)
+					localStore := store.(*registry.LocalStore)
+					ctx := context.Background()
+					if pullErr := registry.PullFromRemote(ctx, localStore, pullRef, tag); pullErr != nil {
+						return fmt.Errorf("checkpoint %s not found locally and pull failed: %w", ref, pullErr)
+					}
+					// Retry local load
+					manifestBytes, configBytes, err = store.LoadManifest(tag)
+					if err != nil {
+						return fmt.Errorf("loading checkpoint %s after pull: %w", ref, err)
+					}
+				} else {
+					return fmt.Errorf("loading checkpoint %s: %w", ref, err)
+				}
 			}
 
 			// Only load layer blobs when --files is requested.
@@ -148,9 +201,11 @@ func newInspectCmd() *cobra.Command {
 			}
 
 			// Display config
+			var cfgObj *manifest.BentoConfigObj
 			if len(configBytes) > 0 {
-				cfgObj, err := manifest.UnmarshalConfig(configBytes)
-				if err == nil {
+				parsed, parseErr := manifest.UnmarshalConfig(configBytes)
+				if parseErr == nil {
+					cfgObj = parsed
 					fmt.Println("\nConfig:")
 					if cfgObj.Task != "" {
 						fmt.Printf("  Task:      %s\n", cfgObj.Task)
@@ -176,6 +231,63 @@ func newInspectCmd() *cobra.Command {
 					if cfgObj.Environment != nil {
 						fmt.Printf("  Platform:  %s/%s\n", cfgObj.Environment.OS, cfgObj.Environment.Arch)
 					}
+				}
+			}
+
+			// Display secrets info
+			if cfgObj != nil && len(cfgObj.ScrubRecords) > 0 {
+				totalSecrets := 0
+				for _, rec := range cfgObj.ScrubRecords {
+					totalSecrets += len(rec.Replacements)
+				}
+				fmt.Printf("\nSecrets:    %d scrubbed in %d file(s)\n", totalSecrets, len(cfgObj.ScrubRecords))
+				for _, rec := range cfgObj.ScrubRecords {
+					for _, rep := range rec.Replacements {
+						fmt.Printf("  %s  %s\n", rec.Path, rep.RuleID)
+					}
+				}
+			}
+
+			// Display key wrapping / recipients info from layer annotations
+			for _, ld := range m.Layers {
+				if ld.Annotations[manifest.AnnotationSecretsEncrypted] == "true" {
+					wrapping := ld.Annotations[manifest.AnnotationSecretsKeyWrapping]
+					sender := ld.Annotations[manifest.AnnotationSecretsSender]
+
+					if wrapping != "" || sender != "" {
+						fmt.Printf("\nKey wrapping: %s\n", wrapping)
+						if sender != "" {
+							fmt.Printf("  Sealed by:  %s\n", sender)
+						}
+					}
+
+					// If --files, try to read the envelope to show recipients
+					if flagFiles {
+						for li, layer := range layers {
+							if m.Layers[li].Digest == ld.Digest {
+								r, rErr := layer.NewReader()
+								if rErr == nil {
+									envBytes, exErr := workspace.ExtractFileContentFromLayer(r, "secrets.enc", 10*1024*1024)
+									_ = r.Close()
+									if exErr == nil {
+										var env backend.MultiRecipientEnvelope
+										if json.Unmarshal(envBytes, &env) == nil && len(env.WrappedKeys) > 0 {
+											fmt.Printf("  Recipients: %d\n", len(env.WrappedKeys))
+											for _, wk := range env.WrappedKeys {
+												label := wk.Recipient
+												if env.Sender == wk.Recipient {
+													label += " (sender)"
+												}
+												fmt.Printf("    %s\n", label)
+											}
+										}
+									}
+								}
+								break
+							}
+						}
+					}
+					break
 				}
 			}
 
@@ -233,7 +345,7 @@ func newInspectCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&flagFiles, "files", false, "show file listing for each layer")
+	cmd.Flags().BoolVar(&flagFiles, "files", false, "show file listing for each layer (also shows recipient details)")
 
 	return cmd
 }
