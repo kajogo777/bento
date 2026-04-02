@@ -49,22 +49,6 @@ func TestFormatParse_PrivateKey_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestFormatParse_DataKey_RoundTrip(t *testing.T) {
-	var key [32]byte
-	key[0] = 0x42
-	key[31] = 0xFF
-	formatted := FormatDataKey(key)
-	if formatted[:len(PrefixDataKey)] != PrefixDataKey {
-		t.Errorf("formatted data key should start with %q, got %q", PrefixDataKey, formatted[:len(PrefixDataKey)])
-	}
-	parsed, err := ParseDataKey(formatted)
-	if err != nil {
-		t.Fatalf("ParseDataKey failed: %v", err)
-	}
-	if parsed != key {
-		t.Error("round-trip mismatch for data key")
-	}
-}
 
 func TestParsePublicKey_InvalidPrefix(t *testing.T) {
 	_, err := ParsePublicKey("bento-sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
@@ -80,12 +64,6 @@ func TestParsePublicKey_WrongLength(t *testing.T) {
 	}
 }
 
-func TestParseDataKey_InvalidPrefix(t *testing.T) {
-	_, err := ParseDataKey("bento-pk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-	if err == nil {
-		t.Error("expected error for wrong prefix on data key")
-	}
-}
 
 func TestSaveLoadKeypair(t *testing.T) {
 	tmp := t.TempDir()

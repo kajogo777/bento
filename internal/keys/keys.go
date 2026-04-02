@@ -3,7 +3,6 @@
 // Key format:
 //   - bento-pk-<base64url(32 bytes)>  — public key
 //   - bento-sk-<base64url(32 bytes)>  — private key
-//   - bento-dk-<base64url(32 bytes)>  — data encryption key (symmetric)
 //
 // Keys are stored as JSON files in a platform-specific directory:
 //   - macOS:   ~/.bento/keys/
@@ -31,11 +30,10 @@ import (
 const (
 	PrefixPublicKey  = "bento-pk-"
 	PrefixPrivateKey = "bento-sk-"
-	PrefixDataKey    = "bento-dk-"
 )
 
 // ErrNoKeypair is returned when no keypair is found on disk.
-var ErrNoKeypair = errors.New("no keypair found — run 'bento keys generate' first")
+var ErrNoKeypair = errors.New("no keypair found")
 
 // KeypairFile is the on-disk JSON format for a keypair.
 type KeypairFile struct {
@@ -65,11 +63,6 @@ func FormatPrivateKey(key [32]byte) string {
 	return PrefixPrivateKey + base64.RawURLEncoding.EncodeToString(key[:])
 }
 
-// FormatDataKey encodes a symmetric DEK as "bento-dk-<base64url>".
-func FormatDataKey(key [32]byte) string {
-	return PrefixDataKey + base64.RawURLEncoding.EncodeToString(key[:])
-}
-
 // ParsePublicKey decodes a "bento-pk-..." string to 32 bytes.
 // Returns an error if the prefix is wrong or the key is not 32 bytes.
 func ParsePublicKey(s string) ([32]byte, error) {
@@ -80,11 +73,6 @@ func ParsePublicKey(s string) ([32]byte, error) {
 // Returns an error if the prefix is wrong or the key is not 32 bytes.
 func ParsePrivateKey(s string) ([32]byte, error) {
 	return parseKey(s, PrefixPrivateKey, "private key")
-}
-
-// ParseDataKey decodes a "bento-dk-..." string to 32 bytes.
-func ParseDataKey(s string) ([32]byte, error) {
-	return parseKey(s, PrefixDataKey, "data key")
 }
 
 func parseKey(s, prefix, label string) ([32]byte, error) {
@@ -242,6 +230,30 @@ func LoadDefaultKeypairFrom(keysDir string) (pub, priv [32]byte, err error) {
 	}
 
 	return [32]byte{}, [32]byte{}, ErrNoKeypair
+}
+
+// LoadOrCreateKeypair loads the default keypair, or generates one if none exists.
+// This is the primary entry point used by save/push flows.
+//
+// Returns (publicKey, privateKey, created, error) where created=true if a new
+// keypair was generated.
+func LoadOrCreateKeypair() (pub, priv [32]byte, created bool, err error) {
+	pub, priv, err = LoadDefaultKeypair()
+	if err == nil {
+		return pub, priv, false, nil
+	}
+	if !errors.Is(err, ErrNoKeypair) {
+		return [32]byte{}, [32]byte{}, false, err
+	}
+	// Auto-generate default keypair.
+	pub, priv, err = GenerateKeypair()
+	if err != nil {
+		return [32]byte{}, [32]byte{}, false, err
+	}
+	if err := SaveKeypair("default", pub, priv); err != nil {
+		return [32]byte{}, [32]byte{}, false, err
+	}
+	return pub, priv, true, nil
 }
 
 // ListKeypairs returns all keypair files in the keys directory.

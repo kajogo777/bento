@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 
 	"github.com/kajogo777/bento/internal/config"
-	"github.com/kajogo777/bento/internal/keys"
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/kajogo777/bento/internal/registry"
 	"github.com/kajogo777/bento/internal/secrets/backend"
@@ -68,7 +67,6 @@ Examples:
 			}
 
 			// Check if checkpoint has scrubbed secrets.
-			var pushDataKey string
 			var pushCheckpoint int
 			var hasScrubRecords bool
 
@@ -136,52 +134,8 @@ Examples:
 						if json.Unmarshal([]byte(envJSON), &env) == nil {
 							layerAnnotations[manifest.AnnotationSecretsSender] = env.Sender
 						}
-					} else if ciphertext := envelope["ciphertext"]; ciphertext != "" {
-						// Old-format: ciphertext + dataKey.
-						// Check if --recipient flags or bento.yaml recipients require wrapping at push time.
-						var recipientSpecs []string
-						recipientSpecs = append(recipientSpecs, flagRecipients...)
-						for _, r := range cfg.Recipients {
-							recipientSpecs = append(recipientSpecs, r.Name)
-						}
-
-						if len(recipientSpecs) > 0 {
-							// Wrap the DEK for recipients at push time.
-							dk := envelope["dataKey"]
-							if dk == "" {
-								return fmt.Errorf("no data key in envelope for %s — cannot wrap for recipients", cpTag)
-							}
-							rawDEK, parseErr := keys.ParseDataKey(dk)
-							if parseErr != nil {
-								return fmt.Errorf("parsing data key: %w", parseErr)
-							}
-							senderPub, senderPriv, kpErr := keys.LoadDefaultKeypair()
-							if kpErr != nil {
-								return fmt.Errorf("recipients configured but no keypair found.\n\nGenerate a keypair first:\n  bento keys generate")
-							}
-							var configRecipients []keys.ConfigRecipient
-							for _, r := range cfg.Recipients {
-								configRecipients = append(configRecipients, keys.ConfigRecipient{Name: r.Name, Key: r.Key})
-							}
-							recipientPubs, resolveErr := keys.ResolveRecipients(recipientSpecs, configRecipients, senderPub, "")
-							if resolveErr != nil {
-								return fmt.Errorf("resolving recipients: %w", resolveErr)
-							}
-							mrEnv, buildErr := backend.BuildMultiRecipientEnvelope(ciphertext, rawDEK, senderPub, senderPriv, recipientPubs)
-							if buildErr != nil {
-								return fmt.Errorf("building multi-recipient envelope: %w", buildErr)
-							}
-							envJSON, _ := json.Marshal(mrEnv)
-							secretsContent = envJSON
-							layerAnnotations[manifest.AnnotationSecretsKeyWrapping] = "curve25519"
-							layerAnnotations[manifest.AnnotationSecretsSender] = mrEnv.Sender
-						} else {
-							// No recipients — push the raw ciphertext, show data key.
-							secretsContent = []byte(ciphertext)
-							pushDataKey = envelope["dataKey"]
-						}
 					} else {
-						return fmt.Errorf("encrypted envelope is empty for %s", cpTag)
+						return fmt.Errorf("no wrapped envelope found for %s — re-save to generate one", cpTag)
 					}
 
 					// Pack as OCI layer and inject into the checkpoint.
@@ -237,20 +191,13 @@ Examples:
 
 			fmt.Println("Done.")
 
-			if flagIncludeSecrets && pushDataKey != "" {
-				fmt.Printf("\nRecipient runs:\n  bento open --data-key %s %s\n", pushDataKey, remoteRef)
-			} else if flagIncludeSecrets && pushDataKey == "" {
-				// Key-wrapped — no data key to display.
+			if flagIncludeSecrets {
 				fmt.Printf("\nRecipients can open with:\n  bento open %s ./workspace\n  (auto-decrypts if their private key is in ~/.bento/keys/)\n", remoteRef)
 			} else if !flagIncludeSecrets && hasScrubRecords {
 				fmt.Println("\nWarning: this checkpoint has scrubbed secrets that are NOT included in the push.")
 				fmt.Println("The recipient will not be able to restore secrets without additional steps.")
 				fmt.Println("\nTo include encrypted secrets in the artifact:")
 				fmt.Printf("  bento push --include-secrets %s\n", remote)
-				fmt.Println("\nOr export the secrets separately:")
-				fmt.Printf("  bento secrets export cp-%d > bundle.enc\n", pushCheckpoint)
-				fmt.Println("  Then recipient runs:")
-				fmt.Printf("  bento open --data-key <KEY> --secrets-file bundle.enc %s\n", remoteRef)
 			}
 
 			return nil
