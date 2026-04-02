@@ -40,7 +40,7 @@ type SecretBackend interface {
 	//
 	// Returns:
 	//   meta — backend-specific metadata from the put operation
-	//          (e.g., OCI backend returns {"dataKey": "bento-dk-..."}).
+	//          (e.g., OCI backend returns {"ciphertext": "...", "rawKey": "..."}).
 	//          Passed to Hint() for generating restore instructions.
 	//          May be nil if no metadata is needed.
 	//   err  — nil on success
@@ -55,7 +55,7 @@ type SecretBackend interface {
 	//   ctx  — context for cancellation/timeout
 	//   key  — checkpoint identifier: "<workspaceID>/<tag>"
 	//   opts — backend-specific options for retrieval
-	//          (e.g., OCI backend reads {"dataKey": "bento-dk-..."}).
+	//          (e.g., OCI backend reads {"ciphertext": "...", "rawKey": "..."}).
 	//          May be nil.
 	//
 	// Returns:

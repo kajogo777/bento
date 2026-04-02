@@ -33,8 +33,9 @@ If the checkpoint has scrubbed secrets, use --include-secrets to pack them
 (encrypted) into the OCI artifact. Without it, secrets are omitted and the
 recipient must obtain them separately.
 
-Included secrets are always encrypted — they cannot be read without the
-data key (shown when you run push --include-secrets or secrets export).
+Included secrets are always encrypted — they can only be read by recipients
+whose public keys were used during save (via bento.yaml or --recipient flags).
+The sender is always included as a recipient automatically.
 
 Examples:
   bento push

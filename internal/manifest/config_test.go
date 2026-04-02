@@ -196,7 +196,7 @@ func TestMarshalUnmarshalRoundtrip_ScrubRecords(t *testing.T) {
 				},
 			},
 		},
-		RestoreHint:    "Re-open with --data-key <KEY>",
+		RestoreHint:    "Secrets were stored locally on the original machine.\n   Ask the sender to push with: bento push --include-secrets\n   Then import from the registry.",
 	}
 
 	data, err := MarshalConfig(cfg)
@@ -227,7 +227,7 @@ func TestMarshalUnmarshalRoundtrip_ScrubRecords(t *testing.T) {
 	if got.ScrubRecords[1].Path != "config/app.yaml" {
 		t.Errorf("ScrubRecords[1].Path: got %q", got.ScrubRecords[1].Path)
 	}
-	if got.RestoreHint != "Re-open with --data-key <KEY>" {
+	if got.RestoreHint != "Secrets were stored locally on the original machine.\n   Ask the sender to push with: bento push --include-secrets\n   Then import from the registry." {
 		t.Errorf("RestoreHint: got %q", got.RestoreHint)
 	}
 }

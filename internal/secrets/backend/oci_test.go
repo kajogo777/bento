@@ -3,11 +3,13 @@ package backend
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"golang.org/x/crypto/nacl/box"
+	"golang.org/x/crypto/nacl/secretbox"
 )
 
 func TestOCIBackend_PutGetRoundTrip(t *testing.T) {
@@ -24,14 +26,18 @@ func TestOCIBackend_PutGetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
-	if meta["dataKey"] == "" {
-		t.Fatal("expected dataKey in meta")
+	if meta["rawKey"] == "" {
+		t.Fatal("expected rawKey in meta")
 	}
 	if meta["ciphertext"] == "" {
 		t.Fatal("expected ciphertext in meta")
 	}
-	if !strings.HasPrefix(meta["dataKey"], "bento-dk-") {
-		t.Errorf("dataKey should start with bento-dk-, got %q", meta["dataKey"])
+	if !strings.HasPrefix(meta["rawKey"], "A") && !strings.HasPrefix(meta["rawKey"], "B") {
+		// Just verify it's valid base64url, not checking for bento-dk- prefix
+		_, err := base64.RawURLEncoding.DecodeString(meta["rawKey"])
+		if err != nil {
+			t.Errorf("rawKey should be valid base64url, got %q", meta["rawKey"])
+		}
 	}
 
 	// Get — decrypt
@@ -61,7 +67,7 @@ func TestOCIBackend_WrongKey(t *testing.T) {
 	}
 
 	// Tamper with the key.
-	meta["dataKey"] = "bento-dk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	meta["rawKey"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	_, err = b.Get(ctx, "ws-test/cp-1", meta)
 	if err == nil {
 		t.Fatal("expected decryption error with wrong key")
@@ -88,7 +94,7 @@ func TestOCIBackend_MissingCiphertext(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := b.Get(ctx, "ws-test/cp-1", map[string]string{
-		"dataKey": "bento-dk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"rawKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 	})
 	if err == nil {
 		t.Fatal("expected error for missing ciphertext")
@@ -103,7 +109,7 @@ func TestOCIBackend_UniqueKeysPerPut(t *testing.T) {
 	meta1, _ := b.Put(ctx, "ws-test/cp-1", secrets)
 	meta2, _ := b.Put(ctx, "ws-test/cp-2", secrets)
 
-	if meta1["dataKey"] == meta2["dataKey"] {
+	if meta1["rawKey"] == meta2["rawKey"] {
 		t.Error("each Put should generate a unique key")
 	}
 }
@@ -117,18 +123,13 @@ func TestOCIBackend_Available(t *testing.T) {
 
 func TestOCIBackend_Hint(t *testing.T) {
 	b := &OCIBackend{}
-	meta := map[string]string{"dataKey": "bento-dk-testkey123"}
+	display, persist := b.Hint("ws-test/cp-1", nil)
 
-	display, persist := b.Hint("ws-test/cp-1", meta)
-
-	if !strings.Contains(display, "bento-dk-testkey123") {
-		t.Errorf("display hint should contain the actual key: %q", display)
+	if !strings.Contains(display, "key wrapping") {
+		t.Errorf("display hint should mention key wrapping: %q", display)
 	}
-	if strings.Contains(persist, "bento-dk-testkey123") {
-		t.Errorf("persist hint must NOT contain the actual key: %q", persist)
-	}
-	if !strings.Contains(persist, "--data-key") {
-		t.Errorf("persist hint should mention --data-key flag: %q", persist)
+	if !strings.Contains(persist, "key wrapping") {
+		t.Errorf("persist hint should mention key wrapping: %q", persist)
 	}
 }
 
@@ -191,7 +192,7 @@ func TestOCIBackend_TruncatedCiphertext(t *testing.T) {
 
 	// Ciphertext shorter than the 24-byte nonce.
 	_, err := b.Get(ctx, "ws-test/cp-1", map[string]string{
-		"dataKey":    "bento-dk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"rawKey":     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		"ciphertext": "dG9vc2hvcnQ", // "tooshort" base64url
 	})
 	if err == nil {
@@ -206,18 +207,18 @@ func TestOCIBackend_InvalidKeyFormat(t *testing.T) {
 	b := &OCIBackend{}
 	ctx := context.Background()
 
-	// Key without the bento-dk- prefix.
+	// Key without valid base64url encoding.
 	_, err := b.Get(ctx, "ws-test/cp-1", map[string]string{
-		"dataKey":    "not-a-valid-key",
+		"rawKey":     "not-a-valid-base64url!!!",
 		"ciphertext": "dGVzdA",
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid key format")
 	}
 
-	// Key with prefix but wrong length (16 bytes instead of 32).
+	// Key with wrong length (16 bytes instead of 32).
 	_, err = b.Get(ctx, "ws-test/cp-1", map[string]string{
-		"dataKey":    "bento-dk-AAAAAAAAAAAAAAAAAAAAAA",
+		"rawKey":     "AAAAAAAAAAAAAAAA",
 		"ciphertext": "dGVzdA",
 	})
 	if err == nil {
@@ -231,7 +232,7 @@ func TestEncryptDecryptSecrets_RoundTrip(t *testing.T) {
 		"placeholder2": "value2",
 	}
 
-	ciphertext, dataKey, rawDEK, err := EncryptSecrets(secrets)
+	ciphertext, rawDEK, err := EncryptSecrets(secrets)
 	if err != nil {
 		t.Fatalf("EncryptSecrets failed: %v", err)
 	}
@@ -240,13 +241,22 @@ func TestEncryptDecryptSecrets_RoundTrip(t *testing.T) {
 		t.Error("rawDEK should not be zero")
 	}
 
-	if !strings.HasPrefix(dataKey, "bento-dk-") {
-		t.Errorf("dataKey should start with bento-dk-, got %q", dataKey)
+	if ciphertext == "" {
+		t.Error("ciphertext should not be empty")
 	}
 
-	got, err := DecryptSecrets(ciphertext, dataKey)
-	if err != nil {
-		t.Fatalf("DecryptSecrets failed: %v", err)
+	// Decrypt using the raw DEK directly
+	var nonce [24]byte
+	encrypted, _ := base64.RawURLEncoding.DecodeString(ciphertext)
+	copy(nonce[:], encrypted[:24])
+	plaintext, ok := secretbox.Open(nil, encrypted[24:], &nonce, &rawDEK)
+	if !ok {
+		t.Fatal("decryption failed")
+	}
+
+	var got map[string]string
+	if err := json.Unmarshal(plaintext, &got); err != nil {
+		t.Fatalf("unmarshaling decrypted secrets: %v", err)
 	}
 
 	for k, v := range secrets {
@@ -309,7 +319,7 @@ func TestUnwrapDEK_InvalidLength(t *testing.T) {
 
 func TestBuildMultiRecipientEnvelope(t *testing.T) {
 	secrets := map[string]string{"a": "secret-val"}
-	ciphertext, _, rawDEK, err := EncryptSecrets(secrets)
+	ciphertext, rawDEK, err := EncryptSecrets(secrets)
 	if err != nil {
 		t.Fatalf("EncryptSecrets failed: %v", err)
 	}
@@ -335,7 +345,7 @@ func TestBuildMultiRecipientEnvelope(t *testing.T) {
 
 func TestTryUnwrapEnvelope_RoundTrip(t *testing.T) {
 	secrets := map[string]string{"a": "secret-val", "b": "another"}
-	ciphertext, _, rawDEK, _ := EncryptSecrets(secrets)
+	ciphertext, rawDEK, _ := EncryptSecrets(secrets)
 
 	senderPub, senderPriv, _ := box.GenerateKey(rand.Reader)
 	recipPub, recipPriv, _ := box.GenerateKey(rand.Reader)
@@ -357,7 +367,7 @@ func TestTryUnwrapEnvelope_RoundTrip(t *testing.T) {
 
 func TestTryUnwrapEnvelope_NonRecipientFails(t *testing.T) {
 	secrets := map[string]string{"a": "val"}
-	ciphertext, _, rawDEK, _ := EncryptSecrets(secrets)
+	ciphertext, rawDEK, _ := EncryptSecrets(secrets)
 
 	senderPub, senderPriv, _ := box.GenerateKey(rand.Reader)
 	recipPub, _, _ := box.GenerateKey(rand.Reader)

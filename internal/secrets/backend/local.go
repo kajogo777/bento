@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 )
 
 // LocalBackend stores secrets as JSON files on the local filesystem.
@@ -84,13 +83,8 @@ func (b *LocalBackend) Delete(ctx context.Context, key string) error {
 func (b *LocalBackend) Available() bool { return true }
 
 func (b *LocalBackend) Hint(key string, meta map[string]string) (string, string) {
-	tag := key
-	if idx := strings.LastIndex(key, "/"); idx >= 0 {
-		tag = key[idx+1:]
-	}
-
-	display := fmt.Sprintf("Secrets stored locally. To share:\n   bento secrets export %s > bundle.json", tag)
-	persist := fmt.Sprintf("Secrets were stored locally on the original machine.\n   Ask the sender to export: bento secrets export %s > bundle.json\n   Then import:              bento secrets import < bundle.json", tag)
+	display := "Secrets stored locally. To share:\n   bento push --include-secrets"
+	persist := "Secrets were stored locally on the original machine.\n   Ask the sender to push with: bento push --include-secrets"
 	return display, persist
 }
 

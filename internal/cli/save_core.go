@@ -539,7 +539,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		}
 
 		// Generate encrypted envelope (for sharing / push --include-secrets).
-		ciphertext, _, rawDEK, encErr := backend.EncryptSecrets(scrubSecrets)
+		ciphertext, rawDEK, encErr := backend.EncryptSecrets(scrubSecrets)
 		if encErr != nil {
 			return nil, fmt.Errorf("encrypting secrets: %w", encErr)
 		}
@@ -650,11 +650,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 	// Collect backend hint for caller to display.
 	var saveHint string
 	if len(scrubRecords) > 0 {
-		tag := fmt.Sprintf("cp-%d", seq)
-		if opts.Tag != "" {
-			tag = opts.Tag
-		}
-		saveHint = fmt.Sprintf("To share secrets with the checkpoint:\n   Via registry:  bento push --include-secrets\n   Via file:      bento secrets export %s > bundle.enc", tag)
+		saveHint = "To share secrets with the checkpoint:\n   bento push --include-secrets"
 	}
 
 	return &SaveResult{

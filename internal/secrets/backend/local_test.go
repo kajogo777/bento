@@ -130,11 +130,11 @@ func TestLocalBackend_Hint(t *testing.T) {
 	if display == "" || persist == "" {
 		t.Error("hints should not be empty")
 	}
-	if !contains(display, "cp-3") {
-		t.Errorf("display hint should contain tag: %q", display)
+	if !contains(display, "push --include-secrets") {
+		t.Errorf("display hint should mention push: %q", display)
 	}
-	if !contains(persist, "cp-3") {
-		t.Errorf("persist hint should contain tag: %q", persist)
+	if !contains(persist, "push --include-secrets") {
+		t.Errorf("persist hint should mention push: %q", persist)
 	}
 }
 

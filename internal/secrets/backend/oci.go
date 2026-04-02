@@ -25,7 +25,7 @@ import (
 //   - 32-byte random key per checkpoint
 //   - 24-byte random nonce prepended to ciphertext
 //   - Authenticated encryption (tamper detection)
-//   - Key displayed as "bento-dk-<base64url>"
+//   - Key stored as raw base64url encoding
 type OCIBackend struct{}
 
 func (b *OCIBackend) Name() string { return "oci" }
@@ -33,7 +33,7 @@ func (b *OCIBackend) Name() string { return "oci" }
 // Put encrypts the secrets map and returns the ciphertext and key in meta.
 //
 // Meta keys:
-//   - "dataKey":    the one-time data key as "bento-dk-<base64url>" (for display/sharing)
+//   - "rawKey":     the one-time data key as raw base64url (for display/sharing)
 //   - "ciphertext": base64url-encoded nonce+ciphertext (for packing into OCI layer)
 func (b *OCIBackend) Put(ctx context.Context, key string, secrets map[string]string) (map[string]string, error) {
 	plaintext, err := json.Marshal(secrets)
@@ -56,11 +56,11 @@ func (b *OCIBackend) Put(ctx context.Context, key string, secrets map[string]str
 	// Encrypt: nonce is prepended to the ciphertext.
 	encrypted := secretbox.Seal(nonce[:], plaintext, &nonce, &dataKey)
 
-	keyStr := "bento-dk-" + base64.RawURLEncoding.EncodeToString(dataKey[:])
+	keyStr := base64.RawURLEncoding.EncodeToString(dataKey[:])
 	cipherStr := base64.RawURLEncoding.EncodeToString(encrypted)
 
 	return map[string]string{
-		"dataKey":    keyStr,
+		"rawKey":     keyStr,
 		"ciphertext": cipherStr,
 	}, nil
 }
@@ -68,12 +68,12 @@ func (b *OCIBackend) Put(ctx context.Context, key string, secrets map[string]str
 // Get decrypts secrets from the ciphertext provided in opts.
 //
 // Required opts:
-//   - "dataKey":    the one-time data key as "bento-dk-<base64url>"
+//   - "rawKey":     the one-time data key as raw base64url
 //   - "ciphertext": base64url-encoded nonce+ciphertext
 func (b *OCIBackend) Get(ctx context.Context, key string, opts map[string]string) (map[string]string, error) {
-	keyStr := opts["dataKey"]
+	keyStr := opts["rawKey"]
 	if keyStr == "" {
-		return nil, fmt.Errorf("oci backend: data key required — use --data-key flag or BENTO_DATA_KEY env var")
+		return nil, fmt.Errorf("oci backend: data key required — provide the key from save output")
 	}
 
 	cipherStr := opts["ciphertext"]
@@ -81,15 +81,8 @@ func (b *OCIBackend) Get(ctx context.Context, key string, opts map[string]string
 		return nil, fmt.Errorf("oci backend: no encrypted secrets layer found in checkpoint")
 	}
 
-	// Parse key — only bento-dk- prefix is accepted.
-	const prefix = "bento-dk-"
-	if !strings.HasPrefix(keyStr, prefix) {
-		return nil, fmt.Errorf("oci backend: invalid data key format — must start with %q", prefix)
-	}
-	if len(keyStr) <= len(prefix) {
-		return nil, fmt.Errorf("oci backend: invalid data key format")
-	}
-	keyBytes, err := base64.RawURLEncoding.DecodeString(keyStr[len(prefix):])
+	// Decode the raw base64url key directly.
+	keyBytes, err := base64.RawURLEncoding.DecodeString(keyStr)
 	if err != nil {
 		return nil, fmt.Errorf("oci backend: decoding data key: %w", err)
 	}
@@ -136,41 +129,40 @@ func (b *OCIBackend) Delete(ctx context.Context, key string) error {
 func (b *OCIBackend) Available() bool { return true }
 
 func (b *OCIBackend) Hint(key string, meta map[string]string) (string, string) {
-	dk := meta["dataKey"]
-
-	display := fmt.Sprintf("Secrets encrypted in checkpoint. To restore:\n   bento open <ref> --data-key %s", dk)
-	persist := "This checkpoint has encrypted secrets. Re-open with:\n   bento open <ref> --data-key <KEY>\n   Ask the sender for the data key."
+	display := "Secrets encrypted in checkpoint. Use key wrapping to share."
+	persist := "This checkpoint has encrypted secrets. Use key wrapping to restore."
 	return display, persist
 }
 
 // EncryptSecrets encrypts a placeholder→value map and returns the ciphertext
-// blob, the formatted data key string, and the raw 32-byte DEK.
-// This is the single encryption entry point used by save, push, and export.
-func EncryptSecrets(secrets map[string]string) (ciphertext string, dataKey string, rawDEK [32]byte, err error) {
+// blob and the raw 32-byte DEK. This is the single encryption entry point
+// used by save and push.
+func EncryptSecrets(secrets map[string]string) (ciphertext string, rawDEK [32]byte, err error) {
 	be := &OCIBackend{}
 	meta, err := be.Put(context.Background(), "", secrets)
 	if err != nil {
-		return "", "", [32]byte{}, err
+		return "", [32]byte{}, err
 	}
-	// Parse the raw DEK bytes from the formatted key.
-	keyStr := meta["dataKey"]
-	prefix := "bento-dk-"
-	keyBytes, decErr := base64.RawURLEncoding.DecodeString(keyStr[len(prefix):])
+	// Parse the raw DEK bytes from the rawKey.
+	keyStr := meta["rawKey"]
+	keyBytes, decErr := base64.RawURLEncoding.DecodeString(keyStr)
 	if decErr != nil {
-		return "", "", [32]byte{}, fmt.Errorf("decoding raw DEK from formatted key: %w", decErr)
+		return "", [32]byte{}, fmt.Errorf("decoding raw DEK: %w", decErr)
 	}
 	copy(rawDEK[:], keyBytes)
-	return meta["ciphertext"], meta["dataKey"], rawDEK, nil
+	return meta["ciphertext"], rawDEK, nil
 }
 
-// DecryptSecrets decrypts a ciphertext blob using the provided data key
+// DecryptSecrets decrypts a ciphertext blob using the provided raw DEK
 // and returns the placeholder→value map. This is the single decryption entry
 // point used by open, import, and secrets-file.
-func DecryptSecrets(ciphertext string, dataKey string) (map[string]string, error) {
+func DecryptSecrets(ciphertext string, rawDEK [32]byte) (map[string]string, error) {
 	be := &OCIBackend{}
+	// Encode rawDEK to base64 for the internal Get() call.
+	keyStr := base64.RawURLEncoding.EncodeToString(rawDEK[:])
 	return be.Get(context.Background(), "", map[string]string{
 		"ciphertext": ciphertext,
-		"dataKey":    dataKey,
+		"rawKey":     keyStr,
 	})
 }
 
@@ -299,8 +291,7 @@ func TryUnwrapEnvelope(envelopeJSON []byte, recipientPub, recipientPriv [32]byte
 			return nil, err
 		}
 		// Decrypt the secrets using the unwrapped DEK.
-		dekStr := "bento-dk-" + base64.RawURLEncoding.EncodeToString(dek[:])
-		return DecryptSecrets(env.Ciphertext, dekStr)
+		return DecryptSecrets(env.Ciphertext, dek)
 	}
 
 	return nil, fmt.Errorf("no wrapped key found for this recipient")
