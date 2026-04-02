@@ -2,8 +2,12 @@ package backend
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/nacl/box"
 )
 
 func TestOCIBackend_PutGetRoundTrip(t *testing.T) {
@@ -20,14 +24,14 @@ func TestOCIBackend_PutGetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
-	if meta["secretKey"] == "" {
-		t.Fatal("expected secretKey in meta")
+	if meta["dataKey"] == "" {
+		t.Fatal("expected dataKey in meta")
 	}
 	if meta["ciphertext"] == "" {
 		t.Fatal("expected ciphertext in meta")
 	}
-	if !strings.HasPrefix(meta["secretKey"], "bento-sk-") {
-		t.Errorf("secretKey should start with bento-sk-, got %q", meta["secretKey"])
+	if !strings.HasPrefix(meta["dataKey"], "bento-dk-") {
+		t.Errorf("dataKey should start with bento-dk-, got %q", meta["dataKey"])
 	}
 
 	// Get — decrypt
@@ -57,7 +61,7 @@ func TestOCIBackend_WrongKey(t *testing.T) {
 	}
 
 	// Tamper with the key.
-	meta["secretKey"] = "bento-sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	meta["dataKey"] = "bento-dk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	_, err = b.Get(ctx, "ws-test/cp-1", meta)
 	if err == nil {
 		t.Fatal("expected decryption error with wrong key")
@@ -84,7 +88,7 @@ func TestOCIBackend_MissingCiphertext(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := b.Get(ctx, "ws-test/cp-1", map[string]string{
-		"secretKey": "bento-sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"dataKey": "bento-dk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 	})
 	if err == nil {
 		t.Fatal("expected error for missing ciphertext")
@@ -99,7 +103,7 @@ func TestOCIBackend_UniqueKeysPerPut(t *testing.T) {
 	meta1, _ := b.Put(ctx, "ws-test/cp-1", secrets)
 	meta2, _ := b.Put(ctx, "ws-test/cp-2", secrets)
 
-	if meta1["secretKey"] == meta2["secretKey"] {
+	if meta1["dataKey"] == meta2["dataKey"] {
 		t.Error("each Put should generate a unique key")
 	}
 }
@@ -113,18 +117,18 @@ func TestOCIBackend_Available(t *testing.T) {
 
 func TestOCIBackend_Hint(t *testing.T) {
 	b := &OCIBackend{}
-	meta := map[string]string{"secretKey": "bento-sk-testkey123"}
+	meta := map[string]string{"dataKey": "bento-dk-testkey123"}
 
 	display, persist := b.Hint("ws-test/cp-1", meta)
 
-	if !strings.Contains(display, "bento-sk-testkey123") {
+	if !strings.Contains(display, "bento-dk-testkey123") {
 		t.Errorf("display hint should contain the actual key: %q", display)
 	}
-	if strings.Contains(persist, "bento-sk-testkey123") {
+	if strings.Contains(persist, "bento-dk-testkey123") {
 		t.Errorf("persist hint must NOT contain the actual key: %q", persist)
 	}
-	if !strings.Contains(persist, "--secret-key") {
-		t.Errorf("persist hint should mention --secret-key flag: %q", persist)
+	if !strings.Contains(persist, "--data-key") {
+		t.Errorf("persist hint should mention --data-key flag: %q", persist)
 	}
 }
 
@@ -187,8 +191,8 @@ func TestOCIBackend_TruncatedCiphertext(t *testing.T) {
 
 	// Ciphertext shorter than the 24-byte nonce.
 	_, err := b.Get(ctx, "ws-test/cp-1", map[string]string{
-		"secretKey":  "bento-sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-		"ciphertext": "dG9vc2hvcnQ",  // "tooshort" base64url
+		"dataKey":    "bento-dk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"ciphertext": "dG9vc2hvcnQ", // "tooshort" base64url
 	})
 	if err == nil {
 		t.Fatal("expected error for truncated ciphertext")
@@ -202,9 +206,9 @@ func TestOCIBackend_InvalidKeyFormat(t *testing.T) {
 	b := &OCIBackend{}
 	ctx := context.Background()
 
-	// Key without the bento-sk- prefix.
+	// Key without the bento-dk- prefix.
 	_, err := b.Get(ctx, "ws-test/cp-1", map[string]string{
-		"secretKey":  "not-a-valid-key",
+		"dataKey":    "not-a-valid-key",
 		"ciphertext": "dGVzdA",
 	})
 	if err == nil {
@@ -213,7 +217,7 @@ func TestOCIBackend_InvalidKeyFormat(t *testing.T) {
 
 	// Key with prefix but wrong length (16 bytes instead of 32).
 	_, err = b.Get(ctx, "ws-test/cp-1", map[string]string{
-		"secretKey":  "bento-sk-AAAAAAAAAAAAAAAAAAAAAA",
+		"dataKey":    "bento-dk-AAAAAAAAAAAAAAAAAAAAAA",
 		"ciphertext": "dGVzdA",
 	})
 	if err == nil {
@@ -227,12 +231,20 @@ func TestEncryptDecryptSecrets_RoundTrip(t *testing.T) {
 		"placeholder2": "value2",
 	}
 
-	ciphertext, secretKey, err := EncryptSecrets(secrets)
+	ciphertext, dataKey, rawDEK, err := EncryptSecrets(secrets)
 	if err != nil {
 		t.Fatalf("EncryptSecrets failed: %v", err)
 	}
 
-	got, err := DecryptSecrets(ciphertext, secretKey)
+	if rawDEK == [32]byte{} {
+		t.Error("rawDEK should not be zero")
+	}
+
+	if !strings.HasPrefix(dataKey, "bento-dk-") {
+		t.Errorf("dataKey should start with bento-dk-, got %q", dataKey)
+	}
+
+	got, err := DecryptSecrets(ciphertext, dataKey)
 	if err != nil {
 		t.Fatalf("DecryptSecrets failed: %v", err)
 	}
@@ -241,5 +253,130 @@ func TestEncryptDecryptSecrets_RoundTrip(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("key %q: got %q, want %q", k, got[k], v)
 		}
+	}
+}
+
+// --- Curve25519 key wrapping tests ---
+
+func TestWrapUnwrapDEK_RoundTrip(t *testing.T) {
+	// Generate sender and recipient keypairs.
+	senderPub, senderPriv, _ := box.GenerateKey(rand.Reader)
+	recipPub, recipPriv, _ := box.GenerateKey(rand.Reader)
+
+	// Use a fixed DEK.
+	var dek [32]byte
+	dek[0] = 0x42
+	dek[31] = 0xFF
+
+	wrapped, err := WrapDEK(dek, *recipPub, *senderPriv)
+	if err != nil {
+		t.Fatalf("WrapDEK failed: %v", err)
+	}
+	if len(wrapped) != 72 {
+		t.Fatalf("expected 72 bytes, got %d", len(wrapped))
+	}
+
+	got, err := UnwrapDEK(wrapped, *senderPub, *recipPub, *recipPriv)
+	if err != nil {
+		t.Fatalf("UnwrapDEK failed: %v", err)
+	}
+	if got != dek {
+		t.Error("unwrapped DEK mismatch")
+	}
+}
+
+func TestWrapDEK_WrongRecipientKey(t *testing.T) {
+	senderPub, senderPriv, _ := box.GenerateKey(rand.Reader)
+	recipPub, _, _ := box.GenerateKey(rand.Reader)
+	_, wrongPriv, _ := box.GenerateKey(rand.Reader) // different recipient
+
+	var dek [32]byte
+	dek[0] = 0x42
+
+	wrapped, _ := WrapDEK(dek, *recipPub, *senderPriv)
+	_, err := UnwrapDEK(wrapped, *senderPub, *recipPub, *wrongPriv)
+	if err == nil {
+		t.Fatal("expected error unwrapping with wrong key")
+	}
+}
+
+func TestUnwrapDEK_InvalidLength(t *testing.T) {
+	_, err := UnwrapDEK([]byte("short"), [32]byte{}, [32]byte{}, [32]byte{})
+	if err == nil {
+		t.Fatal("expected error for invalid length")
+	}
+}
+
+func TestBuildMultiRecipientEnvelope(t *testing.T) {
+	secrets := map[string]string{"a": "secret-val"}
+	ciphertext, _, rawDEK, err := EncryptSecrets(secrets)
+	if err != nil {
+		t.Fatalf("EncryptSecrets failed: %v", err)
+	}
+
+	senderPub, senderPriv, _ := box.GenerateKey(rand.Reader)
+	recip1Pub, _, _ := box.GenerateKey(rand.Reader)
+	recip2Pub, _, _ := box.GenerateKey(rand.Reader)
+
+	env, err := BuildMultiRecipientEnvelope(ciphertext, rawDEK, *senderPub, *senderPriv, [][32]byte{*recip1Pub, *recip2Pub})
+	if err != nil {
+		t.Fatalf("BuildMultiRecipientEnvelope failed: %v", err)
+	}
+	if env.Version != 1 {
+		t.Errorf("expected version 1, got %d", env.Version)
+	}
+	if len(env.WrappedKeys) != 2 {
+		t.Fatalf("expected 2 wrapped keys, got %d", len(env.WrappedKeys))
+	}
+	if env.Sender == "" {
+		t.Error("sender should not be empty")
+	}
+}
+
+func TestTryUnwrapEnvelope_RoundTrip(t *testing.T) {
+	secrets := map[string]string{"a": "secret-val", "b": "another"}
+	ciphertext, _, rawDEK, _ := EncryptSecrets(secrets)
+
+	senderPub, senderPriv, _ := box.GenerateKey(rand.Reader)
+	recipPub, recipPriv, _ := box.GenerateKey(rand.Reader)
+
+	env, _ := BuildMultiRecipientEnvelope(ciphertext, rawDEK, *senderPub, *senderPriv, [][32]byte{*recipPub})
+
+	envJSON, _ := json.Marshal(env)
+	got, err := TryUnwrapEnvelope(envJSON, *recipPub, *recipPriv)
+	if err != nil {
+		t.Fatalf("TryUnwrapEnvelope failed: %v", err)
+	}
+	if got["a"] != "secret-val" {
+		t.Errorf("expected 'secret-val', got %q", got["a"])
+	}
+	if got["b"] != "another" {
+		t.Errorf("expected 'another', got %q", got["b"])
+	}
+}
+
+func TestTryUnwrapEnvelope_NonRecipientFails(t *testing.T) {
+	secrets := map[string]string{"a": "val"}
+	ciphertext, _, rawDEK, _ := EncryptSecrets(secrets)
+
+	senderPub, senderPriv, _ := box.GenerateKey(rand.Reader)
+	recipPub, _, _ := box.GenerateKey(rand.Reader)
+	outsiderPub, outsiderPriv, _ := box.GenerateKey(rand.Reader)
+
+	env, _ := BuildMultiRecipientEnvelope(ciphertext, rawDEK, *senderPub, *senderPriv, [][32]byte{*recipPub})
+	envJSON, _ := json.Marshal(env)
+
+	_, err := TryUnwrapEnvelope(envJSON, *outsiderPub, *outsiderPriv)
+	if err == nil {
+		t.Fatal("expected error for non-recipient")
+	}
+}
+
+func TestTryUnwrapEnvelope_NoWrappedKeys(t *testing.T) {
+	env := MultiRecipientEnvelope{Version: 1, Sender: "bento-pk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", Ciphertext: "x"}
+	envJSON, _ := json.Marshal(env)
+	_, err := TryUnwrapEnvelope(envJSON, [32]byte{}, [32]byte{})
+	if err == nil {
+		t.Fatal("expected error for empty wrappedKeys")
 	}
 }

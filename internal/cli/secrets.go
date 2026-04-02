@@ -65,10 +65,10 @@ The secret key is printed to stderr for easy separation.
 				return fmt.Errorf("encrypted envelope is empty for %s", tag)
 			}
 
-			secretKey := envelope["secretKey"]
-			if secretKey != "" {
-				fmt.Fprintf(os.Stderr, "Secret key: %s\n", secretKey)
-				fmt.Fprintf(os.Stderr, "Recipient: bento open --secret-key %s --secrets-file bundle.enc %s\n", secretKey, tag)
+			dataKey := envelope["dataKey"]
+			if dataKey != "" {
+				fmt.Fprintf(os.Stderr, "Data key: %s\n", dataKey)
+				fmt.Fprintf(os.Stderr, "Recipient: bento open --data-key %s --secrets-file bundle.enc %s\n", dataKey, tag)
 			}
 
 			fmt.Fprint(os.Stdout, ciphertext)

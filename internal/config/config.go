@@ -2,11 +2,13 @@ package config
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -23,6 +25,7 @@ type BentoConfig struct {
 	Ignore     []string            `yaml:"ignore,omitempty"`
 	Env        map[string]EnvEntry `yaml:"env,omitempty"`
 	Secrets        SecretsConfig        `yaml:"secrets,omitempty"`
+	Recipients     []RecipientConfig    `yaml:"recipients,omitempty"`
 	Hooks          HooksConfig          `yaml:"hooks,omitempty"`
 	Retention      RetentionConfig      `yaml:"retention,omitempty"`
 	Watch          WatchConfig          `yaml:"watch,omitempty"`
@@ -182,6 +185,12 @@ type SecretsConfig struct {
 	Mode string `yaml:"mode,omitempty"`
 }
 
+// RecipientConfig defines a recipient entry in bento.yaml for key wrapping.
+type RecipientConfig struct {
+	Name string `yaml:"name"`
+	Key  string `yaml:"key"`
+}
+
 // DefaultStorePath returns the platform-appropriate default store location.
 func DefaultStorePath() string {
 	switch runtime.GOOS {
@@ -287,6 +296,34 @@ func (c *BentoConfig) Validate() error {
 			// valid
 		default:
 			return fmt.Errorf("secrets.mode %q is invalid — must be %q, %q, or %q", c.Secrets.Mode, SecretsModeScrub, SecretsModeBlock, SecretsModeOff)
+		}
+	}
+
+	// Validate recipients config.
+	if len(c.Recipients) > 0 {
+		seenNames := make(map[string]bool)
+		for i, r := range c.Recipients {
+			if r.Name == "" {
+				return fmt.Errorf("recipients[%d] has an empty name", i)
+			}
+			if seenNames[r.Name] {
+				return fmt.Errorf("duplicate recipient name %q — each recipient must have a unique name", r.Name)
+			}
+			seenNames[r.Name] = true
+			if r.Key == "" {
+				return fmt.Errorf("recipients[%d] (%q) has an empty key", i, r.Name)
+			}
+			if !strings.HasPrefix(r.Key, "bento-pk-") {
+				return fmt.Errorf("recipients[%d] (%q): key must start with \"bento-pk-\"", i, r.Name)
+			}
+			// Validate decoded key is exactly 32 bytes.
+			keyData, decErr := base64DecodeRawURL(r.Key[len("bento-pk-"):])
+			if decErr != nil {
+				return fmt.Errorf("recipients[%d] (%q): invalid base64url in key: %w", i, r.Name, decErr)
+			}
+			if len(keyData) != 32 {
+				return fmt.Errorf("recipients[%d] (%q): decoded key must be exactly 32 bytes, got %d", i, r.Name, len(keyData))
+			}
 		}
 	}
 
@@ -414,4 +451,9 @@ func expandPath(p string) string {
 		}
 	}
 	return os.ExpandEnv(p)
+}
+
+// base64DecodeRawURL decodes a base64url-encoded string (no padding).
+func base64DecodeRawURL(s string) ([]byte, error) {
+	return base64.RawURLEncoding.DecodeString(s)
 }

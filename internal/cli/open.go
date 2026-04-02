@@ -11,6 +11,7 @@ import (
 
 	"github.com/kajogo777/bento/internal/config"
 	"github.com/kajogo777/bento/internal/hooks"
+	"github.com/kajogo777/bento/internal/keys"
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/kajogo777/bento/internal/registry"
 	"github.com/kajogo777/bento/internal/secrets"
@@ -26,8 +27,9 @@ func newOpenCmd() *cobra.Command {
 		flagLayers             string
 		flagSkipLayers         string
 		flagForce              bool
-		flagSecretKey          string
+		flagDataKey            string
 		flagSecretsFile        string
+		flagPrivateKey         string
 		flagAllowMissingSecrets bool
 	)
 
@@ -182,9 +184,9 @@ func newOpenCmd() *cobra.Command {
 			if parseErr == nil && len(bentoCfg.ScrubRecords) > 0 {
 				hasScrubRecords = true
 				scrubRecords = bentoCfg.ScrubRecords
-				secretKey := flagSecretKey
-				if secretKey == "" {
-					secretKey = os.Getenv("BENTO_SECRET_KEY")
+				dataKey := flagDataKey
+				if dataKey == "" {
+					dataKey = os.Getenv("BENTO_DATA_KEY")
 				}
 
 				backendKey := bentoCfg.WorkspaceID + "/" + tag
@@ -194,8 +196,8 @@ func newOpenCmd() *cobra.Command {
 				localBe := backend.DefaultBackend()
 				secretValues, _ = localBe.Get(ctx, backendKey, nil)
 
-				// Try 2: OCI encrypted layer (pushed with --include-secrets).
-				if secretValues == nil && secretKey != "" {
+				// Try 1.5: key wrapping auto-discovery from OCI layer.
+				if secretValues == nil {
 					var ociManifest ocispec.Manifest
 					if jsonErr := json.Unmarshal(manifestBytes, &ociManifest); jsonErr == nil {
 						for li, ld := range ociManifest.Layers {
@@ -205,7 +207,48 @@ func newOpenCmd() *cobra.Command {
 									cipherBytes, exErr := workspace.ExtractFileContentFromLayer(r, "secrets.enc", 10*1024*1024)
 									_ = r.Close()
 									if exErr == nil {
-										secretValues, _ = backend.DecryptSecrets(string(cipherBytes), secretKey)
+										// Check if this is a multi-recipient envelope (has wrappedKeys).
+										var env backend.MultiRecipientEnvelope
+										if json.Unmarshal(cipherBytes, &env) == nil && len(env.WrappedKeys) > 0 {
+											// Try to unwrap with user's private key.
+											var recipPub, recipPriv [32]byte
+											var kpErr error
+											if flagPrivateKey != "" {
+												absPath, _ := filepath.Abs(flagPrivateKey)
+												recipPub, recipPriv, kpErr = keys.LoadKeypairFrom(filepath.Dir(absPath), strings.TrimSuffix(filepath.Base(absPath), ".json"))
+												if kpErr != nil {
+													fmt.Printf("Warning: loading private key from %s: %v\n", flagPrivateKey, kpErr)
+												}
+											} else {
+												recipPub, recipPriv, kpErr = keys.LoadDefaultKeypair()
+											}
+											if kpErr == nil {
+												if sv, unwrapErr := backend.TryUnwrapEnvelope(cipherBytes, recipPub, recipPriv); unwrapErr == nil {
+													secretValues = sv
+													fmt.Println("  Decrypted secrets with keypair auto-discovery")
+												}
+											}
+										}
+									}
+								}
+								break
+							}
+						}
+					}
+				}
+
+				// Try 2: OCI encrypted layer with --data-key (symmetric fallback).
+				if secretValues == nil && dataKey != "" {
+					var ociManifest ocispec.Manifest
+					if jsonErr := json.Unmarshal(manifestBytes, &ociManifest); jsonErr == nil {
+						for li, ld := range ociManifest.Layers {
+							if ld.Annotations[manifest.AnnotationSecretsEncrypted] == "true" && li < len(layers) {
+								r, rErr := layers[li].NewReader()
+								if rErr == nil {
+									cipherBytes, exErr := workspace.ExtractFileContentFromLayer(r, "secrets.enc", 10*1024*1024)
+									_ = r.Close()
+									if exErr == nil {
+										secretValues, _ = backend.DecryptSecrets(string(cipherBytes), dataKey)
 									}
 								}
 								break
@@ -215,15 +258,15 @@ func newOpenCmd() *cobra.Command {
 				}
 
 				// Try 3: secrets file (shared out of band).
-				if secretValues == nil && flagSecretsFile != "" && secretKey != "" {
+				if secretValues == nil && flagSecretsFile != "" && dataKey != "" {
 					ciphertext, readErr := os.ReadFile(flagSecretsFile)
 					if readErr != nil {
 						fmt.Printf("Warning: reading secrets file %s: %v\n", flagSecretsFile, readErr)
 					} else {
-						secretValues, _ = backend.DecryptSecrets(string(ciphertext), secretKey)
+						secretValues, _ = backend.DecryptSecrets(string(ciphertext), dataKey)
 					}
-				} else if secretValues == nil && flagSecretsFile != "" && secretKey == "" {
-					fmt.Printf("Warning: --secrets-file provided but --secret-key is required to decrypt it\n")
+				} else if secretValues == nil && flagSecretsFile != "" && dataKey == "" {
+					fmt.Printf("Warning: --secrets-file provided but --data-key is required to decrypt it\n")
 				}
 
 				// If secrets unavailable and not allowed to proceed, fail NOW before writing files.
@@ -238,14 +281,14 @@ func newOpenCmd() *cobra.Command {
 						openArgs = ref + " " + args[1]
 					}
 					fmt.Printf("\nError: %d scrubbed secret(s) in %d file(s) cannot be resolved.\n", totalSecrets, len(scrubRecords))
-					fmt.Println("\nTo restore secrets, re-run with the secret key:")
-					fmt.Printf("  bento open --secret-key <KEY> %s\n", openArgs)
+					fmt.Println("\nTo restore secrets, re-run with the data key:")
+					fmt.Printf("  bento open --data-key <KEY> %s\n", openArgs)
 					fmt.Println("\nIf you have a secrets file from the sender:")
-					fmt.Printf("  bento open --secret-key <KEY> --secrets-file bundle.enc %s\n", openArgs)
+					fmt.Printf("  bento open --data-key <KEY> --secrets-file bundle.enc %s\n", openArgs)
 					fmt.Println("\nTo open anyway with placeholders:")
 					fmt.Printf("  bento open --allow-missing-secrets %s\n", openArgs)
 					fmt.Println("\nAsk the sender for the key (shown when they ran bento push --include-secrets or bento secrets export).")
-					return fmt.Errorf("secrets not available — provide --secret-key to hydrate")
+					return fmt.Errorf("secrets not available — provide --data-key to hydrate")
 				}
 			}
 
@@ -356,8 +399,9 @@ func newOpenCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flagLayers, "layers", "", "comma-separated layer names to restore")
 	cmd.Flags().StringVar(&flagSkipLayers, "skip-layers", "", "comma-separated layer names to skip")
 	cmd.Flags().BoolVar(&flagForce, "force", false, "overwrite existing files without confirmation")
-	cmd.Flags().StringVar(&flagSecretKey, "secret-key", "", "decryption key for encrypted secrets (or set BENTO_SECRET_KEY)")
+	cmd.Flags().StringVar(&flagDataKey, "data-key", "", "decryption key for encrypted secrets (or set BENTO_DATA_KEY)")
 	cmd.Flags().StringVar(&flagSecretsFile, "secrets-file", "", "path to encrypted secrets bundle from sender")
+	cmd.Flags().StringVar(&flagPrivateKey, "private-key", "", "explicit path to private key file for key wrapping")
 	cmd.Flags().BoolVar(&flagAllowMissingSecrets, "allow-missing-secrets", false, "open even if secrets cannot be hydrated (files will contain placeholders)")
 
 	return cmd

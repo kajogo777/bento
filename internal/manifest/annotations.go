@@ -19,6 +19,8 @@ const (
 	AnnotationLayerFileCount = "dev.bento.layer.file-count"
 	AnnotationExternalPaths  = "dev.bento.external.paths"
 	AnnotationSecretsEncrypted = "dev.bento.secrets.encrypted"
+	AnnotationSecretsKeyWrapping = "dev.bento.secrets.key-wrapping"
+	AnnotationSecretsSender      = "dev.bento.secrets.sender"
 )
 
 // Media types: we use standard OCI types for Docker/containerd compatibility.

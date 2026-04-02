@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/kajogo777/bento/internal/config"
+	"github.com/kajogo777/bento/internal/keys"
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/kajogo777/bento/internal/registry"
 	"github.com/kajogo777/bento/internal/secrets/backend"
@@ -20,6 +21,7 @@ func newPushCmd() *cobra.Command {
 	var (
 		flagTag            string
 		flagIncludeSecrets bool
+		flagRecipients     []string
 	)
 
 	cmd := &cobra.Command{
@@ -33,7 +35,7 @@ If the checkpoint has scrubbed secrets, use --include-secrets to pack them
 recipient must obtain them separately.
 
 Included secrets are always encrypted — they cannot be read without the
-secret key (shown when you run push --include-secrets or secrets export).
+data key (shown when you run push --include-secrets or secrets export).
 
 Examples:
   bento push
@@ -66,7 +68,7 @@ Examples:
 			}
 
 			// Check if checkpoint has scrubbed secrets.
-			var pushSecretKey string
+			var pushDataKey string
 			var pushCheckpoint int
 			var hasScrubRecords bool
 
@@ -118,13 +120,72 @@ Examples:
 						return fmt.Errorf("no encrypted envelope found for %s — save with secrets first", cpTag)
 					}
 
-					ciphertext := envelope["ciphertext"]
-					if ciphertext == "" {
+					// Determine what to pack: multi-recipient envelope or old-format ciphertext.
+					var secretsContent []byte
+					layerAnnotations := map[string]string{
+						manifest.AnnotationTitle:            "secrets",
+						manifest.AnnotationSecretsEncrypted: "true",
+					}
+
+					if envJSON := envelope["envelope"]; envJSON != "" {
+						// Multi-recipient envelope — pack the full JSON.
+						secretsContent = []byte(envJSON)
+						layerAnnotations[manifest.AnnotationSecretsKeyWrapping] = "curve25519"
+						// Extract sender from envelope for annotation.
+						var env backend.MultiRecipientEnvelope
+						if json.Unmarshal([]byte(envJSON), &env) == nil {
+							layerAnnotations[manifest.AnnotationSecretsSender] = env.Sender
+						}
+					} else if ciphertext := envelope["ciphertext"]; ciphertext != "" {
+						// Old-format: ciphertext + dataKey.
+						// Check if --recipient flags or bento.yaml recipients require wrapping at push time.
+						var recipientSpecs []string
+						recipientSpecs = append(recipientSpecs, flagRecipients...)
+						for _, r := range cfg.Recipients {
+							recipientSpecs = append(recipientSpecs, r.Name)
+						}
+
+						if len(recipientSpecs) > 0 {
+							// Wrap the DEK for recipients at push time.
+							dk := envelope["dataKey"]
+							if dk == "" {
+								return fmt.Errorf("no data key in envelope for %s — cannot wrap for recipients", cpTag)
+							}
+							rawDEK, parseErr := keys.ParseDataKey(dk)
+							if parseErr != nil {
+								return fmt.Errorf("parsing data key: %w", parseErr)
+							}
+							senderPub, senderPriv, kpErr := keys.LoadDefaultKeypair()
+							if kpErr != nil {
+								return fmt.Errorf("recipients configured but no keypair found.\n\nGenerate a keypair first:\n  bento keys generate")
+							}
+							var configRecipients []keys.ConfigRecipient
+							for _, r := range cfg.Recipients {
+								configRecipients = append(configRecipients, keys.ConfigRecipient{Name: r.Name, Key: r.Key})
+							}
+							recipientPubs, resolveErr := keys.ResolveRecipients(recipientSpecs, configRecipients, senderPub, "")
+							if resolveErr != nil {
+								return fmt.Errorf("resolving recipients: %w", resolveErr)
+							}
+							mrEnv, buildErr := backend.BuildMultiRecipientEnvelope(ciphertext, rawDEK, senderPub, senderPriv, recipientPubs)
+							if buildErr != nil {
+								return fmt.Errorf("building multi-recipient envelope: %w", buildErr)
+							}
+							envJSON, _ := json.Marshal(mrEnv)
+							secretsContent = envJSON
+							layerAnnotations[manifest.AnnotationSecretsKeyWrapping] = "curve25519"
+							layerAnnotations[manifest.AnnotationSecretsSender] = mrEnv.Sender
+						} else {
+							// No recipients — push the raw ciphertext, show data key.
+							secretsContent = []byte(ciphertext)
+							pushDataKey = envelope["dataKey"]
+						}
+					} else {
 						return fmt.Errorf("encrypted envelope is empty for %s", cpTag)
 					}
 
 					// Pack as OCI layer and inject into the checkpoint.
-					packed, packErr := workspace.PackBytesToTempLayer("secrets.enc", []byte(ciphertext))
+					packed, packErr := workspace.PackBytesToTempLayer("secrets.enc", secretsContent)
 					if packErr != nil {
 						return fmt.Errorf("packing secrets layer: %w", packErr)
 					}
@@ -139,15 +200,9 @@ Examples:
 					}
 
 					localStore := store.(*registry.LocalStore)
-					if injectErr := localStore.InjectLayer(tag, secretsLayer, map[string]string{
-						manifest.AnnotationTitle:            "secrets",
-						manifest.AnnotationSecretsEncrypted: "true",
-					}); injectErr != nil {
+					if injectErr := localStore.InjectLayer(tag, secretsLayer, layerAnnotations); injectErr != nil {
 						return fmt.Errorf("injecting secrets layer: %w", injectErr)
 					}
-
-					secretKey := envelope["secretKey"]
-					pushSecretKey = secretKey
 
 					// Also update the cp-N tag to point to the new manifest.
 					if cpTag != tag {
@@ -182,8 +237,11 @@ Examples:
 
 			fmt.Println("Done.")
 
-			if flagIncludeSecrets && pushSecretKey != "" {
-				fmt.Printf("\nRecipient runs:\n  bento open --secret-key %s %s\n", pushSecretKey, remoteRef)
+			if flagIncludeSecrets && pushDataKey != "" {
+				fmt.Printf("\nRecipient runs:\n  bento open --data-key %s %s\n", pushDataKey, remoteRef)
+			} else if flagIncludeSecrets && pushDataKey == "" {
+				// Key-wrapped — no data key to display.
+				fmt.Printf("\nRecipients can open with:\n  bento open %s ./workspace\n  (auto-decrypts if their private key is in ~/.bento/keys/)\n", remoteRef)
 			} else if !flagIncludeSecrets && hasScrubRecords {
 				fmt.Println("\nWarning: this checkpoint has scrubbed secrets that are NOT included in the push.")
 				fmt.Println("The recipient will not be able to restore secrets without additional steps.")
@@ -192,7 +250,7 @@ Examples:
 				fmt.Println("\nOr export the secrets separately:")
 				fmt.Printf("  bento secrets export cp-%d > bundle.enc\n", pushCheckpoint)
 				fmt.Println("  Then recipient runs:")
-				fmt.Printf("  bento open --secret-key <KEY> --secrets-file bundle.enc %s\n", remoteRef)
+				fmt.Printf("  bento open --data-key <KEY> --secrets-file bundle.enc %s\n", remoteRef)
 			}
 
 			return nil
@@ -201,6 +259,7 @@ Examples:
 
 	cmd.Flags().StringVar(&flagTag, "tag", "", "push only this tag (default: push all)")
 	cmd.Flags().BoolVar(&flagIncludeSecrets, "include-secrets", false, "include encrypted secret envelope in the OCI artifact")
+	cmd.Flags().StringArrayVar(&flagRecipients, "recipient", nil, "recipient public key or name for key wrapping (repeatable)")
 
 	return cmd
 }

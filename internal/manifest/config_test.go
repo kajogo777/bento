@@ -196,7 +196,7 @@ func TestMarshalUnmarshalRoundtrip_ScrubRecords(t *testing.T) {
 				},
 			},
 		},
-		RestoreHint:    "Re-open with --secret-key <KEY>",
+		RestoreHint:    "Re-open with --data-key <KEY>",
 	}
 
 	data, err := MarshalConfig(cfg)
@@ -227,7 +227,7 @@ func TestMarshalUnmarshalRoundtrip_ScrubRecords(t *testing.T) {
 	if got.ScrubRecords[1].Path != "config/app.yaml" {
 		t.Errorf("ScrubRecords[1].Path: got %q", got.ScrubRecords[1].Path)
 	}
-	if got.RestoreHint != "Re-open with --secret-key <KEY>" {
+	if got.RestoreHint != "Re-open with --data-key <KEY>" {
 		t.Errorf("RestoreHint: got %q", got.RestoreHint)
 	}
 }

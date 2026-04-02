@@ -16,6 +16,7 @@ import (
 	"github.com/kajogo777/bento/internal/config"
 	"github.com/kajogo777/bento/internal/extension"
 	"github.com/kajogo777/bento/internal/hooks"
+	"github.com/kajogo777/bento/internal/keys"
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/kajogo777/bento/internal/registry"
 	"github.com/kajogo777/bento/internal/secrets"
@@ -28,12 +29,13 @@ import (
 
 // SaveOptions configures a save operation. Used by both `bento save` and `bento watch`.
 type SaveOptions struct {
-	Dir                  string // absolute path to workspace root
-	Message              string // checkpoint message
-	Tag                  string // custom tag (empty = auto cp-N)
+	Dir                  string   // absolute path to workspace root
+	Message              string   // checkpoint message
+	Tag                  string   // custom tag (empty = auto cp-N)
 	SkipSecretScan       bool
 	AllowMissingExternal bool
-	Quiet                bool // suppress per-layer output (used by watch mode)
+	Quiet                bool     // suppress per-layer output (used by watch mode)
+	Recipients           []string // recipient public keys or names for key wrapping
 }
 
 // SaveResult holds the outcome of a save operation.
@@ -522,7 +524,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 	}
 
 	// Store scrubbed secrets locally and generate encrypted envelope.
-	var secretKey string
+	var dataKey string
 	if len(scrubSecrets) > 0 {
 		tag := fmt.Sprintf("cp-%d", seq)
 		if opts.Tag != "" {
@@ -538,17 +540,73 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		}
 
 		// Generate encrypted envelope (for sharing / push --include-secrets).
-		ciphertext, sk, encErr := backend.EncryptSecrets(scrubSecrets)
+		ciphertext, dk, rawDEK, encErr := backend.EncryptSecrets(scrubSecrets)
 		if encErr != nil {
 			return nil, fmt.Errorf("encrypting secrets: %w", encErr)
 		}
-		secretKey = sk
+		dataKey = dk
 
-		// Store the encrypted envelope alongside the plaintext for push to use later.
-		envKey := backendKey + ".enc"
-		if _, envErr := localBe.Put(ctx, envKey, map[string]string{"ciphertext": ciphertext, "secretKey": secretKey}); envErr != nil {
-			fmt.Printf("Warning: storing encrypted envelope: %v\n", envErr)
-			fmt.Println("  bento push --include-secrets may not work for this checkpoint.")
+		// Collect recipients from --recipient flags + bento.yaml recipients.
+		var recipientSpecs []string
+		recipientSpecs = append(recipientSpecs, opts.Recipients...)
+		for _, r := range cfg.Recipients {
+			recipientSpecs = append(recipientSpecs, r.Name)
+		}
+
+		if len(recipientSpecs) > 0 {
+			// Recipients configured → key wrapping required.
+			// Load sender's keypair.
+			senderPub, senderPriv, kpErr := keys.LoadDefaultKeypair()
+			if kpErr != nil {
+				return nil, fmt.Errorf("recipients configured but no keypair found.\n\nGenerate a keypair first:\n  bento keys generate\n\nThen retry:\n  bento save -m %q", opts.Message)
+			}
+
+			// Resolve recipient specifiers to public keys.
+			var configRecipients []keys.ConfigRecipient
+			for _, r := range cfg.Recipients {
+				configRecipients = append(configRecipients, keys.ConfigRecipient{
+					Name: r.Name,
+					Key:  r.Key,
+				})
+			}
+
+			recipientPubs, resolveErr := keys.ResolveRecipients(recipientSpecs, configRecipients, senderPub, "")
+			if resolveErr != nil {
+				return nil, fmt.Errorf("resolving recipients: %w", resolveErr)
+			}
+
+			// Build multi-recipient envelope.
+			envelope, envErr := backend.BuildMultiRecipientEnvelope(ciphertext, rawDEK, senderPub, senderPriv, recipientPubs)
+			if envErr != nil {
+				return nil, fmt.Errorf("building multi-recipient envelope: %w", envErr)
+			}
+
+			envJSON, marshalErr := json.Marshal(envelope)
+			if marshalErr != nil {
+				return nil, fmt.Errorf("marshaling envelope: %w", marshalErr)
+			}
+
+			// Store the multi-recipient envelope locally for push to use.
+			envKey := backendKey + ".enc"
+			if _, envPutErr := localBe.Put(ctx, envKey, map[string]string{"envelope": string(envJSON)}); envPutErr != nil {
+				fmt.Printf("Warning: storing encrypted envelope: %v\n", envPutErr)
+				fmt.Println("  bento push --include-secrets may not work for this checkpoint.")
+			}
+
+			if !opts.Quiet {
+				fmt.Printf("Wrapped secrets for %d recipient(s)\n", len(recipientPubs))
+				fmt.Printf("Sealed by: %s\n", keys.FormatPublicKey(senderPub))
+			}
+
+			// Clear dataKey — recipients use their private keys, not the symmetric key.
+			dataKey = ""
+		} else {
+			// No recipients → store the old-format encrypted envelope.
+			envKey := backendKey + ".enc"
+			if _, envErr := localBe.Put(ctx, envKey, map[string]string{"ciphertext": ciphertext, "dataKey": dataKey}); envErr != nil {
+				fmt.Printf("Warning: storing encrypted envelope: %v\n", envErr)
+				fmt.Println("  bento push --include-secrets may not work for this checkpoint.")
+			}
 		}
 
 		_, persistHint := localBe.Hint(backendKey, nil)
