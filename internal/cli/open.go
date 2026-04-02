@@ -246,7 +246,7 @@ func newOpenCmd() *cobra.Command {
 					fmt.Println("  1. Import your private key:")
 					fmt.Println("     bento keys import <bento-sk-...>")
 					fmt.Println("  2. Or ask the sender to re-push with your public key:")
-					fmt.Println("     bento keys public   # show your public key")
+					fmt.Println("     bento keys list   # show your public key")
 					fmt.Printf("     # sender runs: bento push --include-secrets --recipient <your-key> %s\n", openArgs)
 					fmt.Println("\nTo open anyway with placeholders:")
 					fmt.Printf("  bento open --allow-missing-secrets %s\n", openArgs)

@@ -15,7 +15,6 @@ func newKeysCmd() *cobra.Command {
 	cmd.AddCommand(
 		newKeysGenerateCmd(),
 		newKeysListCmd(),
-		newKeysPublicCmd(),
 		newKeysImportCmd(),
 	)
 	return cmd
@@ -91,34 +90,6 @@ func newKeysListCmd() *cobra.Command {
 			return nil
 		},
 	}
-}
-
-func newKeysPublicCmd() *cobra.Command {
-	var flagName string
-
-	cmd := &cobra.Command{
-		Use:   "public",
-		Short: "Show public key (for sharing)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			var pub [32]byte
-			var err error
-
-			if flagName != "" {
-				pub, _, err = keys.LoadKeypair(flagName)
-			} else {
-				pub, _, err = keys.LoadDefaultKeypair()
-			}
-			if err != nil {
-				return err
-			}
-
-			fmt.Println(keys.FormatPublicKey(pub))
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVar(&flagName, "name", "", "keypair name (default: use default keypair)")
-	return cmd
 }
 
 func newKeysImportCmd() *cobra.Command {
