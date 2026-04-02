@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
 )
 
@@ -51,6 +52,17 @@ func GenerateKeypair() (publicKey, privateKey [32]byte, err error) {
 		return [32]byte{}, [32]byte{}, fmt.Errorf("generating keypair: %w", err)
 	}
 	return *pub, *priv, nil
+}
+
+// DerivePublicKey computes the Curve25519 public key from a private key.
+func DerivePublicKey(priv [32]byte) ([32]byte, error) {
+	pub, err := curve25519.X25519(priv[:], curve25519.Basepoint)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("deriving public key: %w", err)
+	}
+	var pubKey [32]byte
+	copy(pubKey[:], pub)
+	return pubKey, nil
 }
 
 // FormatPublicKey encodes a public key as "bento-pk-<base64url>".

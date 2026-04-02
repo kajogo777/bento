@@ -243,8 +243,8 @@ func newOpenCmd() *cobra.Command {
 					}
 					fmt.Printf("\nError: %d scrubbed secret(s) in %d file(s) cannot be resolved.\n", totalSecrets, len(scrubRecords))
 					fmt.Println("\nNo matching private key found. To restore secrets:")
-					fmt.Println("  1. Copy your private key from the original machine:")
-					fmt.Println("     scp original:~/.bento/keys/default.json ~/.bento/keys/")
+					fmt.Println("  1. Import your private key:")
+					fmt.Println("     bento keys import <bento-sk-...>")
 					fmt.Println("  2. Or ask the sender to re-push with your public key:")
 					fmt.Println("     bento keys public   # show your public key")
 					fmt.Printf("     # sender runs: bento push --include-secrets --recipient <your-key> %s\n", openArgs)
