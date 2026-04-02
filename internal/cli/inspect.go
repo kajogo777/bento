@@ -161,19 +161,17 @@ Works with both local refs and remote registry refs:
 				}
 			}
 
-			// Only load layer blobs when --files is requested.
+			// Load layer blobs (needed for --files file listing and recipient info).
 			var layers []registry.LayerData
-			if flagFiles {
-				_, _, layers, err = store.LoadCheckpoint(tag)
-				if err != nil {
-					return fmt.Errorf("loading layer data for %s: %w", ref, err)
-				}
-				defer func() {
-					for i := range layers {
-						layers[i].Cleanup()
-					}
-				}()
+			_, _, layers, err = store.LoadCheckpoint(tag)
+			if err != nil {
+				return fmt.Errorf("loading layer data for %s: %w", ref, err)
 			}
+			defer func() {
+				for i := range layers {
+					layers[i].Cleanup()
+				}
+			}()
 
 			// Parse checkpoint info
 			info, err := manifest.ParseCheckpointInfo(manifestBytes)
@@ -241,9 +239,11 @@ Works with both local refs and remote registry refs:
 					totalSecrets += len(rec.Replacements)
 				}
 				fmt.Printf("\nSecrets:    %d scrubbed in %d file(s)\n", totalSecrets, len(cfgObj.ScrubRecords))
-				for _, rec := range cfgObj.ScrubRecords {
-					for _, rep := range rec.Replacements {
-						fmt.Printf("  %s  %s\n", rec.Path, rep.RuleID)
+				if flagFiles {
+					for _, rec := range cfgObj.ScrubRecords {
+						for _, rep := range rec.Replacements {
+							fmt.Printf("  %s  %s\n", rec.Path, rep.RuleID)
+						}
 					}
 				}
 			}
@@ -261,30 +261,28 @@ Works with both local refs and remote registry refs:
 						}
 					}
 
-					// If --files, try to read the envelope to show recipients
-					if flagFiles {
-						for li, layer := range layers {
-							if m.Layers[li].Digest == ld.Digest {
-								r, rErr := layer.NewReader()
-								if rErr == nil {
-									envBytes, exErr := workspace.ExtractFileContentFromLayer(r, "secrets.enc", 10*1024*1024)
-									_ = r.Close()
-									if exErr == nil {
-										var env backend.MultiRecipientEnvelope
-										if json.Unmarshal(envBytes, &env) == nil && len(env.WrappedKeys) > 0 {
-											fmt.Printf("  Recipients: %d\n", len(env.WrappedKeys))
-											for _, wk := range env.WrappedKeys {
-												label := wk.Recipient
-												if env.Sender == wk.Recipient {
-													label += " (sender)"
-												}
-												fmt.Printf("    %s\n", label)
+					// Read the envelope to show recipients.
+					for li, layer := range layers {
+						if m.Layers[li].Digest == ld.Digest {
+							r, rErr := layer.NewReader()
+							if rErr == nil {
+								envBytes, exErr := workspace.ExtractFileContentFromLayer(r, "secrets.enc", 10*1024*1024)
+								_ = r.Close()
+								if exErr == nil {
+									var env backend.MultiRecipientEnvelope
+									if json.Unmarshal(envBytes, &env) == nil && len(env.WrappedKeys) > 0 {
+										fmt.Printf("  Recipients: %d\n", len(env.WrappedKeys))
+										for _, wk := range env.WrappedKeys {
+											label := wk.Recipient
+											if env.Sender == wk.Recipient {
+												label += " (sender)"
 											}
+											fmt.Printf("    %s\n", label)
 										}
 									}
 								}
-								break
 							}
+							break
 						}
 					}
 					break
