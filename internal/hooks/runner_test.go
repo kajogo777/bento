@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -26,7 +27,13 @@ func TestRun_Failure(t *testing.T) {
 
 func TestRun_Timeout(t *testing.T) {
 	r := NewRunner(t.TempDir(), 1)
-	err := r.Run("test_hook", "sleep 10")
+	// Use a cross-platform long-running command: ping with a high count.
+	// On Windows "sleep" is not available; ping works everywhere.
+	cmd := "sleep 10"
+	if runtime.GOOS == "windows" {
+		cmd = "ping -n 20 127.0.0.1"
+	}
+	err := r.Run("test_hook", cmd)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}

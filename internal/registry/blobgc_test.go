@@ -3,6 +3,7 @@ package registry
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/kajogo777/bento/internal/manifest"
@@ -10,6 +11,9 @@ import (
 )
 
 func TestEnsureSharedBlobLayout_CreatesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink assertions not applicable on Windows (uses junctions)")
+	}
 	storeRoot := t.TempDir()
 	wsPath := filepath.Join(storeRoot, "ws-aaa")
 
@@ -56,6 +60,9 @@ func TestEnsureSharedBlobLayout_Idempotent(t *testing.T) {
 }
 
 func TestEnsureSharedBlobLayout_MultipleWorkspaces(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink assertions not applicable on Windows (uses junctions)")
+	}
 	storeRoot := t.TempDir()
 	wsA := filepath.Join(storeRoot, "ws-aaa")
 	wsB := filepath.Join(storeRoot, "ws-bbb")
@@ -374,6 +381,9 @@ func TestBlobGC_CrossWorkspaceRetention(t *testing.T) {
 // TestSharedBlobStore_SymlinkResolvesCorrectly verifies that blobs written
 // through one workspace's symlink are readable through another workspace's symlink.
 func TestSharedBlobStore_SymlinkResolvesCorrectly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink assertions not applicable on Windows (uses junctions)")
+	}
 	storeRoot := t.TempDir()
 	wsPathA := filepath.Join(storeRoot, "ws-aaa")
 	wsPathB := filepath.Join(storeRoot, "ws-bbb")

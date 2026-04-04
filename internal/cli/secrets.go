@@ -146,7 +146,7 @@ Use --sender and --recipient to re-wrap for specific recipients.
 				}
 
 				fmt.Fprintf(os.Stderr, "Re-wrapped for %d recipient(s), sealed by: %s\n", len(recipientPubs), newEnvelope.Sender)
-				fmt.Fprint(os.Stdout, string(rewrappedJSON))
+				_, _ = fmt.Fprint(os.Stdout, string(rewrappedJSON))
 			} else {
 				_, _ = fmt.Fprint(os.Stdout, envJSON)
 			}

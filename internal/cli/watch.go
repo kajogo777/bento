@@ -112,8 +112,6 @@ Layers with watch: off are not monitored (still included in saves).`,
 							} else {
 								fmt.Printf("Saved secrets.mode: %s in bento.yaml\n", chosen)
 							}
-							// Update local state for the save callback.
-							secretsMode = chosen
 							if chosen == config.SecretsModeBlock {
 								return fmt.Errorf("secrets.mode is block — resolve secrets before running watch")
 							}

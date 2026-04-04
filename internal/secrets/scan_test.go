@@ -380,11 +380,15 @@ func TestScanFiles_SkipsBinaryAndLarge(t *testing.T) {
 
 	// Text file with a secret — should be scanned.
 	secretFile := filepath.Join(dir, "config.env")
-	os.WriteFile(secretFile, []byte("AWS_ACCESS_KEY_ID=AKIAIOSFODNN7FSECRET\n"), 0644)
+	if err := os.WriteFile(secretFile, []byte("AWS_ACCESS_KEY_ID=AKIAIOSFODNN7FSECRET\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Binary file — should be skipped.
 	binaryFile := filepath.Join(dir, "image.png")
-	os.WriteFile(binaryFile, []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), 0644)
+	if err := os.WriteFile(binaryFile, []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Large text file — should be skipped.
 	largeFile := filepath.Join(dir, "huge.log")

@@ -327,17 +327,15 @@ func buildFileEntries(current, parent map[string]string, scrubPaths map[string]b
 	}
 
 	// Files removed in current (present in parent but not current)
-	if parent != nil {
-		for path := range parent {
-			if _, ok := current[path]; !ok {
-				entries = append(entries, FileEntry{
-					Path:       path,
-					Size:       0,
-					IsText:     IsTextFile(path),
-					HasScrubs:  scrubPaths[path],
-					DiffStatus: Removed,
-				})
-			}
+	for path := range parent {
+		if _, ok := current[path]; !ok {
+			entries = append(entries, FileEntry{
+				Path:       path,
+				Size:       0,
+				IsText:     IsTextFile(path),
+				HasScrubs:  scrubPaths[path],
+				DiffStatus: Removed,
+			})
 		}
 	}
 
