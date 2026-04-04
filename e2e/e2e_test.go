@@ -102,8 +102,8 @@ func TestSaveList(t *testing.T) {
 	if !strings.Contains(out, "cp-1") {
 		t.Errorf("save output should mention cp-1, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Secret scan: skipped") {
-		t.Errorf("save output should mention secret scan skipped, got:\n%s", out)
+	if !strings.Contains(out, "Secret scan: off") {
+		t.Errorf("save output should mention secret scan off, got:\n%s", out)
 	}
 
 	listOut := run(t, dir, "list")

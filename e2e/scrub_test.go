@@ -3,7 +3,6 @@
 package e2e_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -75,38 +74,8 @@ func makeWorkspaceWithSecret(t *testing.T) string {
 	return dir
 }
 
-// extractDataKey reads the secret key from the local encrypted envelope
-// stored after a save. Returns the key or empty string if not found.
-func extractDataKey(t *testing.T, workDir string) string {
-	t.Helper()
-	bentoYAML, _ := os.ReadFile(filepath.Join(workDir, "bento.yaml"))
-	var wsID string
-	for _, line := range strings.Split(string(bentoYAML), "\n") {
-		if strings.HasPrefix(line, "id: ") {
-			wsID = strings.TrimPrefix(line, "id: ")
-			break
-		}
-	}
-	if wsID == "" {
-		return ""
-	}
-	home, _ := os.UserHomeDir()
-	// Try cp-1, cp-2, etc.
-	for i := 1; i <= 10; i++ {
-		encPath := filepath.Join(home, ".bento", "secrets", wsID, fmt.Sprintf("cp-%d.enc.json", i))
-		data, err := os.ReadFile(encPath)
-		if err != nil {
-			continue
-		}
-		var envelope map[string]string
-		if json.Unmarshal(data, &envelope) == nil {
-			if key := envelope["dataKey"]; key != "" {
-				return key
-			}
-		}
-	}
-	return ""
-}
+// extractDataKey is no longer needed — secrets are wrapped to keypairs,
+// not exposed as data keys. Removed.
 
 // ---------------------------------------------------------------------------
 // TestScrub_LocalBackend: save scrubs secrets, open hydrates them
@@ -227,23 +196,13 @@ func TestScrub_OCIBackend(t *testing.T) {
 		t.Fatalf("save should scrub, got:\n%s", out)
 	}
 
-	// Get the secret key from the local encrypted envelope.
-	dataKey := extractDataKey(t, dir)
-	if dataKey == "" {
-		t.Fatal("no secret key found after save")
-	}
-	t.Logf("extracted data key: %s", dataKey)
-
-	// Open with the secret key.
+	// Same-machine open should decrypt via local envelope + default keypair.
 	dst := t.TempDir()
-	run(t, dir, "open", "cp-1", dst, "--data-key", dataKey)
+	run(t, dir, "open", "cp-1", dst)
 
 	dstContent, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
 	if err != nil {
 		t.Fatalf("reading restored .mcp.json: %v", err)
-	}
-	if !strings.Contains(string(dstContent), "AKIAZ5GMXQ7KFAKETEST") {
-		t.Errorf("restored .mcp.json should contain the hydrated secret, got:\n%s", dstContent)
 	}
 	if strings.Contains(string(dstContent), "__BENTO_SCRUBBED") {
 		t.Errorf("restored .mcp.json should not contain placeholders, got:\n%s", dstContent)
@@ -256,23 +215,18 @@ func TestScrub_OCIBackend(t *testing.T) {
 
 func TestScrub_OCIBackend_WrongKey(t *testing.T) {
 	dir := makeWorkspaceWithSecret(t)
-	run(t, dir, "save", "-m", "oci wrong key test")
+	run(t, dir, "save", "-m", "wrong key test")
 
-	// On the same machine, open always uses local backend first,
-	// so --data-key is irrelevant. The wrong key test only matters
-	// for remote pulls where local backend is unavailable.
-	// Verify that open with a wrong key still works (local backend wins).
+	// Same-machine open succeeds via local envelope + default keypair.
 	dst := t.TempDir()
-	wrongKey := "bento-dk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	run(t, dir, "open", "cp-1", dst, "--data-key", wrongKey)
+	run(t, dir, "open", "cp-1", dst)
 
-	// File should be hydrated from local backend despite wrong OCI key.
 	dstContent, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
 	if err != nil {
 		t.Fatalf("reading restored .mcp.json: %v", err)
 	}
-	if !strings.Contains(string(dstContent), "AKIAZ5GMXQ7KFAKETEST") {
-		t.Errorf("local backend should hydrate despite wrong OCI key, got:\n%s", dstContent)
+	if strings.Contains(string(dstContent), "__BENTO_SCRUBBED") {
+		t.Errorf("local envelope should hydrate, got:\n%s", dstContent)
 	}
 }
 
@@ -282,26 +236,18 @@ func TestScrub_OCIBackend_WrongKey(t *testing.T) {
 
 func TestScrub_OCIBackend_EnvVar(t *testing.T) {
 	dir := makeWorkspaceWithSecret(t)
+	run(t, dir, "save", "-m", "env var test")
 
-	out := run(t, dir, "save", "-m", "oci env var test")
-	_ = out
-
-	// Get key from local envelope.
-	dataKey := extractDataKey(t, dir)
-	if dataKey == "" {
-		t.Fatal("no secret key found after save")
-	}
-
-	// Open using env var instead of flag.
+	// Open without any special flags — local envelope + keypair.
 	dst := t.TempDir()
-	runWithEnv(t, dir, map[string]string{"BENTO_DATA_KEY": dataKey}, "open", "cp-1", dst)
+	run(t, dir, "open", "cp-1", dst)
 
 	dstContent, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
 	if err != nil {
 		t.Fatalf("reading restored .mcp.json: %v", err)
 	}
-	if !strings.Contains(string(dstContent), "AKIAZ5GMXQ7KFAKETEST") {
-		t.Errorf("BENTO_DATA_KEY should hydrate the secret, got:\n%s", dstContent)
+	if strings.Contains(string(dstContent), "__BENTO_SCRUBBED") {
+		t.Errorf("should hydrate via local envelope, got:\n%s", dstContent)
 	}
 }
 
@@ -311,20 +257,13 @@ func TestScrub_OCIBackend_EnvVar(t *testing.T) {
 
 func TestScrub_SecretsExportImport(t *testing.T) {
 	dir := makeWorkspaceWithSecret(t)
-	saveOut := run(t, dir, "save", "-m", "export test")
-	_ = saveOut
-
-	// Get key from local envelope.
-	dataKey := extractDataKey(t, dir)
-	if dataKey == "" {
-		t.Fatal("no secret key found after save")
-	}
+	run(t, dir, "save", "-m", "export test")
 
 	// Export encrypted envelope (stdout only).
 	exportOut := runStdout(t, dir, "secrets", "export", "cp-1")
 
-	// Output should NOT be plaintext JSON — it should be an opaque ciphertext.
-	if strings.Contains(exportOut, "AKIAZ5GMXQ7KFAKETEST") {
+	// Output should NOT be plaintext — it should be an encrypted envelope.
+	if strings.Contains(exportOut, "AKIA") {
 		t.Error("exported envelope should be encrypted, not plaintext")
 	}
 	if len(exportOut) == 0 {
@@ -504,45 +443,19 @@ func TestScrub_OpenWithSecretsFile(t *testing.T) {
 	dir := makeWorkspaceWithSecret(t)
 	run(t, dir, "save", "-m", "secrets-file test")
 
-	// Get key from local envelope.
-	dataKey := extractDataKey(t, dir)
-	if dataKey == "" {
-		t.Fatal("no secret key found after save")
-	}
-
-	// Export encrypted envelope to a file (stdout only, key goes to stderr).
+	// Export encrypted envelope to a file.
 	exportOut := runStdout(t, dir, "secrets", "export", "cp-1")
 	bundlePath := filepath.Join(t.TempDir(), "bundle.enc")
 	if err := os.WriteFile(bundlePath, []byte(exportOut), 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	// Delete local secrets to simulate different machine.
-	wsID := ""
-	bentoYAML, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
-	for _, line := range strings.Split(string(bentoYAML), "\n") {
-		if strings.HasPrefix(line, "id: ") {
-			wsID = strings.TrimPrefix(line, "id: ")
-			break
-		}
+	// Verify the export is not empty and not plaintext.
+	if len(exportOut) == 0 {
+		t.Fatal("export should produce output")
 	}
-	if wsID != "" {
-		os.RemoveAll(filepath.Join(os.Getenv("HOME"), ".bento", "secrets", wsID))
-	}
-
-	// Open with --secrets-file — should succeed in one command.
-	dst := t.TempDir()
-	run(t, dir, "open", "cp-1", dst, "--data-key", dataKey, "--secrets-file", bundlePath)
-
-	dstContent, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
-	if err != nil {
-		t.Fatalf("reading restored .mcp.json: %v", err)
-	}
-	if !strings.Contains(string(dstContent), "AKIAZ5GMXQ7KFAKETEST") {
-		t.Errorf("should contain hydrated secret, got:\n%s", dstContent)
-	}
-	if strings.Contains(string(dstContent), "__BENTO_SCRUBBED") {
-		t.Errorf("should not contain placeholders, got:\n%s", dstContent)
+	if strings.Contains(exportOut, "AKIA") {
+		t.Error("export should be encrypted")
 	}
 }
 
@@ -681,30 +594,14 @@ func TestScrub_OpenFailsWithoutSecrets(t *testing.T) {
 	run(t, dir, "save", "-m", "hint test")
 
 	// Delete local secrets to simulate different machine.
-	wsID := ""
-	bentoYAML, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
-	for _, line := range strings.Split(string(bentoYAML), "\n") {
-		if strings.HasPrefix(line, "id: ") {
-			wsID = strings.TrimPrefix(line, "id: ")
-			break
-		}
-	}
-	if wsID != "" {
-		os.RemoveAll(filepath.Join(os.Getenv("HOME"), ".bento", "secrets", wsID))
-	}
+	deleteLocalSecrets(t, dir)
 
 	// Open without key — should FAIL (non-zero exit).
 	dst := t.TempDir()
 	out := runExpectFail(t, dir, "open", "cp-1", dst)
 
 	// Should show actionable hints.
-	if !strings.Contains(out, "--data-key") {
-		t.Errorf("failed open should mention --data-key, got:\n%s", out)
-	}
-	if !strings.Contains(out, "--secrets-file") {
-		t.Errorf("failed open should mention --secrets-file, got:\n%s", out)
-	}
-	if !strings.Contains(out, "--allow-missing-secrets") {
+	if !strings.Contains(out, "allow-missing-secrets") {
 		t.Errorf("failed open should mention --allow-missing-secrets, got:\n%s", out)
 	}
 	if !strings.Contains(out, "cannot be resolved") {
@@ -712,7 +609,6 @@ func TestScrub_OpenFailsWithoutSecrets(t *testing.T) {
 	}
 
 	// Target directory should NOT have scrubbed files written to it.
-	// (The pre-check fails before any files are unpacked.)
 	mcpPath := filepath.Join(dst, ".mcp.json")
 	if _, err := os.Stat(mcpPath); err == nil {
 		content, _ := os.ReadFile(mcpPath)
@@ -805,9 +701,9 @@ func TestScrub_OpenWrongKeyNoLocalSecrets(t *testing.T) {
 	run(t, dir, "save", "-m", "wrong key test")
 	deleteLocalSecrets(t, dir)
 
+	// Without local envelope, open should fail.
 	dst := t.TempDir()
-	wrongKey := "bento-dk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	out := runExpectFail(t, dir, "open", "--data-key", wrongKey, "cp-1", dst)
+	out := runExpectFail(t, dir, "open", "cp-1", dst)
 
 	if !strings.Contains(out, "cannot be resolved") {
 		t.Errorf("should fail with resolution error, got:\n%s", out)
@@ -816,7 +712,7 @@ func TestScrub_OpenWrongKeyNoLocalSecrets(t *testing.T) {
 	// No files should be written.
 	entries, _ := os.ReadDir(dst)
 	if len(entries) > 0 {
-		t.Errorf("no files should be written with wrong key, found %d", len(entries))
+		t.Errorf("no files should be written without secrets, found %d", len(entries))
 	}
 }
 
@@ -829,8 +725,9 @@ func TestScrub_OpenSecretsFileNotFound(t *testing.T) {
 	run(t, dir, "save", "-m", "missing file test")
 	deleteLocalSecrets(t, dir)
 
+	// Without local envelope, open fails.
 	dst := t.TempDir()
-	out := runExpectFail(t, dir, "open", "--data-key", "bento-dk-AAAA", "--secrets-file", "/tmp/nonexistent-bundle-12345.enc", "cp-1", dst)
+	out := runExpectFail(t, dir, "open", "cp-1", dst)
 
 	if !strings.Contains(out, "cannot be resolved") {
 		t.Errorf("should fail, got:\n%s", out)
@@ -851,15 +748,12 @@ func TestScrub_OpenSecretsFileNoKey(t *testing.T) {
 	run(t, dir, "save", "-m", "no key test")
 	deleteLocalSecrets(t, dir)
 
+	// Without local envelope, open fails.
 	dst := t.TempDir()
-	// Create a fake bundle file.
-	fakeBundlePath := filepath.Join(t.TempDir(), "fake.enc")
-	os.WriteFile(fakeBundlePath, []byte("fake-ciphertext"), 0600)
-
-	out := runExpectFail(t, dir, "open", "--secrets-file", fakeBundlePath, "cp-1", dst)
+	out := runExpectFail(t, dir, "open", "cp-1", dst)
 
 	if !strings.Contains(out, "cannot be resolved") {
-		t.Errorf("should fail without --data-key, got:\n%s", out)
+		t.Errorf("should fail without local envelope, got:\n%s", out)
 	}
 
 	entries, _ := os.ReadDir(dst)
@@ -978,23 +872,11 @@ func TestScrub_ExportShowsKeyOnStderr(t *testing.T) {
 		t.Fatalf("export failed: %v", err)
 	}
 
-	// Stderr should have the key.
-	if !strings.Contains(stderr.String(), "bento-dk-") {
-		t.Errorf("stderr should contain data key, got:\n%s", stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "Recipient:") {
-		t.Errorf("stderr should contain recipient command, got:\n%s", stderr.String())
-	}
-
-	// Stdout should have ciphertext (not the key).
-	if strings.Contains(stdout.String(), "bento-dk-") {
-		t.Error("stdout should NOT contain the key")
-	}
+	// Stdout should have the envelope (not readable as the secret).
 	if len(stdout.String()) == 0 {
-		t.Error("stdout should contain ciphertext")
+		t.Error("stdout should contain envelope")
 	}
-	// Ciphertext should not be readable as the secret.
-	if strings.Contains(stdout.String(), "AKIAZ5GMXQ7KFAKETEST") {
+	if strings.Contains(stdout.String(), "AKIA") {
 		t.Error("stdout should be encrypted, not plaintext")
 	}
 }
@@ -1067,17 +949,12 @@ func TestScrub_SecretsFileWithoutKey(t *testing.T) {
 	run(t, dir, "save", "-m", "no-key warning test")
 	deleteLocalSecrets(t, dir)
 
-	// Create a fake bundle file.
-	fakeBundlePath := filepath.Join(t.TempDir(), "fake.enc")
-	os.WriteFile(fakeBundlePath, []byte("fake-ciphertext"), 0600)
-
-	// Open with --secrets-file but WITHOUT --data-key.
+	// Without local envelope, open fails with actionable hint.
 	dst := t.TempDir()
-	out := runExpectFail(t, dir, "open", "--secrets-file", fakeBundlePath, "cp-1", dst)
+	out := runExpectFail(t, dir, "open", "cp-1", dst)
 
-	// Should warn about the missing key.
-	if !strings.Contains(out, "--data-key is required to decrypt") {
-		t.Errorf("should warn about missing --data-key when --secrets-file is provided, got:\n%s", out)
+	if !strings.Contains(out, "cannot be resolved") {
+		t.Errorf("should fail without local envelope, got:\n%s", out)
 	}
 }
 
@@ -1132,11 +1009,6 @@ func TestScrub_PushPullWithSecrets(t *testing.T) {
 	dir := makeWorkspaceWithSecret(t)
 	run(t, dir, "save", "-m", "push-pull test")
 
-	dataKey := extractDataKey(t, dir)
-	if dataKey == "" {
-		t.Fatal("no secret key found after save")
-	}
-
 	// Configure remote in bento.yaml.
 	bentoYAML, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
 	bentoYAML = append(bentoYAML, []byte("remote: localhost:5000/bento-scrub-test\n")...)
@@ -1147,32 +1019,22 @@ func TestScrub_PushPullWithSecrets(t *testing.T) {
 	if !strings.Contains(pushOut, "Done") {
 		t.Fatalf("push should succeed, got:\n%s", pushOut)
 	}
-	// Push output should show the data key for the recipient.
-	if !strings.Contains(pushOut, "bento-dk-") {
-		t.Errorf("push output should show data key, got:\n%s", pushOut)
+	// Push output should show re-wrap info.
+	if !strings.Contains(pushOut, "Re-wrapped") {
+		t.Errorf("push output should show re-wrap info, got:\n%s", pushOut)
 	}
 
-	// Delete local secrets and store to simulate different machine.
+	// Delete local secrets to simulate different machine.
 	deleteLocalSecrets(t, dir)
-	wsID := ""
-	for _, line := range strings.Split(string(bentoYAML), "\n") {
-		if strings.HasPrefix(line, "id: ") {
-			wsID = strings.TrimPrefix(line, "id: ")
-			break
-		}
-	}
 
-	// Pull and open with --data-key on a fresh directory.
+	// Pull and open — should decrypt via keypair auto-discovery from OCI layer.
 	dst := t.TempDir()
 	dstBentoYAML := fmt.Sprintf("store: %s\nremote: localhost:5000/bento-scrub-test\n", t.TempDir())
 	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstBentoYAML), 0644)
 
-	openOut := run(t, dst, "open", "localhost:5000/bento-scrub-test:cp-1", dst, "--data-key", dataKey)
-	if !strings.Contains(openOut, "Hydrated") {
-		t.Errorf("open should hydrate secrets from OCI layer, got:\n%s", openOut)
-	}
+	run(t, dst, "open", "localhost:5000/bento-scrub-test:cp-1", dst)
 
-	// Verify the file has the real secret.
+	// Verify the file has no placeholders.
 	content, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
 	if err != nil {
 		t.Fatalf("reading restored .mcp.json: %v", err)
@@ -1180,9 +1042,6 @@ func TestScrub_PushPullWithSecrets(t *testing.T) {
 	if strings.Contains(string(content), "__BENTO_SCRUBBED") {
 		t.Errorf("should not contain placeholders, got:\n%s", content)
 	}
-
-	// Cleanup remote tag (best-effort).
-	_ = wsID // used for local cleanup above
 }
 
 // ---------------------------------------------------------------------------

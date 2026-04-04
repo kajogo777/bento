@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/kajogo777/bento/internal/config"
+	"github.com/kajogo777/bento/internal/keys"
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/kajogo777/bento/internal/registry"
 	"github.com/kajogo777/bento/internal/secrets/backend"
@@ -20,6 +21,7 @@ func newPushCmd() *cobra.Command {
 	var (
 		flagTag            string
 		flagIncludeSecrets bool
+		flagSender         string
 		flagRecipients     []string
 	)
 
@@ -33,13 +35,16 @@ If the checkpoint has scrubbed secrets, use --include-secrets to pack them
 (encrypted) into the OCI artifact. Without it, secrets are omitted and the
 recipient must obtain them separately.
 
-Included secrets are always encrypted — they can only be read by recipients
-whose public keys were used during save (via bento.yaml or --recipient flags).
+Secrets are encrypted and wrapped for the configured sender and recipients.
 The sender is always included as a recipient automatically.
+
+Sender and recipients can be configured in bento.yaml or overridden with
+--sender and --recipient flags. CLI flags take precedence.
 
 Examples:
   bento push
   bento push --include-secrets
+  bento push --include-secrets --sender work --recipient alice
   bento push --tag cp-3`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -108,7 +113,15 @@ Examples:
 					}
 				}
 
-				if !hasSecretsLayer {
+				if !hasSecretsLayer || len(flagRecipients) > 0 || flagSender != "" {
+					// Remove existing secrets layer if re-wrapping.
+					if hasSecretsLayer {
+						localStore := store.(*registry.LocalStore)
+						if removeErr := localStore.RemoveSecretsLayer(tag); removeErr != nil {
+							return fmt.Errorf("removing existing secrets layer: %w", removeErr)
+						}
+					}
+
 					// Read the encrypted envelope from local storage.
 					cpTag := fmt.Sprintf("cp-%d", pushCheckpoint)
 					envKey := cfg.ID + "/" + cpTag + ".enc"
@@ -119,25 +132,87 @@ Examples:
 						return fmt.Errorf("no encrypted envelope found for %s — save with secrets first", cpTag)
 					}
 
-					// Determine what to pack: multi-recipient envelope or old-format ciphertext.
-					var secretsContent []byte
-					layerAnnotations := map[string]string{
-						manifest.AnnotationTitle:            "secrets",
-						manifest.AnnotationSecretsEncrypted: "true",
-					}
-
-					if envJSON := envelope["envelope"]; envJSON != "" {
-						// Multi-recipient envelope — pack the full JSON.
-						secretsContent = []byte(envJSON)
-						layerAnnotations[manifest.AnnotationSecretsKeyWrapping] = "curve25519"
-						// Extract sender from envelope for annotation.
-						var env backend.MultiRecipientEnvelope
-						if json.Unmarshal([]byte(envJSON), &env) == nil {
-							layerAnnotations[manifest.AnnotationSecretsSender] = env.Sender
-						}
-					} else {
+					envJSON := envelope["envelope"]
+					if envJSON == "" {
 						return fmt.Errorf("no wrapped envelope found for %s — re-save to generate one", cpTag)
 					}
+
+					// Determine sender keypair for push.
+					var senderPub, senderPriv [32]byte
+					senderName := flagSender
+					if senderName == "" {
+						senderName = cfg.Sender
+					}
+					if senderName != "" {
+						var kpErr error
+						senderPub, senderPriv, kpErr = keys.LoadKeypair(senderName)
+						if kpErr != nil {
+							return fmt.Errorf("loading sender keypair %q: %w", senderName, kpErr)
+						}
+					} else {
+						var kpErr error
+						senderPub, senderPriv, _, kpErr = keys.LoadOrCreateKeypair()
+						if kpErr != nil {
+							return fmt.Errorf("loading default keypair: %w", kpErr)
+						}
+					}
+
+					// Unwrap DEK from save-time envelope using default keypair.
+					// If no sender was specified, the sender IS the default keypair — reuse it.
+					defaultPub, defaultPriv := senderPub, senderPriv
+					if senderName != "" {
+						var defaultErr error
+						defaultPub, defaultPriv, defaultErr = keys.LoadDefaultKeypair()
+						if defaultErr != nil {
+							return fmt.Errorf("loading default keypair for unwrap: %w", defaultErr)
+						}
+					}
+
+					// Resolve recipients: bento.yaml + CLI flags + sender as self.
+					var recipientSpecs []string
+					for _, r := range cfg.Recipients {
+						recipientSpecs = append(recipientSpecs, r.Name)
+					}
+					recipientSpecs = append(recipientSpecs, flagRecipients...)
+
+					var configRecipients []keys.ConfigRecipient
+					for _, r := range cfg.Recipients {
+						configRecipients = append(configRecipients, keys.ConfigRecipient{
+							Name: r.Name,
+							Key:  r.Key,
+						})
+					}
+
+					recipientPubs, resolveErr := keys.ResolveRecipients(recipientSpecs, configRecipients, senderPub, "")
+					if resolveErr != nil {
+						return fmt.Errorf("resolving recipients: %w", resolveErr)
+					}
+
+					// Re-wrap the envelope for the push sender and recipients.
+					newEnvelope, rewrapErr := backend.RewrapEnvelope(
+						[]byte(envJSON),
+						defaultPub, defaultPriv,
+						senderPub, senderPriv,
+						recipientPubs,
+					)
+					if rewrapErr != nil {
+						return fmt.Errorf("re-wrapping envelope: %w", rewrapErr)
+					}
+
+					secretsContent, marshalErr := json.Marshal(newEnvelope)
+					if marshalErr != nil {
+						return fmt.Errorf("marshaling re-wrapped envelope: %w", marshalErr)
+					}
+
+					layerAnnotations := map[string]string{
+						manifest.AnnotationTitle:              "secrets",
+						manifest.AnnotationSecretsEncrypted:   "true",
+						manifest.AnnotationSecretsKeyWrapping: "curve25519",
+						manifest.AnnotationSecretsSender:      newEnvelope.Sender,
+					}
+
+					fmt.Printf("Re-wrapped secrets for %d recipient(s)\n", len(recipientPubs))
+					fmt.Printf("Sealed by: %s\n", newEnvelope.Sender)
 
 					// Pack as OCI layer and inject into the checkpoint.
 					packed, packErr := workspace.PackBytesToTempLayer("secrets.enc", secretsContent)
@@ -207,7 +282,8 @@ Examples:
 
 	cmd.Flags().StringVar(&flagTag, "tag", "", "push only this tag (default: push all)")
 	cmd.Flags().BoolVar(&flagIncludeSecrets, "include-secrets", false, "include encrypted secret envelope in the OCI artifact")
-	cmd.Flags().StringArrayVar(&flagRecipients, "recipient", nil, "recipient public key or name for key wrapping (repeatable)")
+	cmd.Flags().StringVar(&flagSender, "sender", "", "keypair name to use as sender (overrides bento.yaml sender)")
+	cmd.Flags().StringArrayVar(&flagRecipients, "recipient", nil, "additional recipient public key or name (repeatable)")
 
 	return cmd
 }

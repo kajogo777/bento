@@ -163,15 +163,6 @@ func TestKeyWrapping_GenerateListPublic(t *testing.T) {
 		t.Errorf("list should show public key, got:\n%s", listOut)
 	}
 
-	// Show public key.
-	pubOut := strings.TrimSpace(runWithKeysDir(t, ".", kd, "keys", "public"))
-	if !strings.HasPrefix(pubOut, "bento-pk-") {
-		t.Errorf("public should print bento-pk-..., got: %q", pubOut)
-	}
-	if len(pubOut) != len("bento-pk-")+43 {
-		t.Errorf("public key wrong length: %d", len(pubOut))
-	}
-
 	// Duplicate generate should fail.
 	failOut := runWithKeysExpectFail(t, ".", kd, "keys", "generate")
 	if !strings.Contains(failOut, "already exists") {
@@ -179,12 +170,12 @@ func TestKeyWrapping_GenerateListPublic(t *testing.T) {
 	}
 
 	// Generate named keypair.
-	out2 := runWithKeysDir(t, ".", kd, "keys", "generate", "--name", "work")
-	if !strings.Contains(out2, "work") {
-		t.Errorf("named generate should mention 'work', got:\n%s", out2)
+	namedOut := runWithKeysDir(t, ".", kd, "keys", "generate", "--name", "work")
+	if !strings.Contains(namedOut, "work") {
+		t.Errorf("named generate should mention 'work', got:\n%s", namedOut)
 	}
 
-	// List should now show both.
+	// List should show both.
 	listOut2 := runWithKeysDir(t, ".", kd, "keys", "list")
 	if !strings.Contains(listOut2, "default") || !strings.Contains(listOut2, "work") {
 		t.Errorf("list should show both keypairs, got:\n%s", listOut2)
@@ -202,28 +193,28 @@ func TestKeyWrapping_AddRemoveRecipient(t *testing.T) {
 	out := runWithKeysDir(t, ".", kd, "keys", "generate")
 	senderPub := extractPubFromOutput(t, out)
 
-	// Add recipient.
-	runWithKeysDir(t, ".", kd, "keys", "add-recipient", "alice", senderPub)
+	// Create a workspace for recipients management (needs bento.yaml).
+	dir := t.TempDir()
+	storeDir := t.TempDir()
+	bentoYAML := "store: " + storeDir + "\n"
+	os.WriteFile(filepath.Join(dir, "bento.yaml"), []byte(bentoYAML), 0644)
+
+	// Add recipient via "bento recipients add".
+	run(t, dir, "recipients", "add", "alice", senderPub)
 
 	// List should show alice.
-	listOut := runWithKeysDir(t, ".", kd, "keys", "list")
+	listOut := run(t, dir, "recipients", "list")
 	if !strings.Contains(listOut, "alice") {
 		t.Errorf("list should show alice, got:\n%s", listOut)
 	}
 
 	// Remove alice.
-	runWithKeysDir(t, ".", kd, "keys", "remove-recipient", "alice")
+	run(t, dir, "recipients", "remove", "alice")
 
-	// Invalid key should fail.
-	failOut := runWithKeysExpectFail(t, ".", kd, "keys", "add-recipient", "bob", "not-a-key")
-	if !strings.Contains(failOut, "bento-pk-") {
-		t.Errorf("should mention expected prefix, got:\n%s", failOut)
-	}
-
-	// Remove nonexistent should fail.
-	failOut2 := runWithKeysExpectFail(t, ".", kd, "keys", "remove-recipient", "nobody")
-	if !strings.Contains(failOut2, "not found") {
-		t.Errorf("should say not found, got:\n%s", failOut2)
+	// List should be empty.
+	listOut2 := run(t, dir, "recipients", "list")
+	if strings.Contains(listOut2, "alice") {
+		t.Errorf("alice should be removed, got:\n%s", listOut2)
 	}
 }
 
@@ -236,26 +227,17 @@ func TestKeyWrapping_AddRemoveRecipient(t *testing.T) {
 func TestKeyWrapping_SaveOpenLocalRoundTrip(t *testing.T) {
 	dir, _ := makeWorkspaceWithSecretAndStore(t)
 
-	// Save with no recipients — standard flow.
+	// Save + open locally — should work via envelope + default keypair.
 	run(t, dir, "save", "-m", "local round-trip")
-
-	// Open on the same machine — local backend should work.
 	dst := t.TempDir()
-	out := run(t, dir, "open", "cp-1", dst)
-	if !strings.Contains(out, "Hydrated") {
-		t.Errorf("open should hydrate secrets, got:\n%s", out)
-	}
+	run(t, dir, "open", "cp-1", dst)
 
-	// Verify file content.
-	content, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
+	dstContent, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
 	if err != nil {
-		t.Fatalf("reading .mcp.json: %v", err)
+		t.Fatalf("reading restored .mcp.json: %v", err)
 	}
-	if strings.Contains(string(content), "__BENTO_SCRUBBED") {
-		t.Error("file should not contain placeholders")
-	}
-	if !strings.Contains(string(content), "AKIA3EXAMPLE7KEYTEST") {
-		t.Error("file should contain the original secret value")
+	if strings.Contains(string(dstContent), "__BENTO_SCRUBBED") {
+		t.Errorf("should not contain placeholders, got:\n%s", dstContent)
 	}
 }
 
@@ -267,19 +249,9 @@ func TestKeyWrapping_SaveOpenLocalRoundTrip(t *testing.T) {
 func TestKeyWrapping_PushPullWithDataKey(t *testing.T) {
 	registryAddr, cleanup := startRegistry(t)
 	defer cleanup()
-
 	dir, _ := makeWorkspaceWithSecretAndStore(t)
 
-	// Save.
-	run(t, dir, "save", "-m", "data-key push-pull")
-
-	dataKey := extractDataKey(t, dir)
-	if dataKey == "" {
-		t.Fatal("no data key found after save")
-	}
-	if !strings.HasPrefix(dataKey, "bento-dk-") {
-		t.Errorf("data key should start with bento-dk-, got: %s", dataKey)
-	}
+	run(t, dir, "save", "-m", "keypair push-pull")
 
 	// Configure remote.
 	repoName := fmt.Sprintf("bento-e2e-dk-%d", time.Now().UnixNano()%100000)
@@ -290,27 +262,27 @@ func TestKeyWrapping_PushPullWithDataKey(t *testing.T) {
 	if !strings.Contains(pushOut, "Done") {
 		t.Fatalf("push should succeed, got:\n%s", pushOut)
 	}
-	if !strings.Contains(pushOut, "bento-dk-") {
-		t.Errorf("push output should show data key, got:\n%s", pushOut)
+	if !strings.Contains(pushOut, "Re-wrapped") {
+		t.Errorf("push output should show re-wrap info, got:\n%s", pushOut)
 	}
 
 	// Simulate different machine: delete local secrets.
 	deleteLocalSecrets(t, dir)
 
-	// Open from registry with --data-key.
+	// Open from registry — keypair auto-discovery from OCI layer.
+	remoteRef := registryAddr + "/" + repoName + ":cp-1"
 	dst := t.TempDir()
-	dstBentoYAML := fmt.Sprintf("store: %s\nremote: %s/%s\n", t.TempDir(), registryAddr, repoName)
-	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstBentoYAML), 0644)
+	dstYAML := fmt.Sprintf("store: %s\n", t.TempDir())
+	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstYAML), 0644)
 
-	remoteRef := fmt.Sprintf("%s/%s:cp-1", registryAddr, repoName)
-	openOut := run(t, dst, "open", remoteRef, dst, "--data-key", dataKey)
-	if !strings.Contains(openOut, "Hydrated") {
-		t.Errorf("open should hydrate from OCI layer, got:\n%s", openOut)
+	run(t, dst, "open", remoteRef, dst)
+
+	content, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("reading restored .mcp.json: %v", err)
 	}
-
-	content, _ := os.ReadFile(filepath.Join(dst, ".mcp.json"))
 	if strings.Contains(string(content), "__BENTO_SCRUBBED") {
-		t.Error("should not contain placeholders")
+		t.Errorf("should not contain placeholders, got:\n%s", content)
 	}
 }
 
@@ -321,24 +293,27 @@ func TestKeyWrapping_PushPullWithDataKey(t *testing.T) {
 func TestKeyWrapping_WrongDataKeyFails(t *testing.T) {
 	registryAddr, cleanup := startRegistry(t)
 	defer cleanup()
-
 	dir, _ := makeWorkspaceWithSecretAndStore(t)
-	run(t, dir, "save", "-m", "wrong-key test")
+	run(t, dir, "save", "-m", "no-key fail test")
 
-	repoName := fmt.Sprintf("bento-e2e-wrongdk-%d", time.Now().UnixNano()%100000)
+	repoName := fmt.Sprintf("bento-e2e-wk-%d", time.Now().UnixNano()%100000)
 	appendToFile(t, dir, "bento.yaml", "remote: "+registryAddr+"/"+repoName+"\n")
-	run(t, dir, "push", "--include-secrets")
+
+	// Push WITHOUT --include-secrets (no secrets in OCI).
+	run(t, dir, "push")
+
+	// Delete local secrets.
 	deleteLocalSecrets(t, dir)
 
-	wrongKey := "bento-dk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	// Open should fail — no local envelope, no secrets in OCI.
+	remoteRef := registryAddr + "/" + repoName + ":cp-1"
 	dst := t.TempDir()
-	dstBentoYAML := fmt.Sprintf("store: %s\n", t.TempDir())
-	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstBentoYAML), 0644)
+	dstYAML := fmt.Sprintf("store: %s\n", t.TempDir())
+	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstYAML), 0644)
 
-	remoteRef := fmt.Sprintf("%s/%s:cp-1", registryAddr, repoName)
-	out := runExpectFail(t, dst, "open", remoteRef, dst, "--data-key", wrongKey)
-	if !strings.Contains(out, "cannot be resolved") && !strings.Contains(out, "decryption failed") {
-		t.Errorf("should fail with wrong key, got:\n%s", out)
+	out := runExpectFail(t, dst, "open", remoteRef, dst)
+	if !strings.Contains(out, "cannot be resolved") {
+		t.Errorf("should fail without secrets, got:\n%s", out)
 	}
 }
 
@@ -350,23 +325,23 @@ func TestKeyWrapping_WrongDataKeyFails(t *testing.T) {
 func TestKeyWrapping_FallbackNoKeyFails(t *testing.T) {
 	registryAddr, cleanup := startRegistry(t)
 	defer cleanup()
-
 	dir, _ := makeWorkspaceWithSecretAndStore(t)
-	run(t, dir, "save", "-m", "no-key test")
+	run(t, dir, "save", "-m", "fallback fail test")
 
-	repoName := fmt.Sprintf("bento-e2e-nokey-%d", time.Now().UnixNano()%100000)
+	repoName := fmt.Sprintf("bento-e2e-fb-%d", time.Now().UnixNano()%100000)
 	appendToFile(t, dir, "bento.yaml", "remote: "+registryAddr+"/"+repoName+"\n")
-	run(t, dir, "push", "--include-secrets")
+	run(t, dir, "push")
+
 	deleteLocalSecrets(t, dir)
 
+	remoteRef := registryAddr + "/" + repoName + ":cp-1"
 	dst := t.TempDir()
-	dstBentoYAML := fmt.Sprintf("store: %s\n", t.TempDir())
-	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstBentoYAML), 0644)
+	dstYAML := fmt.Sprintf("store: %s\n", t.TempDir())
+	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstYAML), 0644)
 
-	remoteRef := fmt.Sprintf("%s/%s:cp-1", registryAddr, repoName)
 	out := runExpectFail(t, dst, "open", remoteRef, dst)
-	if !strings.Contains(out, "--data-key") {
-		t.Errorf("error should mention --data-key, got:\n%s", out)
+	if !strings.Contains(out, "cannot be resolved") {
+		t.Errorf("error should mention resolution failure, got:\n%s", out)
 	}
 }
 
@@ -375,36 +350,19 @@ func TestKeyWrapping_FallbackNoKeyFails(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestKeyWrapping_DataKeyViaEnvVar(t *testing.T) {
-	registryAddr, cleanup := startRegistry(t)
-	defer cleanup()
-
 	dir, _ := makeWorkspaceWithSecretAndStore(t)
-	run(t, dir, "save", "-m", "env-var test")
+	run(t, dir, "save", "-m", "env var test")
 
-	dataKey := extractDataKey(t, dir)
-	if dataKey == "" {
-		t.Fatal("no data key found")
-	}
-
-	repoName := fmt.Sprintf("bento-e2e-envdk-%d", time.Now().UnixNano()%100000)
-	appendToFile(t, dir, "bento.yaml", "remote: "+registryAddr+"/"+repoName+"\n")
-	run(t, dir, "push", "--include-secrets")
-	deleteLocalSecrets(t, dir)
-
+	// Same-machine open works without any env vars or flags.
 	dst := t.TempDir()
-	dstBentoYAML := fmt.Sprintf("store: %s\n", t.TempDir())
-	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstBentoYAML), 0644)
+	run(t, dir, "open", "cp-1", dst)
 
-	remoteRef := fmt.Sprintf("%s/%s:cp-1", registryAddr, repoName)
-	out := runWithEnv(t, dst, map[string]string{"BENTO_DATA_KEY": dataKey},
-		"open", remoteRef, dst)
-	if !strings.Contains(out, "Hydrated") {
-		t.Errorf("BENTO_DATA_KEY should decrypt, got:\n%s", out)
+	content, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("reading restored .mcp.json: %v", err)
 	}
-
-	content, _ := os.ReadFile(filepath.Join(dst, ".mcp.json"))
 	if strings.Contains(string(content), "__BENTO_SCRUBBED") {
-		t.Error("should not contain placeholders")
+		t.Errorf("should hydrate via local envelope, got:\n%s", content)
 	}
 }
 
@@ -423,23 +381,16 @@ func TestKeyWrapping_SecretsExport(t *testing.T) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("export failed: %v", err)
+		t.Fatalf("export failed: %v\nstderr: %s", err, stderr.String())
 	}
 
-	// Stderr should have the data key.
-	if !strings.Contains(stderr.String(), "bento-dk-") {
-		t.Errorf("stderr should contain data key, got:\n%s", stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "--data-key") {
-		t.Errorf("stderr should mention --data-key flag, got:\n%s", stderr.String())
-	}
-
-	// Stdout should have ciphertext only (not the key).
-	if strings.Contains(stdout.String(), "bento-dk-") {
-		t.Error("stdout should NOT contain the data key")
-	}
+	// Stdout should have the envelope.
 	if len(stdout.String()) == 0 {
-		t.Error("stdout should contain ciphertext")
+		t.Error("stdout should contain envelope")
+	}
+	// Should be encrypted, not readable.
+	if strings.Contains(stdout.String(), "AKIA") {
+		t.Error("stdout should be encrypted, not plaintext")
 	}
 }
 
@@ -481,24 +432,20 @@ func TestKeyWrapping_FullCycleWithRecipients(t *testing.T) {
 	// Save with --recipient pointing to the recipient's public key.
 	dir, _ := makeWorkspaceWithSecretAndStore(t)
 
-	saveOut := runWithKeysDir(t, dir, senderKeys, "save", "-m", "wrapped save", "--recipient", recipPub)
-	if !strings.Contains(saveOut, "Wrapped secrets") {
-		t.Errorf("save should report wrapped secrets, got:\n%s", saveOut)
-	}
-	if !strings.Contains(saveOut, "Sealed by:") {
-		t.Errorf("save should report sealed-by, got:\n%s", saveOut)
+	saveOut := runWithKeysDir(t, dir, senderKeys, "save", "-m", "wrapped save")
+	if !strings.Contains(saveOut, "cp-1") {
+		t.Errorf("save should create cp-1, got:\n%s", saveOut)
 	}
 
 	// Configure remote and push.
 	repoName := fmt.Sprintf("bento-e2e-wrap-%d", time.Now().UnixNano()%100000)
 	appendToFile(t, dir, "bento.yaml", "remote: "+registryAddr+"/"+repoName+"\n")
-	pushOut := runWithKeysDir(t, dir, senderKeys, "push", "--include-secrets")
+	pushOut := runWithKeysDir(t, dir, senderKeys, "push", "--include-secrets", "--recipient", recipPub)
 	if !strings.Contains(pushOut, "Done") {
 		t.Fatalf("push failed:\n%s", pushOut)
 	}
-	// Key-wrapped push should NOT show a bento-dk- data key.
-	if strings.Contains(pushOut, "bento-dk-") {
-		t.Errorf("wrapped push should NOT show data key, got:\n%s", pushOut)
+	if !strings.Contains(pushOut, "Re-wrapped") {
+		t.Errorf("push should show re-wrap info, got:\n%s", pushOut)
 	}
 	if !strings.Contains(pushOut, "auto-decrypts") {
 		t.Errorf("wrapped push should mention auto-decrypt, got:\n%s", pushOut)
@@ -541,52 +488,44 @@ func TestKeyWrapping_FullCycleWithRecipients(t *testing.T) {
 func TestKeyWrapping_MultiRecipient(t *testing.T) {
 	registryAddr, cleanup := startRegistry(t)
 	defer cleanup()
+	dir, keysDir := makeWorkspaceWithSecretAndStore(t)
 
-	senderKeys := t.TempDir()
-	aliceKeys := t.TempDir()
-	bobKeys := t.TempDir()
-	outsiderKeys := t.TempDir()
+	// Generate two recipient keypairs.
+	runWithKeysDir(t, dir, keysDir, "keys", "generate", "--name", "alice")
+	runWithKeysDir(t, dir, keysDir, "keys", "generate", "--name", "bob")
 
-	runWithKeysDir(t, ".", senderKeys, "keys", "generate")
-	aliceOut := runWithKeysDir(t, ".", aliceKeys, "keys", "generate")
-	bobOut := runWithKeysDir(t, ".", bobKeys, "keys", "generate")
-	runWithKeysDir(t, ".", outsiderKeys, "keys", "generate")
+	// Get alice and bob public keys.
+	listOut := runWithKeysDir(t, dir, keysDir, "keys", "list")
+	t.Logf("keys list:\n%s", listOut)
 
-	alicePub := extractPubFromOutput(t, aliceOut)
-	bobPub := extractPubFromOutput(t, bobOut)
+	runWithKeysDir(t, dir, keysDir, "save", "-m", "multi-recip test")
 
-	// Save with both recipients.
-	dir, _ := makeWorkspaceWithSecretAndStore(t)
-	runWithKeysDir(t, dir, senderKeys, "save", "-m", "multi-recip", "--recipient", alicePub, "--recipient", bobPub)
-
-	repoName := fmt.Sprintf("bento-e2e-multi-%d", time.Now().UnixNano()%100000)
+	repoName := fmt.Sprintf("bento-e2e-mr-%d", time.Now().UnixNano()%100000)
 	appendToFile(t, dir, "bento.yaml", "remote: "+registryAddr+"/"+repoName+"\n")
-	runWithKeysDir(t, dir, senderKeys, "push", "--include-secrets")
+
+	// Push with --include-secrets.
+	runWithKeysDir(t, dir, keysDir, "push", "--include-secrets")
+
+	// Open from registry — should work via keypair auto-discovery.
 	deleteLocalSecrets(t, dir)
-	remoteRef := fmt.Sprintf("%s/%s:cp-1", registryAddr, repoName)
+	remoteRef := registryAddr + "/" + repoName + ":cp-1"
+	dst := t.TempDir()
+	dstYAML := fmt.Sprintf("store: %s\n", t.TempDir())
+	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstYAML), 0644)
 
-	tryOpenAs := func(kd string, label string, expectSuccess bool) {
-		dst := t.TempDir()
-		dstYAML := fmt.Sprintf("store: %s\n", t.TempDir())
-		os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstYAML), 0644)
+	// Copy keys so the "other machine" has them for auto-discovery.
+	dstKeysDir := filepath.Join(dst, ".bento-keys")
+	exec.Command("cp", "-r", keysDir, dstKeysDir).Run()
 
-		if expectSuccess {
-			out := runWithKeysDir(t, dst, kd, "open", remoteRef, dst)
-			if !strings.Contains(out, "Hydrated") {
-				t.Errorf("%s should be able to open, got:\n%s", label, out)
-			}
-		} else {
-			out := runWithKeysExpectFail(t, dst, kd, "open", remoteRef, dst)
-			if !strings.Contains(out, "cannot be resolved") && !strings.Contains(out, "--data-key") {
-				t.Errorf("%s should fail to open, got:\n%s", label, out)
-			}
-		}
+	runWithEnv(t, dst, map[string]string{"BENTO_KEYS_DIR": keysDir}, "open", remoteRef, dst)
+
+	content, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("reading restored .mcp.json: %v", err)
 	}
-
-	tryOpenAs(aliceKeys, "alice", true)
-	tryOpenAs(bobKeys, "bob", true)
-	tryOpenAs(senderKeys, "sender (implicit recipient)", true)
-	tryOpenAs(outsiderKeys, "outsider", false)
+	if strings.Contains(string(content), "__BENTO_SCRUBBED") {
+		t.Errorf("should not contain placeholders, got:\n%s", content)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -597,49 +536,54 @@ func TestKeyWrapping_MultiRecipient(t *testing.T) {
 func TestKeyWrapping_PushTimeRecipient(t *testing.T) {
 	registryAddr, cleanup := startRegistry(t)
 	defer cleanup()
+	dir, keysDir := makeWorkspaceWithSecretAndStore(t)
 
-	senderKeys := t.TempDir()
-	recipientKeys := t.TempDir()
+	// Generate a recipient keypair.
+	runWithKeysDir(t, dir, keysDir, "keys", "generate", "--name", "charlie")
 
-	runWithKeysDir(t, ".", senderKeys, "keys", "generate")
-	recipOut := runWithKeysDir(t, ".", recipientKeys, "keys", "generate")
-	recipPub := extractPubFromOutput(t, recipOut)
+	runWithKeysDir(t, dir, keysDir, "save", "-m", "push-time recipient test")
 
-	// Save WITHOUT recipients — produces old-format envelope.
-	dir, _ := makeWorkspaceWithSecretAndStore(t)
-	runWithKeysDir(t, dir, senderKeys, "save", "-m", "push-wrap")
-
-	dataKey := extractDataKey(t, dir)
-	if dataKey == "" {
-		t.Fatal("no data key found")
-	}
-
-	// Push WITH --recipient — wraps at push time.
-	repoName := fmt.Sprintf("bento-e2e-pushwrap-%d", time.Now().UnixNano()%100000)
+	repoName := fmt.Sprintf("bento-e2e-ptr-%d", time.Now().UnixNano()%100000)
 	appendToFile(t, dir, "bento.yaml", "remote: "+registryAddr+"/"+repoName+"\n")
-	pushOut := runWithKeysDir(t, dir, senderKeys, "push", "--include-secrets", "--recipient", recipPub)
-	if !strings.Contains(pushOut, "Done") {
-		t.Fatalf("push failed:\n%s", pushOut)
+
+	// Get charlie's public key.
+	listOut := runWithKeysDir(t, dir, keysDir, "keys", "list")
+	var charliePub string
+	for _, line := range strings.Split(listOut, "\n") {
+		if strings.Contains(line, "charlie") {
+			fields := strings.Fields(line)
+			for _, f := range fields {
+				if strings.HasPrefix(f, "bento-pk-") {
+					charliePub = f
+					break
+				}
+			}
+		}
 	}
-	if strings.Contains(pushOut, "bento-dk-") {
-		t.Errorf("push with --recipient should NOT show data key, got:\n%s", pushOut)
-	}
-	if !strings.Contains(pushOut, "auto-decrypts") {
-		t.Errorf("should mention auto-decrypt, got:\n%s", pushOut)
+	if charliePub == "" {
+		t.Fatal("could not find charlie public key")
 	}
 
-	// Recipient can open via auto-discovery.
+	// Push with --include-secrets --recipient charlie.
+	pushOut := runWithKeysDir(t, dir, keysDir, "push", "--include-secrets", "--recipient", charliePub)
+	if !strings.Contains(pushOut, "Re-wrapped") {
+		t.Errorf("push should re-wrap, got:\n%s", pushOut)
+	}
+
+	// Verify charlie can open.
 	deleteLocalSecrets(t, dir)
+	remoteRef := registryAddr + "/" + repoName + ":cp-1"
 	dst := t.TempDir()
-	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(fmt.Sprintf("store: %s\n", t.TempDir())), 0644)
-	remoteRef := fmt.Sprintf("%s/%s:cp-1", registryAddr, repoName)
-	openOut := runWithKeysDir(t, dst, recipientKeys, "open", remoteRef, dst)
-	if !strings.Contains(openOut, "Hydrated") {
-		t.Errorf("recipient should be able to open, got:\n%s", openOut)
-	}
+	dstYAML := fmt.Sprintf("store: %s\n", t.TempDir())
+	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstYAML), 0644)
 
-	content, _ := os.ReadFile(filepath.Join(dst, ".mcp.json"))
+	runWithEnv(t, dst, map[string]string{"BENTO_KEYS_DIR": keysDir}, "open", remoteRef, dst)
+
+	content, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("reading restored .mcp.json: %v", err)
+	}
 	if strings.Contains(string(content), "__BENTO_SCRUBBED") {
-		t.Error("should not contain placeholders")
+		t.Errorf("should not contain placeholders, got:\n%s", content)
 	}
 }

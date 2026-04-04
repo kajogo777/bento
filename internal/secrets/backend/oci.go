@@ -128,6 +128,74 @@ func (b *OCIBackend) Delete(ctx context.Context, key string) error {
 // Available always returns true — no external dependencies.
 func (b *OCIBackend) Available() bool { return true }
 
+// unwrapDEKFromEnvelope parses a multi-recipient envelope, finds the matching
+// recipient entry for the provided keypair, and unwraps the DEK.
+// Returns the parsed envelope (for access to Ciphertext), the unwrapped DEK,
+// or an error if no matching key is found.
+func unwrapDEKFromEnvelope(envelopeJSON []byte, recipientPub, recipientPriv [32]byte) (*MultiRecipientEnvelope, [32]byte, error) {
+	var env MultiRecipientEnvelope
+	if err := json.Unmarshal(envelopeJSON, &env); err != nil {
+		return nil, [32]byte{}, fmt.Errorf("parsing envelope: %w", err)
+	}
+
+	if len(env.WrappedKeys) == 0 {
+		return nil, [32]byte{}, fmt.Errorf("envelope has no wrapped keys")
+	}
+
+	// Parse sender public key from the envelope.
+	senderPubStr := env.Sender
+	if senderPubStr == "" {
+		return nil, [32]byte{}, fmt.Errorf("envelope missing sender public key")
+	}
+	const pkPrefix = "bento-pk-"
+	if !strings.HasPrefix(senderPubStr, pkPrefix) {
+		return nil, [32]byte{}, fmt.Errorf("invalid sender public key format")
+	}
+	senderPubBytes, err := base64.RawURLEncoding.DecodeString(senderPubStr[len(pkPrefix):])
+	if err != nil || len(senderPubBytes) != 32 {
+		return nil, [32]byte{}, fmt.Errorf("invalid sender public key")
+	}
+	var senderPub [32]byte
+	copy(senderPub[:], senderPubBytes)
+
+	// Find matching recipient and unwrap the DEK.
+	recipPubStr := "bento-pk-" + base64.RawURLEncoding.EncodeToString(recipientPub[:])
+	for _, wk := range env.WrappedKeys {
+		if wk.Recipient != recipPubStr {
+			continue
+		}
+		wrapped, decErr := base64.RawURLEncoding.DecodeString(wk.WrappedDEK)
+		if decErr != nil {
+			return nil, [32]byte{}, fmt.Errorf("decoding wrapped DEK: %w", decErr)
+		}
+		dek, unwrapErr := UnwrapDEK(wrapped, senderPub, recipientPub, recipientPriv)
+		if unwrapErr != nil {
+			return nil, [32]byte{}, unwrapErr
+		}
+		return &env, dek, nil
+	}
+
+	return nil, [32]byte{}, fmt.Errorf("no wrapped key found for this recipient")
+}
+
+// RewrapEnvelope unwraps the DEK from an existing envelope using
+// unwrapPub/unwrapPriv, then re-wraps it for newRecipients under
+// newSenderPub/newSenderPriv. The ciphertext is unchanged.
+func RewrapEnvelope(
+	existingJSON []byte,
+	unwrapPub, unwrapPriv [32]byte,
+	newSenderPub, newSenderPriv [32]byte,
+	newRecipients [][32]byte,
+) (*MultiRecipientEnvelope, error) {
+	env, dek, err := unwrapDEKFromEnvelope(existingJSON, unwrapPub, unwrapPriv)
+	if err != nil {
+		return nil, err
+	}
+
+	// Re-wrap for new recipients under the new sender.
+	return BuildMultiRecipientEnvelope(env.Ciphertext, dek, newSenderPub, newSenderPriv, newRecipients)
+}
+
 func (b *OCIBackend) Hint(key string, meta map[string]string) (string, string) {
 	display := "Secrets encrypted in checkpoint. Use key wrapping to share."
 	persist := "This checkpoint has encrypted secrets. Use key wrapping to restore."
@@ -251,48 +319,9 @@ func BuildMultiRecipientEnvelope(
 // using the provided private key. It scans wrappedKeys for a matching recipient.
 // Returns the decrypted secrets map, or an error if no matching key is found.
 func TryUnwrapEnvelope(envelopeJSON []byte, recipientPub, recipientPriv [32]byte) (map[string]string, error) {
-	var env MultiRecipientEnvelope
-	if err := json.Unmarshal(envelopeJSON, &env); err != nil {
-		return nil, fmt.Errorf("parsing envelope: %w", err)
+	env, dek, err := unwrapDEKFromEnvelope(envelopeJSON, recipientPub, recipientPriv)
+	if err != nil {
+		return nil, err
 	}
-
-	if len(env.WrappedKeys) == 0 {
-		return nil, fmt.Errorf("envelope has no wrapped keys")
-	}
-
-	// Parse sender public key.
-	senderPubStr := env.Sender
-	if senderPubStr == "" {
-		return nil, fmt.Errorf("envelope missing sender public key")
-	}
-	const pkPrefix = "bento-pk-"
-	if !strings.HasPrefix(senderPubStr, pkPrefix) {
-		return nil, fmt.Errorf("invalid sender public key format")
-	}
-	senderPubBytes, err := base64.RawURLEncoding.DecodeString(senderPubStr[len(pkPrefix):])
-	if err != nil || len(senderPubBytes) != 32 {
-		return nil, fmt.Errorf("invalid sender public key")
-	}
-	var senderPub [32]byte
-	copy(senderPub[:], senderPubBytes)
-
-	// Find matching recipient.
-	recipPubStr := "bento-pk-" + base64.RawURLEncoding.EncodeToString(recipientPub[:])
-	for _, wk := range env.WrappedKeys {
-		if wk.Recipient != recipPubStr {
-			continue
-		}
-		wrapped, err := base64.RawURLEncoding.DecodeString(wk.WrappedDEK)
-		if err != nil {
-			return nil, fmt.Errorf("decoding wrapped DEK: %w", err)
-		}
-		dek, err := UnwrapDEK(wrapped, senderPub, recipientPub, recipientPriv)
-		if err != nil {
-			return nil, err
-		}
-		// Decrypt the secrets using the unwrapped DEK.
-		return DecryptSecrets(env.Ciphertext, dek)
-	}
-
-	return nil, fmt.Errorf("no wrapped key found for this recipient")
+	return DecryptSecrets(env.Ciphertext, dek)
 }

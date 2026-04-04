@@ -424,6 +424,86 @@ func (s *LocalStore) InjectLayer(tag string, layer LayerData, annotations map[st
 	return nil
 }
 
+// RemoveSecretsLayer removes the encrypted secrets layer from a checkpoint's
+// manifest and config, then re-tags. Used by push to replace the secrets layer
+// when re-wrapping with different sender/recipients.
+func (s *LocalStore) RemoveSecretsLayer(tag string) error {
+	desc, err := s.oci.Resolve(s.ctx, tag)
+	if err != nil {
+		return fmt.Errorf("resolving tag %q: %w", tag, err)
+	}
+
+	manifestBytes, err := s.fetchBlob(desc)
+	if err != nil {
+		return fmt.Errorf("reading manifest: %w", err)
+	}
+
+	var m ocispec.Manifest
+	if err := json.Unmarshal(manifestBytes, &m); err != nil {
+		return fmt.Errorf("parsing manifest: %w", err)
+	}
+
+	// Find and remove the secrets layer.
+	found := -1
+	for i, ld := range m.Layers {
+		if ld.Annotations[manifest.AnnotationSecretsEncrypted] == "true" {
+			found = i
+			break
+		}
+	}
+	if found == -1 {
+		return nil // nothing to remove
+	}
+	m.Layers = append(m.Layers[:found], m.Layers[found+1:]...)
+
+	// Also remove the corresponding diffID from the config.
+	configBytes, err := s.fetchBlob(m.Config)
+	if err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+	var imageConfig ocispec.Image
+	if err := json.Unmarshal(configBytes, &imageConfig); err != nil {
+		return fmt.Errorf("parsing config: %w", err)
+	}
+	if found < len(imageConfig.RootFS.DiffIDs) {
+		imageConfig.RootFS.DiffIDs = append(imageConfig.RootFS.DiffIDs[:found], imageConfig.RootFS.DiffIDs[found+1:]...)
+	}
+
+	newConfigBytes, err := json.Marshal(imageConfig)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	newConfigDigest := digest.FromBytes(newConfigBytes)
+	newConfigDesc := ocispec.Descriptor{
+		MediaType: manifest.ConfigMediaType,
+		Digest:    newConfigDigest,
+		Size:      int64(len(newConfigBytes)),
+	}
+	if err := s.pushIfNotExists(newConfigDesc, newConfigBytes); err != nil {
+		return fmt.Errorf("pushing config: %w", err)
+	}
+	m.Config = newConfigDesc
+
+	newManifestBytes, err := json.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("marshaling manifest: %w", err)
+	}
+	newManifestDigest := digest.FromBytes(newManifestBytes)
+	newManifestDesc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    newManifestDigest,
+		Size:      int64(len(newManifestBytes)),
+	}
+	if err := s.pushIfNotExists(newManifestDesc, newManifestBytes); err != nil {
+		return fmt.Errorf("pushing manifest: %w", err)
+	}
+	if err := s.oci.Tag(s.ctx, newManifestDesc, tag); err != nil {
+		return fmt.Errorf("re-tagging %s: %w", tag, err)
+	}
+
+	return nil
+}
+
 // pushIfNotExists pushes a blob only if it doesn't already exist in the store.
 func (s *LocalStore) pushIfNotExists(desc ocispec.Descriptor, data []byte) error {
 	exists, err := s.oci.Exists(s.ctx, desc)

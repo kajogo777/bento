@@ -186,11 +186,20 @@ func newOpenCmd() *cobra.Command {
 				backendKey := bentoCfg.WorkspaceID + "/" + tag
 				ctx := context.Background()
 
-				// Try 1: local backend (same-machine opens).
+				// Try 1: local encrypted envelope (same-machine opens).
 				localBe := backend.DefaultBackend()
-				secretValues, _ = localBe.Get(ctx, backendKey, nil)
+				envKey := backendKey + ".enc"
+				if envData, envErr := localBe.Get(ctx, envKey, nil); envErr == nil {
+					if envJSON := envData["envelope"]; envJSON != "" {
+						if recipPub, recipPriv, kpErr := keys.LoadDefaultKeypair(); kpErr == nil {
+							if sv, unwrapErr := backend.TryUnwrapEnvelope([]byte(envJSON), recipPub, recipPriv); unwrapErr == nil {
+								secretValues = sv
+							}
+						}
+					}
+				}
 
-				// Try 1.5: key wrapping auto-discovery from OCI layer.
+				// Try 2: key wrapping auto-discovery from OCI layer.
 				if secretValues == nil {
 					var ociManifest ocispec.Manifest
 					if jsonErr := json.Unmarshal(manifestBytes, &ociManifest); jsonErr == nil {

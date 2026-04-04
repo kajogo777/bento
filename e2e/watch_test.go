@@ -333,6 +333,8 @@ layers:
 	}
 	writeFile(t, dir, "src/main.go", "package main\n")
 	os.MkdirAll(dir+"/dist", 0755)
+	// Pre-create dist/bundle.js so the directory is stable before watch starts.
+	writeFile(t, dir, "dist/bundle.js", "console.log('initial')\n")
 
 	cmd := exec.Command(bento, "watch", "--debounce", "1", "--skip-secret-scan")
 	cmd.Dir = dir
@@ -345,7 +347,7 @@ layers:
 		t.Fatalf("failed to start bento watch: %v", err)
 	}
 
-	time.Sleep(1 * time.Second)
+	time.Sleep(2 * time.Second)
 
 	// Write to dist/ (watch: off layer) — should NOT trigger save.
 	writeFile(t, dir, "dist/bundle.js", "console.log('built')\n")

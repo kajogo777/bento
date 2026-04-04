@@ -34,6 +34,7 @@ type Watcher struct {
 	fsWatcher      *fsnotify.Watcher
 	ignore         *workspace.IgnoreMatcher
 	periodicDirs   []string            // absolute paths polled periodically
+	offDirs        []string            // absolute paths with watch: off (not monitored)
 	periodicHashes map[string]uint64   // last known fingerprint per dir
 }
 
@@ -67,7 +68,9 @@ func New(cfg Config) (*Watcher, error) {
 		case extension.WatchRealtime:
 			// fsnotify dirs are added by the recursive walker below
 		case extension.WatchOff:
-			// not watched at all
+			// not watched at all — collect dirs to skip in fsnotify
+			dirs := periodicDirsFromLayer(cfg.WorkDir, layer)
+			w.offDirs = append(w.offDirs, dirs...)
 		}
 	}
 
@@ -120,21 +123,26 @@ func (w *Watcher) Run(ctx context.Context) error {
 			if w.ignore.Match(rel) {
 				continue
 			}
-			// New directory? Add to fsnotify (if not a periodic dir).
+			// New directory? Add to fsnotify (if not periodic or off).
 			if event.Has(fsnotify.Create) {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-					if !w.isPeriodicDir(event.Name) {
+					if !w.isPeriodicDir(event.Name) && !w.isOffDir(event.Name) {
 						_ = w.addDirRecursive(event.Name)
 					}
 				}
+			}
+			// Skip events from off-watch directories.
+			if w.isOffDir(event.Name) {
+				continue
 			}
 			pending = true
 			debounce.Reset(w.cfg.DebounceDuration)
 
 		// --- periodic check (for periodic-watch layers) ---
 		case <-pollTicker.C:
-			// Re-check for newly created periodic dirs.
+			// Re-check for newly created periodic/off dirs.
 			w.refreshPeriodicDirs()
+			w.refreshOffDirs()
 
 			changed := false
 			for _, dir := range w.periodicDirs {
@@ -203,6 +211,9 @@ func (w *Watcher) addDirRecursive(root string) error {
 		if w.isPeriodicDir(path) {
 			return filepath.SkipDir
 		}
+		if w.isOffDir(path) {
+			return filepath.SkipDir
+		}
 		return w.fsWatcher.Add(path)
 	})
 }
@@ -212,6 +223,17 @@ func (w *Watcher) addDirRecursive(root string) error {
 func (w *Watcher) isPeriodicDir(absPath string) bool {
 	for _, pd := range w.periodicDirs {
 		if absPath == pd || strings.HasPrefix(absPath, pd+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// isOffDir returns true if absPath is one of the watch-off directories
+// or is inside one.
+func (w *Watcher) isOffDir(absPath string) bool {
+	for _, od := range w.offDirs {
+		if absPath == od || strings.HasPrefix(absPath, od+string(filepath.Separator)) {
 			return true
 		}
 	}
@@ -229,6 +251,19 @@ func (w *Watcher) refreshPeriodicDirs() {
 		}
 	}
 	w.periodicDirs = updated
+}
+
+// refreshOffDirs re-scans layer patterns for newly created watch-off dirs.
+// This catches build output directories created after the watcher started.
+func (w *Watcher) refreshOffDirs() {
+	var updated []string
+	for _, layer := range w.cfg.Layers {
+		if layer.WatchMethod == extension.WatchOff {
+			dirs := periodicDirsFromLayer(w.cfg.WorkDir, layer)
+			updated = append(updated, dirs...)
+		}
+	}
+	w.offDirs = updated
 }
 
 // relPath returns the workspace-relative path for an absolute path.

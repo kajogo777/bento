@@ -13,7 +13,6 @@ func newSaveCmd() *cobra.Command {
 		flagTag                  string
 		flagSkipSecretScan       bool
 		flagAllowMissingExternal bool
-		flagRecipients           []string
 	)
 
 	cmd := &cobra.Command{
@@ -31,7 +30,6 @@ func newSaveCmd() *cobra.Command {
 				Tag:                  flagTag,
 				SkipSecretScan:       flagSkipSecretScan,
 				AllowMissingExternal: flagAllowMissingExternal,
-				Recipients:           flagRecipients,
 			})
 			if err != nil {
 				return err
@@ -56,7 +54,6 @@ func newSaveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flagTag, "tag", "", "custom tag for this checkpoint")
 	cmd.Flags().BoolVar(&flagSkipSecretScan, "skip-secret-scan", false, "skip secret scanning")
 	cmd.Flags().BoolVar(&flagAllowMissingExternal, "allow-missing-external", false, "warn instead of error when external agent session files are inaccessible")
-	cmd.Flags().StringArrayVar(&flagRecipients, "recipient", nil, "recipient public key or name for key wrapping (repeatable)")
 
 	return cmd
 }
