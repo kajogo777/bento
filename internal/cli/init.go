@@ -49,6 +49,12 @@ func newInitCmd() *cobra.Command {
 			}
 			cfg.ID = id
 
+			// Populate all default values so they are visible in bento.yaml
+			// from the start. Users can then see and tune retention, watch,
+			// etc. without guessing what the hidden defaults are.
+			cfg.BackfillDefaults()
+			cfg.Retention.KeepTagged = true
+
 			if err := config.Save(dir, cfg); err != nil {
 				return fmt.Errorf("writing bento.yaml: %w", err)
 			}

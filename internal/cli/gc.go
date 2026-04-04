@@ -31,12 +31,11 @@ func newGCCmd() *cobra.Command {
 				return err
 			}
 
-			keepLast := flagKeepLast
-			if keepLast == 0 {
-				keepLast = cfg.Retention.KeepLast
-			}
-			if keepLast == 0 {
-				keepLast = 10
+			// Resolve keep_last: flag overrides config (which already has
+			// defaults from BackfillDefaults).
+			keepLast := cfg.Retention.KeepLast
+			if flagKeepLast > 0 {
+				keepLast = flagKeepLast
 			}
 
 			keepTagged := flagKeepTagged || cfg.Retention.KeepTagged
@@ -71,8 +70,7 @@ func newGCCmd() *cobra.Command {
 						continue
 					}
 					key := cfg.ID + "/" + e.Tag
-					_ = be.Delete(ctx, key)
-					// Also clean the encrypted envelope.
+					// Clean the encrypted envelope.
 					_ = be.Delete(ctx, key+".enc")
 					cleaned++
 				}

@@ -29,13 +29,12 @@ import (
 
 // SaveOptions configures a save operation. Used by both `bento save` and `bento watch`.
 type SaveOptions struct {
-	Dir                  string   // absolute path to workspace root
-	Message              string   // checkpoint message
-	Tag                  string   // custom tag (empty = auto cp-N)
+	Dir                  string // absolute path to workspace root
+	Message              string // checkpoint message
+	Tag                  string // custom tag (empty = auto cp-N)
 	SkipSecretScan       bool
 	AllowMissingExternal bool
-	Quiet                bool     // suppress per-layer output (used by watch mode)
-	Recipients           []string // recipient public keys or names for key wrapping
+	Quiet                bool // suppress per-layer output (used by watch mode)
 }
 
 // SaveResult holds the outcome of a save operation.
@@ -515,15 +514,13 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		cfgObj.Ignore = allIgnore
 	}
 
-	// Retention policy
-	if cfg.Retention.KeepLast != 0 || cfg.Retention.KeepTagged {
-		cfgObj.Retention = &manifest.RetentionDef{
-			KeepLast:   cfg.Retention.KeepLast,
-			KeepTagged: cfg.Retention.KeepTagged,
-		}
+	// Retention policy (always present after BackfillDefaults).
+	cfgObj.Retention = &manifest.RetentionDef{
+		KeepLast:   cfg.Retention.KeepLast,
+		KeepTagged: cfg.Retention.KeepTagged,
 	}
 
-	// Store scrubbed secrets locally and generate wrapped envelope.
+	// Encrypt scrubbed secrets and store locally (encrypted only — no plaintext on disk).
 	if len(scrubSecrets) > 0 {
 		tag := fmt.Sprintf("cp-%d", seq)
 		if opts.Tag != "" {
@@ -531,20 +528,13 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		}
 		backendKey := cfg.ID + "/" + tag
 
-		// Store plaintext in local backend (for same-machine opens).
-		localBe := backend.DefaultBackend()
-		ctx := context.Background()
-		if _, pushErr := localBe.Put(ctx, backendKey, scrubSecrets); pushErr != nil {
-			return nil, fmt.Errorf("storing secrets locally: %w", pushErr)
-		}
-
-		// Generate encrypted envelope (for sharing / push --include-secrets).
+		// Generate encrypted envelope (DEK wrapped to default keypair only).
 		ciphertext, rawDEK, encErr := backend.EncryptSecrets(scrubSecrets)
 		if encErr != nil {
 			return nil, fmt.Errorf("encrypting secrets: %w", encErr)
 		}
 
-		// Load or auto-generate keypair.
+		// Load or auto-generate default keypair.
 		senderPub, senderPriv, created, kpErr := keys.LoadOrCreateKeypair()
 		if kpErr != nil {
 			return nil, fmt.Errorf("loading keypair: %w", kpErr)
@@ -554,30 +544,10 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 				keys.FormatPublicKey(senderPub), keys.DefaultKeysDir())
 		}
 
-		// Collect recipients: always self + explicit recipients.
-		var recipientSpecs []string
-		recipientSpecs = append(recipientSpecs, opts.Recipients...)
-		for _, r := range cfg.Recipients {
-			recipientSpecs = append(recipientSpecs, r.Name)
-		}
-
-		var configRecipients []keys.ConfigRecipient
-		for _, r := range cfg.Recipients {
-			configRecipients = append(configRecipients, keys.ConfigRecipient{
-				Name: r.Name,
-				Key:  r.Key,
-			})
-		}
-
-		recipientPubs, resolveErr := keys.ResolveRecipients(recipientSpecs, configRecipients, senderPub, "")
-		if resolveErr != nil {
-			return nil, fmt.Errorf("resolving recipients: %w", resolveErr)
-		}
-
-		// Build multi-recipient envelope (always — sender is always a recipient).
-		envelope, envErr := backend.BuildMultiRecipientEnvelope(ciphertext, rawDEK, senderPub, senderPriv, recipientPubs)
+		// Build envelope with self as only recipient.
+		envelope, envErr := backend.BuildMultiRecipientEnvelope(ciphertext, rawDEK, senderPub, senderPriv, [][32]byte{senderPub})
 		if envErr != nil {
-			return nil, fmt.Errorf("building multi-recipient envelope: %w", envErr)
+			return nil, fmt.Errorf("building envelope: %w", envErr)
 		}
 
 		envJSON, marshalErr := json.Marshal(envelope)
@@ -585,7 +555,9 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 			return nil, fmt.Errorf("marshaling envelope: %w", marshalErr)
 		}
 
-		// Store the multi-recipient envelope locally for push to use.
+		// Store the encrypted envelope locally (push will re-wrap for sharing).
+		localBe := backend.DefaultBackend()
+		ctx := context.Background()
 		envKey := backendKey + ".enc"
 		if _, envPutErr := localBe.Put(ctx, envKey, map[string]string{"envelope": string(envJSON)}); envPutErr != nil {
 			fmt.Printf("Warning: storing encrypted envelope: %v\n", envPutErr)
@@ -593,8 +565,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		}
 
 		if !opts.Quiet {
-			fmt.Printf("Wrapped secrets for %d recipient(s)\n", len(recipientPubs))
-			fmt.Printf("Sealed by: %s\n", keys.FormatPublicKey(senderPub))
+			fmt.Println("Secrets encrypted locally")
 		}
 
 		_, persistHint := localBe.Hint(backendKey, nil)

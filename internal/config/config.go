@@ -25,6 +25,7 @@ type BentoConfig struct {
 	Ignore     []string            `yaml:"ignore,omitempty"`
 	Env        map[string]EnvEntry `yaml:"env,omitempty"`
 	Secrets        SecretsConfig        `yaml:"secrets,omitempty"`
+	Sender         string               `yaml:"sender,omitempty"`
 	Recipients     []RecipientConfig    `yaml:"recipients,omitempty"`
 	Hooks          HooksConfig          `yaml:"hooks,omitempty"`
 	Retention      RetentionConfig      `yaml:"retention,omitempty"`
@@ -212,6 +213,17 @@ func DefaultStorePath() string {
 	}
 }
 
+// Default retention values used when not explicitly configured.
+const (
+	DefaultKeepLast = 10
+)
+
+// Default watch values used when not explicitly configured.
+const (
+	DefaultWatchDebounce = 10
+	DefaultWatchMessage  = "auto-save"
+)
+
 // DefaultIgnorePatterns are always excluded from checkpoints.
 var DefaultIgnorePatterns = []string{
 	"bento.yaml",
@@ -233,6 +245,49 @@ func GenerateWorkspaceID() (string, error) {
 		return "", fmt.Errorf("generating workspace id: %w", err)
 	}
 	return "ws-" + hex.EncodeToString(b), nil
+}
+
+// durationPtr returns a pointer to a time.Duration.
+func durationPtr(d time.Duration) *time.Duration { return &d }
+
+// DefaultRetentionTiers returns the default tiered retention policy used by
+// bento watch when no explicit tiers are configured.
+func DefaultRetentionTiers() []RetentionTier {
+	return []RetentionTier{
+		{MaxAge: 1 * time.Hour},
+		{MaxAge: 24 * time.Hour, Resolution: durationPtr(1 * time.Hour)},
+		{MaxAge: 7 * 24 * time.Hour, Resolution: durationPtr(24 * time.Hour)},
+	}
+}
+
+// BackfillDefaults fills in zero-value configuration fields with their default
+// values. This makes implicit defaults explicit so they are visible in
+// bento.yaml after the next save. Fields that were explicitly set by the user
+// are never overwritten. Returns true if any field was changed.
+func (c *BentoConfig) BackfillDefaults() bool {
+	changed := false
+
+	// Watch defaults.
+	if c.Watch.Debounce == 0 {
+		c.Watch.Debounce = DefaultWatchDebounce
+		changed = true
+	}
+	if c.Watch.Message == "" {
+		c.Watch.Message = DefaultWatchMessage
+		changed = true
+	}
+
+	// Retention defaults.
+	if c.Retention.KeepLast == 0 {
+		c.Retention.KeepLast = DefaultKeepLast
+		changed = true
+	}
+	if len(c.Retention.Tiers) == 0 {
+		c.Retention.Tiers = DefaultRetentionTiers()
+		changed = true
+	}
+
+	return changed
 }
 
 // StorePath returns the full path to this workspace's OCI store directory.
@@ -385,6 +440,16 @@ func Load(dir string) (*BentoConfig, error) {
 
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("bento.yaml: %w", err)
+	}
+
+	// Backfill implicit defaults so they become visible in bento.yaml
+	// on the next save. This is backward-compatible: user-set values
+	// are never overwritten. Persist to disk so defaults are visible.
+	if cfg.BackfillDefaults() {
+		if err := Save(dir, cfg); err != nil {
+			// Non-fatal: defaults are still applied in memory.
+			fmt.Fprintf(os.Stderr, "Warning: could not persist defaults to bento.yaml: %v\n", err)
+		}
 	}
 
 	// Migrate: assign a workspace ID if missing (pre-v0.4 workspaces).

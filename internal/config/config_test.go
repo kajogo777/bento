@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoad(t *testing.T) {
@@ -81,6 +82,26 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Hooks.Timeout != 0 {
 		t.Errorf("Hooks.Timeout = %d, want 0", cfg.Hooks.Timeout)
 	}
+
+	// Watch defaults should be backfilled.
+	if cfg.Watch.Debounce != DefaultWatchDebounce {
+		t.Errorf("Watch.Debounce = %d, want %d", cfg.Watch.Debounce, DefaultWatchDebounce)
+	}
+	if cfg.Watch.Message != DefaultWatchMessage {
+		t.Errorf("Watch.Message = %q, want %q", cfg.Watch.Message, DefaultWatchMessage)
+	}
+
+	// Retention defaults should be backfilled.
+	if cfg.Retention.KeepLast != DefaultKeepLast {
+		t.Errorf("Retention.KeepLast = %d, want %d", cfg.Retention.KeepLast, DefaultKeepLast)
+	}
+	// KeepTagged is not backfilled (bool false is indistinguishable from "not set").
+	if cfg.Retention.KeepTagged {
+		t.Error("Retention.KeepTagged = true, want false (not backfilled)")
+	}
+	if len(cfg.Retention.Tiers) != 3 {
+		t.Errorf("Retention.Tiers length = %d, want 3", len(cfg.Retention.Tiers))
+	}
 }
 
 func TestSaveLoadRoundtrip(t *testing.T) {
@@ -130,6 +151,67 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	}
 	if loaded.Retention.KeepLast != original.Retention.KeepLast {
 		t.Errorf("Retention.KeepLast = %d, want %d", loaded.Retention.KeepLast, original.Retention.KeepLast)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestBackfillDefaults: verify backfill populates zero-value fields
+// ---------------------------------------------------------------------------
+
+func TestBackfillDefaults(t *testing.T) {
+	cfg := &BentoConfig{}
+	cfg.BackfillDefaults()
+
+	if cfg.Watch.Debounce != DefaultWatchDebounce {
+		t.Errorf("Watch.Debounce = %d, want %d", cfg.Watch.Debounce, DefaultWatchDebounce)
+	}
+	if cfg.Watch.Message != DefaultWatchMessage {
+		t.Errorf("Watch.Message = %q, want %q", cfg.Watch.Message, DefaultWatchMessage)
+	}
+	if cfg.Retention.KeepLast != DefaultKeepLast {
+		t.Errorf("Retention.KeepLast = %d, want %d", cfg.Retention.KeepLast, DefaultKeepLast)
+	}
+	// KeepTagged is not backfilled — can't distinguish false from "not set".
+	if cfg.Retention.KeepTagged {
+		t.Error("Retention.KeepTagged should not be backfilled")
+	}
+	if len(cfg.Retention.Tiers) != 3 {
+		t.Fatalf("Retention.Tiers length = %d, want 3", len(cfg.Retention.Tiers))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestBackfillPreservesUserValues: user-set values must not be overwritten
+// ---------------------------------------------------------------------------
+
+func TestBackfillPreservesUserValues(t *testing.T) {
+	cfg := &BentoConfig{
+		Watch: WatchConfig{
+			Debounce: 30,
+			Message:  "my-checkpoint",
+		},
+		Retention: RetentionConfig{
+			KeepLast:   50,
+			KeepTagged: true,
+			Tiers: []RetentionTier{
+				{MaxAge: 2 * time.Hour},
+			},
+		},
+	}
+
+	cfg.BackfillDefaults()
+
+	if cfg.Watch.Debounce != 30 {
+		t.Errorf("Watch.Debounce = %d, want 30 (user-set)", cfg.Watch.Debounce)
+	}
+	if cfg.Watch.Message != "my-checkpoint" {
+		t.Errorf("Watch.Message = %q, want %q (user-set)", cfg.Watch.Message, "my-checkpoint")
+	}
+	if cfg.Retention.KeepLast != 50 {
+		t.Errorf("Retention.KeepLast = %d, want 50 (user-set)", cfg.Retention.KeepLast)
+	}
+	if len(cfg.Retention.Tiers) != 1 {
+		t.Errorf("Retention.Tiers length = %d, want 1 (user-set)", len(cfg.Retention.Tiers))
 	}
 }
 

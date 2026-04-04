@@ -68,17 +68,13 @@ func GarbageCollect(store registry.Store, opts GCOptions) (deleted []string, err
 	return deleted, nil
 }
 
-// durationPtr is a helper that returns a pointer to a time.Duration.
-func durationPtr(d time.Duration) *time.Duration { return &d }
-
 // DefaultWatchTiers provides sensible tiered retention defaults for watch mode.
 // Recent checkpoints are kept at full granularity, older ones are downsampled.
 // Checkpoints older than 7d are left untouched (outside policy scope).
-var DefaultWatchTiers = []config.RetentionTier{
-	{MaxAge: 1 * time.Hour},                                        // keep everything
-	{MaxAge: 24 * time.Hour, Resolution: durationPtr(1 * time.Hour)},   // keep hourly
-	{MaxAge: 7 * 24 * time.Hour, Resolution: durationPtr(24 * time.Hour)}, // keep daily
-}
+//
+// Deprecated: Use config.DefaultRetentionTiers() instead. This variable is
+// kept for backward compatibility with existing tests.
+var DefaultWatchTiers = config.DefaultRetentionTiers()
 
 // isUserTag returns true if the tag was explicitly set by a user (not auto-generated).
 // Auto-generated tags follow the pattern "cp-N" or "latest".

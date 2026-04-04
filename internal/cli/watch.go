@@ -59,20 +59,18 @@ Layers with watch: off are not monitored (still included in saves).`,
 				ignorePatterns = append(ignorePatterns, bentoIgnore...)
 			}
 
-			// Resolve debounce.
-			debounce := 10 // default
+			// Resolve debounce. Config always has a default after BackfillDefaults;
+			// the flag overrides it.
+			debounce := cfg.Watch.Debounce
 			if flagDebounce > 0 {
 				debounce = flagDebounce
-			} else if cfg.Watch.Debounce > 0 {
-				debounce = cfg.Watch.Debounce
 			}
 
-			// Resolve message.
-			message := "auto-save"
+			// Resolve message. Config always has a default after BackfillDefaults;
+			// the flag overrides it.
+			message := cfg.Watch.Message
 			if flagMessage != "" {
 				message = flagMessage
-			} else if cfg.Watch.Message != "" {
-				message = cfg.Watch.Message
 			}
 
 			// Resolve skip secret scan.
@@ -135,11 +133,8 @@ Layers with watch: off are not monitored (still included in saves).`,
 				return fmt.Errorf("opening store: %w", err)
 			}
 
-			// Resolve retention tiers.
+			// Resolve retention tiers. Config always has defaults after BackfillDefaults.
 			tiers := cfg.Retention.Tiers
-			if len(tiers) == 0 {
-				tiers = policy.DefaultWatchTiers
-			}
 
 			// Build the save callback — called by the watcher on debounce fire.
 			saveCount := 0
