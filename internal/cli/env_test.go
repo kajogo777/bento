@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -419,10 +420,12 @@ func TestEnvExport_ToFile(t *testing.T) {
 		t.Errorf(".env should contain KEY=value, got: %s", data)
 	}
 
-	// Check 0600 permissions.
-	info, _ := os.Stat(filepath.Join(dir, ".env"))
-	if perm := info.Mode().Perm(); perm != 0600 {
-		t.Errorf(".env permissions = %o, want 0600", perm)
+	// Check 0600 permissions (skip on Windows where Unix perms don't apply).
+	if runtime.GOOS != "windows" {
+		info, _ := os.Stat(filepath.Join(dir, ".env"))
+		if perm := info.Mode().Perm(); perm != 0600 {
+			t.Errorf(".env permissions = %o, want 0600", perm)
+		}
 	}
 }
 

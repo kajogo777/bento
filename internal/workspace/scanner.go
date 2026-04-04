@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -179,7 +180,12 @@ func portablePath(absPath string) string {
 			return "/~/" + normalized[len(normalizedHome)+1:]
 		}
 	}
-	return normalized // forward-slash absolute path, e.g. /var/cache/... or C:/app/...
+	// Ensure the path starts with "/" for consistent archive naming.
+	// On Unix this is already the case; on Windows we prepend "/" to "C:/...".
+	if !strings.HasPrefix(normalized, "/") {
+		normalized = "/" + normalized
+	}
+	return normalized
 }
 
 // absFromArchivePath converts a portable archive path back to an absolute path
@@ -195,9 +201,14 @@ func absFromArchivePath(archivePath string) string {
 		}
 		return filepath.Join(home, filepath.FromSlash(p[3:]))
 	}
-	// Plain absolute path
-	if filepath.IsAbs(p) {
-		return filepath.FromSlash(p)
+	// Plain absolute path — on Windows, portable paths look like /C:/...
+	// so strip the leading / if a drive letter follows.
+	native := filepath.FromSlash(p)
+	if runtime.GOOS == "windows" && len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+		native = filepath.FromSlash(p[1:])
+	}
+	if filepath.IsAbs(native) {
+		return native
 	}
 	return ""
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/kajogo777/bento/internal/manifest"
 	"github.com/opencontainers/go-digest"
@@ -82,8 +83,10 @@ func ensureSharedBlobLayout(storePath string) error {
 		if fi.IsDir() {
 			resolved, evalErr := filepath.EvalSymlinks(wsBlobLink)
 			sharedBlobs := filepath.Join(storeRoot, "blobs")
-			absShared, _ := filepath.Abs(sharedBlobs)
-			if evalErr == nil && resolved == absShared {
+			// Resolve both sides through EvalSymlinks to normalize short names
+			// (e.g., RUNNER~1) and case differences on Windows.
+			resolvedShared, sharedErr := filepath.EvalSymlinks(sharedBlobs)
+			if evalErr == nil && sharedErr == nil && strings.EqualFold(resolved, resolvedShared) {
 				// Already a junction pointing to the right place.
 				return nil
 			}

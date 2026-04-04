@@ -219,5 +219,5 @@ func ExpandHome(path string) string {
 
 // IsExternalPattern returns true if the pattern refers to a path outside the workspace.
 func IsExternalPattern(pattern string) bool {
-	return strings.HasPrefix(pattern, "~/") || strings.HasPrefix(pattern, "/")
+	return strings.HasPrefix(pattern, "~/") || strings.HasPrefix(pattern, "/") || filepath.IsAbs(pattern)
 }

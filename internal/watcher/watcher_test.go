@@ -119,20 +119,24 @@ func TestIsRelevantEvent(t *testing.T) {
 }
 
 func TestIsPeriodicDir(t *testing.T) {
+	base := filepath.FromSlash("/workspace")
 	w := &Watcher{
-		periodicDirs: []string{"/workspace/node_modules", "/workspace/.venv"},
+		periodicDirs: []string{
+			filepath.Join(base, "node_modules"),
+			filepath.Join(base, ".venv"),
+		},
 	}
 
 	cases := []struct {
 		path string
 		want bool
 	}{
-		{"/workspace/node_modules", true},
-		{"/workspace/node_modules/express", true},
-		{"/workspace/.venv", true},
-		{"/workspace/.venv/lib/python3.12", true},
-		{"/workspace/src", false},
-		{"/workspace/node_modulesX", false}, // not a prefix match on path separator
+		{filepath.Join(base, "node_modules"), true},
+		{filepath.Join(base, "node_modules", "express"), true},
+		{filepath.Join(base, ".venv"), true},
+		{filepath.Join(base, ".venv", "lib", "python3.12"), true},
+		{filepath.Join(base, "src"), false},
+		{filepath.Join(base, "node_modulesX"), false}, // not a prefix match on path separator
 	}
 
 	for _, tc := range cases {

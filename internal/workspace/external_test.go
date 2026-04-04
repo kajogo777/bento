@@ -76,12 +76,19 @@ func TestPortablePath_HomeRelative(t *testing.T) {
 }
 
 func TestPortablePath_Absolute_NonHome(t *testing.T) {
-	// t.TempDir() on macOS/Linux is outside home; path should be returned as-is.
+	// t.TempDir() on macOS/Linux is outside home; path should be returned
+	// with forward slashes and a leading "/" for consistent archive naming.
+	// On Unix, paths already start with "/". On Windows, portablePath
+	// prepends "/" to "C:/..." → "/C:/...".
 	dir := t.TempDir()
 	abs := filepath.Join(dir, "data.txt")
 	p := portablePath(abs)
-	if p != abs {
-		t.Errorf("portablePath(%q) = %q, want unchanged absolute path", abs, p)
+	want := NormalizePath(abs)
+	if !strings.HasPrefix(want, "/") {
+		want = "/" + want
+	}
+	if p != want {
+		t.Errorf("portablePath(%q) = %q, want %q", abs, p, want)
 	}
 }
 

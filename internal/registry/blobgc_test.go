@@ -47,6 +47,9 @@ func TestEnsureSharedBlobLayout_CreatesSymlink(t *testing.T) {
 }
 
 func TestEnsureSharedBlobLayout_Idempotent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("junction idempotency tested implicitly by NewStore tests on Windows")
+	}
 	storeRoot := t.TempDir()
 	wsPath := filepath.Join(storeRoot, "ws-aaa")
 

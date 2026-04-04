@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -33,7 +34,7 @@ func TestLocalBackend_PutGetDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("secrets file not created: %v", err)
 	}
-	if info.Mode().Perm() != 0600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Errorf("expected 0600 permissions, got %o", info.Mode().Perm())
 	}
 
