@@ -127,17 +127,12 @@ Layers with watch: off are not monitored (still included in saves).`,
 				}
 			}
 
-			// Open store for tiered GC.
-			store, err := registry.NewStore(cfg.StorePath())
-			if err != nil {
-				return fmt.Errorf("opening store: %w", err)
-			}
-
 			// Resolve retention tiers. Config always has defaults after BackfillDefaults.
 			tiers := cfg.Retention.Tiers
 
 			// Build the save callback — called by the watcher on debounce fire.
 			saveCount := 0
+			storePath := cfg.StorePath()
 			saveFunc := func() error {
 				saveCount++
 				result, err := ExecuteSave(SaveOptions{
@@ -158,8 +153,17 @@ Layers with watch: off are not monitored (still included in saves).`,
 				fmt.Printf("OK %s (checkpoint %s)\n", result.Tag, time.Now().Format("15:04:05"))
 
 				// Run tiered GC after successful save.
+				// Re-open the store each time so the OCI index reflects
+				// checkpoints created by ExecuteSave (which uses its own
+				// store instance). The oras oci.Store loads the index into
+				// memory at construction time and does not re-read from disk.
 				if len(tiers) > 0 {
-					deleted, gcErr := policy.TieredGC(store, tiers, true)
+					gcStore, gcErr := registry.NewStore(storePath)
+					if gcErr != nil {
+						fmt.Fprintf(os.Stderr, "Warning: auto-gc failed to open store: %v\n", gcErr)
+						return nil
+					}
+					deleted, gcErr := policy.TieredGC(gcStore, tiers, true)
 					if gcErr != nil {
 						fmt.Fprintf(os.Stderr, "Warning: auto-gc failed: %v\n", gcErr)
 					} else if len(deleted) > 0 {
