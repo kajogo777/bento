@@ -1,7 +1,18 @@
 id: ws-63a472d4d6539ca7
 store: /Users/georgefahmy/.bento/store
 secrets:
-  mode: scrub
+    mode: scrub
 recipients:
-  - name: myrna
-    key: bento-pk-RdrCDR3J4mIcuKeyTDSXH_TAxbUS5791Pa6UpyQJiRk
+    - name: myrna
+      key: bento-pk-RdrCDR3J4mIcuKeyTDSXH_TAxbUS5791Pa6UpyQJiRk
+retention:
+    keep_last: 10
+    tiers:
+        - max_age: 1h0m0s
+        - max_age: 24h0m0s
+          resolution: 1h0m0s
+        - max_age: 168h0m0s
+          resolution: 24h0m0s
+watch:
+    debounce: 10
+    message: auto-save
