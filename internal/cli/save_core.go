@@ -296,13 +296,10 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		}
 	}
 
-	// Find parent digest
-	parentDigest := ""
-	if len(existing) > 0 {
-		if d, err := store.ResolveTag("latest"); err == nil {
-			parentDigest = d
-		}
-	}
+	// Parent digest comes from the workspace's head pointer in bento.yaml.
+	// Each directory tracks its own position in the DAG independently,
+	// enabling parallel workspaces (like git worktrees) on the same store.
+	parentDigest := cfg.Head
 
 	// Build map of previous layer digests for change detection.
 	prevLayerDigests := make(map[string]string)
@@ -602,6 +599,14 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		return nil, fmt.Errorf("saving checkpoint: %w", err)
 	}
 
+	// Update head in bento.yaml to track this directory's position in the DAG.
+	cfg.Head = manifestDigest
+	if err := config.Save(opts.Dir, cfg); err != nil {
+		return nil, fmt.Errorf("updating head in bento.yaml: %w", err)
+	}
+
+	// Tag as "latest" for convenience (used by inspect, diff, push defaults).
+	// Note: parent tracking uses cfg.Head, not this tag.
 	if err := store.Tag(manifestDigest, "latest"); err != nil {
 		return nil, fmt.Errorf("tagging latest: %w", err)
 	}

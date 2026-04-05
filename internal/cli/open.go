@@ -17,6 +17,7 @@ import (
 	"github.com/kajogo777/bento/internal/secrets"
 	"github.com/kajogo777/bento/internal/secrets/backend"
 	"github.com/kajogo777/bento/internal/workspace"
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
@@ -290,7 +291,7 @@ func newOpenCmd() *cobra.Command {
 			// See specs/portable-config.md for the full specification.
 			if _, statErr := os.Stat(filepath.Join(targetDir, "bento.yaml")); os.IsNotExist(statErr) {
 				if parseErr == nil {
-					newCfg := configFromArtifact(bentoCfg)
+					newCfg := configFromArtifact(bentoCfg, storePath)
 					if err := config.Save(targetDir, newCfg); err != nil {
 						fmt.Printf("Warning: generating bento.yaml: %v\n", err)
 					} else {
@@ -348,6 +349,11 @@ func newOpenCmd() *cobra.Command {
 					fmt.Printf("Warning: %v\n", e)
 				}
 			}
+
+			// Update head in bento.yaml to track this directory's position.
+			// Use config.UpdateHead to avoid triggering BackfillDefaults.
+			manifestDigest := digest.FromBytes(manifestBytes).String()
+			_ = config.UpdateHead(targetDir, manifestDigest)
 
 			fmt.Printf("Restored to %s\n", targetDir)
 
@@ -417,15 +423,29 @@ func filterLayers(layers []registry.LayerData, manifestBytes []byte, names []str
 // embedded in a checkpoint. Local fields (id, store) get fresh values;
 // portable fields are carried over from the artifact.
 // See specs/portable-config.md for the full specification.
-func configFromArtifact(obj *manifest.BentoConfigObj) *config.BentoConfig {
-	newID, err := config.GenerateWorkspaceID()
-	if err != nil {
-		newID = "ws-restored"
+func configFromArtifact(obj *manifest.BentoConfigObj, sourceStorePath string) *config.BentoConfig {
+	// Preserve the source workspace ID so the new directory shares
+	// the same store and checkpoint history (like git worktrees).
+	newID := obj.WorkspaceID
+	if newID == "" {
+		var err error
+		newID, err = config.GenerateWorkspaceID()
+		if err != nil {
+			newID = "ws-restored"
+		}
+	}
+
+	// Derive the store root from the source store path. The source store
+	// path is <store-root>/<workspace-id>, so strip the workspace-id suffix
+	// to get the root. This ensures the new directory uses the same store.
+	storeRoot := config.DefaultStorePath()
+	if sourceStorePath != "" {
+		storeRoot = filepath.Dir(sourceStorePath)
 	}
 
 	cfg := &config.BentoConfig{
 		ID:     newID,
-		Store:  config.DefaultStorePath(),
+		Store:  storeRoot,
 		Task:   obj.Task,
 		Remote: obj.Remote,
 	}

@@ -196,7 +196,6 @@ func NewRootCmd(version string) *cobra.Command {
 		newListCmd(),
 		newInspectCmd(),
 		newDiffCmd(),
-		newForkCmd(),
 		newTagCmd(),
 		newPushCmd(),
 		newGCCmd(),

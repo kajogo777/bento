@@ -458,25 +458,32 @@ func TestIntegrityCheck(t *testing.T) {
 // TestFork: fork creates a new checkpoint derived from an existing one
 // ---------------------------------------------------------------------------
 
-func TestFork(t *testing.T) {
+func TestOpenIntoNewDir(t *testing.T) {
 	dir := makeWorkspace(t)
 	run(t, dir, "save", "--skip-secret-scan", "-m", "base")
 
-	// Fork from cp-1 into a new directory
-	forkDir := t.TempDir()
-
-	// Copy bento.yaml to fork dir so `open` knows where the store is
-	bentoYAMLData, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
-	if err := os.WriteFile(filepath.Join(forkDir, "bento.yaml"), bentoYAMLData, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Open the checkpoint into forkDir
-	run(t, dir, "open", "cp-1", forkDir)
+	// Open cp-1 into a new directory (replaces old fork command)
+	newDir := t.TempDir()
+	run(t, dir, "open", "cp-1", newDir)
 
 	// Verify files are there
-	if _, err := os.Stat(filepath.Join(forkDir, "main.go")); err != nil {
-		t.Errorf("forked directory should contain main.go: %v", err)
+	if _, err := os.Stat(filepath.Join(newDir, "main.go")); err != nil {
+		t.Errorf("opened directory should contain main.go: %v", err)
+	}
+
+	// Verify workspace ID is preserved (same store)
+	srcYAML, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
+	dstYAML, _ := os.ReadFile(filepath.Join(newDir, "bento.yaml"))
+	srcID := extractYAMLField(string(srcYAML), "id")
+	dstID := extractYAMLField(string(dstYAML), "id")
+	if srcID != dstID {
+		t.Errorf("opened workspace should preserve workspace ID: src=%s, dst=%s", srcID, dstID)
+	}
+
+	// Verify head is set to cp-1's digest
+	dstHead := extractYAMLField(string(dstYAML), "head")
+	if dstHead == "" {
+		t.Error("opened workspace should have head set")
 	}
 }
 
@@ -617,12 +624,18 @@ func TestOpenGeneratesBentoYAML(t *testing.T) {
 		t.Errorf("generated bento.yaml should have a store path, got:\n%s", content)
 	}
 
-	// Workspace ID must differ from the source
+	// Workspace ID must match the source (shared store, like git worktrees)
 	srcYAML, _ := os.ReadFile(filepath.Join(src, "bento.yaml"))
 	srcID := extractYAMLField(string(srcYAML), "id")
 	dstID := extractYAMLField(content, "id")
-	if srcID != "" && srcID == dstID {
-		t.Errorf("generated bento.yaml should have a NEW workspace id, but got same as source: %s", srcID)
+	if srcID != dstID {
+		t.Errorf("generated bento.yaml should preserve workspace id: src=%s, dst=%s", srcID, dstID)
+	}
+
+	// Head must be set
+	dstHead := extractYAMLField(content, "head")
+	if dstHead == "" {
+		t.Error("generated bento.yaml should have head set")
 	}
 }
 
@@ -674,13 +687,21 @@ func TestOpenSkipsBentoYAMLWhenExists(t *testing.T) {
 
 	run(t, src, "open", "cp-1", dst)
 
-	// bento.yaml should be unchanged
+	// bento.yaml should preserve id and store (head is updated by open)
 	data, err := os.ReadFile(filepath.Join(dst, "bento.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != existingYAML {
-		t.Errorf("open should not overwrite existing bento.yaml\nexpected: %q\ngot: %q", existingYAML, string(data))
+	content := string(data)
+	if !strings.Contains(content, "id: ws-existing") {
+		t.Errorf("open should preserve existing workspace id, got:\n%s", content)
+	}
+	if !strings.Contains(content, "store: /custom/store") {
+		t.Errorf("open should preserve existing store path, got:\n%s", content)
+	}
+	// head should be set after open
+	if !strings.Contains(content, "head:") {
+		t.Errorf("open should set head in existing bento.yaml, got:\n%s", content)
 	}
 }
 
@@ -696,15 +717,16 @@ func TestOpenThenSave(t *testing.T) {
 	dst := t.TempDir()
 	run(t, src, "open", "cp-1", dst)
 
-	// Add a file and save from the restored workspace
+	// Add a file and save from the restored workspace.
+	// With preserved workspace ID, this continues the source's sequence (cp-2).
 	writeFile(t, dst, "newfile.txt", "added after restore\n")
 	out := run(t, dst, "save", "--skip-secret-scan", "-m", "continued")
 
-	if !strings.Contains(out, "cp-1") {
-		t.Errorf("save in restored workspace should produce cp-1, got:\n%s", out)
+	if !strings.Contains(out, "cp-2") {
+		t.Errorf("save in restored workspace should produce cp-2 (continuing source sequence), got:\n%s", out)
 	}
 
-	// List should work too
+	// List should show both the original and continued checkpoints
 	listOut := run(t, dst, "list")
 	if !strings.Contains(listOut, "continued") {
 		t.Errorf("list should show the new checkpoint message, got:\n%s", listOut)
@@ -816,9 +838,10 @@ func TestOpenThenSaveThenOpen(t *testing.T) {
 	writeFile(t, wsB, "main.go", "package main\n// modified in B\nfunc main() {}\n")
 	run(t, wsB, "save", "--skip-secret-scan", "-m", "modified in B")
 
-	// Open workspace B's checkpoint into workspace C
+	// Open workspace B's checkpoint into workspace C.
+	// wsB's save is cp-2 (cp-1 was from src, shared store).
 	wsC := t.TempDir()
-	run(t, wsB, "open", "cp-1", wsC)
+	run(t, wsB, "open", "cp-2", wsC)
 
 	// Verify the modification made it through
 	content, err := os.ReadFile(filepath.Join(wsC, "main.go"))
@@ -829,13 +852,13 @@ func TestOpenThenSaveThenOpen(t *testing.T) {
 		t.Errorf("wsC should have wsB's modification, got: %q", content)
 	}
 
-	// Verify wsC has its own bento.yaml with a unique ID
+	// Verify wsC shares the same workspace ID (same store, like git worktrees)
 	dataB, _ := os.ReadFile(filepath.Join(wsB, "bento.yaml"))
 	dataC, _ := os.ReadFile(filepath.Join(wsC, "bento.yaml"))
 	idB := extractYAMLField(string(dataB), "id")
 	idC := extractYAMLField(string(dataC), "id")
-	if idB == idC {
-		t.Errorf("workspace C should have a different ID than B, both have: %s", idB)
+	if idB != idC {
+		t.Errorf("workspace C should share workspace ID with B: B=%s, C=%s", idB, idC)
 	}
 
 	// Verify wsC can save
@@ -843,6 +866,91 @@ func TestOpenThenSaveThenOpen(t *testing.T) {
 	out := run(t, wsC, "save", "--skip-secret-scan", "-m", "from C")
 	if !strings.Contains(out, "cp-") {
 		t.Errorf("save in wsC should produce a checkpoint, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestHeadTracking: head field in bento.yaml tracks position in DAG
+// ---------------------------------------------------------------------------
+
+func TestHeadTracking(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	// Save cp-1
+	run(t, dir, "save", "--skip-secret-scan", "-m", "first")
+
+	// Verify head is set after save
+	data, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
+	head1 := extractYAMLField(string(data), "head")
+	if head1 == "" {
+		t.Fatal("head should be set after first save")
+	}
+
+	// Save cp-2
+	writeFile(t, dir, "main.go", "package main\n// v2\nfunc main() {}\n")
+	run(t, dir, "save", "--skip-secret-scan", "-m", "second")
+
+	data, _ = os.ReadFile(filepath.Join(dir, "bento.yaml"))
+	head2 := extractYAMLField(string(data), "head")
+	if head2 == "" || head2 == head1 {
+		t.Errorf("head should update after second save: head1=%s, head2=%s", head1, head2)
+	}
+
+	// Open cp-1 — head should update to cp-1's digest
+	run(t, dir, "open", "cp-1")
+
+	data, _ = os.ReadFile(filepath.Join(dir, "bento.yaml"))
+	headAfterOpen := extractYAMLField(string(data), "head")
+	if headAfterOpen == "" {
+		t.Fatal("head should be set after open")
+	}
+	if headAfterOpen == head2 {
+		t.Error("head should change after opening an older checkpoint")
+	}
+	if headAfterOpen != head1 {
+		t.Errorf("head should match cp-1's digest after open: expected %s, got %s", head1, headAfterOpen)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestParallelWorkspaces: two dirs sharing one store get correct parents
+// ---------------------------------------------------------------------------
+
+func TestParallelWorkspaces(t *testing.T) {
+	dirA := makeWorkspace(t)
+
+	// Save cp-1 from workspace A
+	run(t, dirA, "save", "--skip-secret-scan", "-m", "from A")
+
+	// Open cp-1 into workspace B
+	dirB := t.TempDir()
+	run(t, dirA, "open", "cp-1", dirB)
+
+	// Both should have same workspace ID
+	yamlA, _ := os.ReadFile(filepath.Join(dirA, "bento.yaml"))
+	yamlB, _ := os.ReadFile(filepath.Join(dirB, "bento.yaml"))
+	idA := extractYAMLField(string(yamlA), "id")
+	idB := extractYAMLField(string(yamlB), "id")
+	if idA != idB {
+		t.Fatalf("workspaces should share ID: A=%s, B=%s", idA, idB)
+	}
+
+	// Modify and save from both — no sequence collision
+	writeFile(t, dirA, "main.go", "package main\n// A-v2\nfunc main() {}\n")
+	outA := run(t, dirA, "save", "--skip-secret-scan", "-m", "A-v2")
+
+	writeFile(t, dirB, "main.go", "package main\n// B-v2\nfunc main() {}\n")
+	outB := run(t, dirB, "save", "--skip-secret-scan", "-m", "B-v2")
+
+	// Check sequence numbers don't collide
+	if strings.Contains(outA, "cp-2") && strings.Contains(outB, "cp-2") {
+		t.Error("both workspaces produced cp-2 — sequence collision")
+	}
+
+	// List from either workspace should show all checkpoints
+	listOut := run(t, dirA, "list")
+	if !strings.Contains(listOut, "A-v2") || !strings.Contains(listOut, "B-v2") {
+		t.Errorf("list should show checkpoints from both workspaces:\n%s", listOut)
 	}
 }
 

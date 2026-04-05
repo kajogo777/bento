@@ -17,6 +17,7 @@ import (
 // BentoConfig represents the bento.yaml configuration file.
 type BentoConfig struct {
 	ID         string              `yaml:"id,omitempty"`
+	Head       string              `yaml:"head,omitempty"` // manifest digest of current checkpoint
 	Extensions []string            `yaml:"extensions,omitempty"`
 	Task       string              `yaml:"task,omitempty"`
 	Store      string              `yaml:"store,omitempty"`
@@ -495,6 +496,27 @@ func migrateWorkspaceID(dir string, cfg *BentoConfig) error {
 	}
 
 	return nil
+}
+
+// UpdateHead reads bento.yaml, sets the head field, and writes it back.
+// Unlike Load+Save, this does not trigger BackfillDefaults or validation,
+// so it preserves the file contents exactly except for the head field.
+func UpdateHead(dir string, headDigest string) error {
+	path := filepath.Join(dir, "bento.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var cfg BentoConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return err
+	}
+	cfg.Head = headDigest
+	out, err := yaml.Marshal(&cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, out, 0644)
 }
 
 // Save writes a BentoConfig to bento.yaml in the given directory.
