@@ -1,7 +1,7 @@
 # BENTO-009: Head Tracking and Workspace Identity
 
-**Version:** 0.1.0
-**Status:** Proposal
+**Version:** 0.2.0
+**Status:** Implemented
 **Authors:** George Fahmy
 **Repository:** github.com/kajogo777/bento
 **Related:** `SPEC.md` §3, `BENTO-008-restorable-open.md`
@@ -98,22 +98,29 @@ if err := config.Save(opts.Dir, cfg); err != nil {
 }
 ```
 
-Remove the `store.Tag(manifestDigest, "latest")` call at L605. The `latest`
-tag is no longer managed by save. Users can still manually tag with
-`bento tag <ref> latest` if they want a convenience pointer.
+The `latest` tag is still maintained for convenience (used by push defaults
+and backward compatibility). Parent tracking uses `head`, not `latest`.
 
 ### open.go: Update Head After Restore
 
-After unpacking files, set `head` to the opened checkpoint's digest:
+After unpacking files, set `head` to the opened checkpoint's digest via
+`config.UpdateHead` (avoids triggering BackfillDefaults):
 
 ```go
-// After restore completes, update head to the opened checkpoint.
-cfg, cfgErr := config.Load(targetDir)
-if cfgErr == nil {
-    cfg.Head = info.Digest
-    _ = config.Save(targetDir, cfg)
-}
+manifestDigest := digest.FromBytes(manifestBytes).String()
+_ = config.UpdateHead(targetDir, manifestDigest)
 ```
+
+### inspect.go / diff.go: Default to Head
+
+When no ref is given, `inspect` and `diff` now resolve the default ref from
+`head` in bento.yaml (this directory's position) instead of the global
+`latest` tag. Falls back to `latest` if head is not set.
+
+### resolve.go: Digest References
+
+`ParseRef` now recognizes `sha256:` prefix and passes digest refs through
+directly (oras-go's `Resolve` handles both tags and digests natively).
 
 ### open.go: Preserve Workspace ID
 
@@ -226,16 +233,18 @@ workspaces that happen to have a `latest` tag from another directory.
 If the user wants to preserve continuity, they can manually set `head` in
 bento.yaml to their last checkpoint's digest before upgrading.
 
-## Files to Modify
+## Files Modified
 
 | File | Change |
 |------|--------|
-| `internal/config/config.go` | Add `Head string` field to `BentoConfig`. |
-| `internal/cli/save_core.go` | Use `cfg.Head` for parent (L299-305). Update `cfg.Head` after save (L605). Remove `latest` tag. |
-| `internal/cli/open.go` | Update `head` after restore. Preserve workspace ID in `configFromArtifact` (L420). Set `head` in generated config. |
+| `internal/config/config.go` | Add `Head string` field to `BentoConfig`. Add `UpdateHead()` for lightweight head-only updates. |
+| `internal/cli/save_core.go` | Use `cfg.Head` for parent. Update `cfg.Head` after save. Keep `latest` tag for convenience. Add `ForceSave` option. |
+| `internal/cli/open.go` | Update head via `config.UpdateHead` after restore. Preserve workspace ID and store root in `configFromArtifact`. Fix pull ref construction for preserved workspace IDs. |
+| `internal/cli/inspect.go` | Default to `head` digest instead of `latest` tag. |
+| `internal/cli/diff.go` | Default to `head` digest instead of `latest` tag (both `diffWorkspace` and `diffFileWorkspace`). |
+| `internal/registry/resolve.go` | Handle `sha256:` digest refs in `ParseRef`. |
 | `internal/cli/root.go` | Remove `newForkCmd()` registration. |
-| `internal/cli/fork.go` | **Delete.** |
-| `e2e/e2e_test.go` | Update `TestFork` → test open-into-dir. Update `TestOpenGeneratesBentoYAML` and `TestOpenThenSaveThenOpen` to expect same workspace ID. Update `TestOpenThenSave` to expect continued sequence. |
+| `internal/cli/fork.go` | **Deleted.** |
 
 ## Testing
 

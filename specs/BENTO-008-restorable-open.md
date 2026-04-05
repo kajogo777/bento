@@ -1,7 +1,7 @@
 # BENTO-008: Restorable Open
 
-**Version:** 0.4.0
-**Status:** Proposal
+**Version:** 0.5.0
+**Status:** Implemented
 **Authors:** George Fahmy
 **Repository:** github.com/kajogo777/bento
 **Related:** `SPEC.md` §3 (Artifact Structure), `BENTO-009-head-tracking.md` (prerequisite)
@@ -225,9 +225,10 @@ if !flagNoBackup {
 }
 ```
 
-- `SkipSecretScan: true` — no need to scrub secrets in a backup; speed.
 - `AllowMissingExternal: true` — don't fail if external files are gone.
 - `Quiet: true` — suppress per-layer output.
+- `ForceSave: true` — bypass skip-if-unchanged (always create backup).
+- Secret scanning follows the workspace's configured mode (not skipped).
 
 ### Undo Hint
 

@@ -213,25 +213,38 @@ Bento uses the `dev.bento.*` annotation namespace on both manifests and layer de
 
 Checkpoints form a directed acyclic graph through the `dev.bento.checkpoint.parent` annotation and the `parentCheckpoint` field in the config object. The value is the digest of the parent checkpoint's manifest.
 
-### 4.1 Linear History
+### 4.1 Head Tracking
+
+Each workspace directory tracks its own position in the DAG via a `head` field in `bento.yaml`. This is the manifest digest of the directory's current checkpoint. On save, the parent is derived from `head` (not from a global tag). After save, `head` is updated to the new checkpoint's digest. After open, `head` is updated to the opened checkpoint's digest.
+
+This enables multiple directories to share one store while maintaining independent positions in the DAG — like git worktrees.
+
+### 4.2 Linear History
 
 ```
 cp-1 (parent: none) → cp-2 (parent: cp-1) → cp-3 (parent: cp-2)
 ```
 
-### 4.2 Branching (Fork)
+### 4.3 Branching
 
 ```
-cp-1 → cp-2 → cp-3
-                ↘
-                 cp-3-alt (parent: cp-2)
+cp-1 → cp-2 → cp-3 → cp-4 (workspace A)
+          ↘→ cp-5 → cp-6 (workspace B)
 ```
 
-When forking, the new checkpoint's parent is set to the fork point, not to the latest checkpoint.
+Branching happens naturally when a checkpoint is opened into a new directory. Both directories share the same store and workspace ID. Each directory's `head` points to its own position, so saves from each directory get the correct parent. No explicit fork command is needed.
 
-### 4.3 DAG Traversal
+### 4.4 Restorable Open
 
-Implementations SHOULD provide commands to walk the checkpoint DAG (e.g., `bento log`, `bento graph`). The DAG can be reconstructed from manifest annotations alone -- no sidecar database is required.
+Before overwriting files, `bento open` saves the current workspace state as a `pre-open` checkpoint. The user can undo the last open with `bento open undo`. The undo creates its own `pre-open` backup, making it a two-state toggle.
+
+### 4.5 DAG Traversal
+
+Implementations SHOULD provide commands to walk the checkpoint DAG (e.g., `bento list`, `bento inspect`). The DAG can be reconstructed from manifest annotations alone -- no sidecar database is required.
+
+### 4.6 Digest References
+
+Checkpoint references may be tags (e.g., `cp-3`, `pre-open`) or content digests (e.g., `sha256:abc123...`). Implementations MUST handle both formats. The `head` field in `bento.yaml` stores a digest reference.
 
 ## 5. Referrers (Attached Artifacts)
 

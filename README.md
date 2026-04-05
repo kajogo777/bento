@@ -11,8 +11,9 @@ Works with any agent. Works on macOS, Linux, and Windows. Works offline. One bin
 ```bash
 bento init                          # start tracking a workspace
 bento save -m "auth module done"    # checkpoint
-bento open cp-3                     # restore
-bento fork cp-3                     # try a different approach
+bento open cp-3                     # restore (backs up current state first)
+bento open undo                     # undo the last open
+bento open cp-1 ~/workspace-b      # parallel workspace (like git worktrees)
 bento push                          # share via registry
 ```
 
@@ -73,9 +74,11 @@ bento save -m "added tests"
 
 # Something went wrong? Restore an earlier checkpoint
 bento open cp-1
+# To undo: bento open undo
 
-# Try a different approach
-bento fork cp-1 -m "trying redis instead"
+# Parallel workspaces — agents work independently from the same checkpoint
+bento open cp-1 ~/workspace-a
+bento open cp-1 ~/workspace-b
 
 # Push to a registry
 bento push ghcr.io/myorg/workspaces/my-project
@@ -85,12 +88,11 @@ bento push ghcr.io/myorg/workspaces/my-project
 
 ### Checkpoints
 
-Immutable, content-addressed snapshots of your workspace. Checkpoints form a DAG through parent references:
+Immutable, content-addressed snapshots of your workspace. Each directory tracks its own position via a `head` field in `bento.yaml`, enabling parallel workspaces like git worktrees. Checkpoints form a DAG through parent references:
 
 ```
-cp-1 → cp-2 → cp-3
-                ↘
-                 cp-4 (forked) → cp-5 → latest
+cp-1 → cp-2 → cp-3 → cp-4 (workspace A)
+          ↘→ cp-5 → cp-6 (workspace B)
 ```
 
 ### Layers
@@ -222,10 +224,11 @@ To suppress false positives, copy the lines above into .gitleaksignore (one per 
 ```
 bento init [--task <desc>]                    Initialize workspace tracking
 bento save [-m <message>] [--tag <tag>]       Save a checkpoint
-bento open <ref> [<target-dir>]               Restore a checkpoint
+bento open <ref> [<target-dir>]               Restore a checkpoint (backs up current state first)
+bento open undo                               Undo the last open
+bento open --no-backup <ref>                  Restore without backup
 bento list                                    List checkpoints
-bento diff <ref1> <ref2>                      Compare two checkpoints
-bento fork <ref> [-m <message>]               Branch from a checkpoint
+bento diff [ref1] [ref2]                      Compare workspace or two checkpoints
 bento tag <ref> <new-tag>                     Tag a checkpoint
 bento inspect [ref]                           Show metadata and layer summary
 bento inspect [ref] --files                   Show metadata with file listing
@@ -248,6 +251,7 @@ task: "refactor auth module"
 
 store: ~/.bento/store
 remote: ghcr.io/myorg/workspaces
+head: sha256:abc123...    # this directory's current checkpoint (managed by bento)
 
 # Optional: override auto-detected layers
 # layers:
@@ -318,6 +322,8 @@ Full format details in [SPEC.md](specs/SPEC.md).
 | Deduplication | yes | - | - | yes |
 | Inspectable | yes | - | - | yes |
 | Branching | yes | - | - | yes |
+| Undo restore | yes | - | - | yes |
+| Parallel workspaces | yes (worktrees) | - | - | yes |
 | Docker interop | - | yes | - | yes |
 | Works offline | yes | yes | - | yes |
 | Open standard | yes | - | - | yes |
@@ -344,7 +350,7 @@ Yes. Checkpoints are portable across macOS, Linux, and Windows.
 
 ## Roadmap
 
-- [x] Core CLI (init, save, open, list, diff, fork, tag, inspect, gc)
+- [x] Core CLI (init, save, open, list, diff, tag, inspect, gc)
 - [x] Local OCI store with shared blob deduplication
 - [x] Secret scanning and hydration
 - [x] Agent support:
@@ -360,6 +366,8 @@ Yes. Checkpoints are portable across macOS, Linux, and Windows.
 - [ ] `bento attach` (OCI referrers for diffs, test results, logs)
 - [ ] MCP server (agents checkpoint themselves)
 - [x] `bento watch` (auto-checkpointing)
+- [x] Restorable open (`bento open undo`)
+- [x] Per-workspace head tracking (parallel workspaces)
 - [ ] Docker sandbox integration
 
 ## License
