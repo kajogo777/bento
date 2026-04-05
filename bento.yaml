@@ -1,4 +1,5 @@
 id: ws-63a472d4d6539ca7
+head: sha256:02f7ae63355af1341e79966ad10d0c413b0f26f0338c1df095078bb5780b5e86
 store: /Users/georgefahmy/.bento/store
 secrets:
     mode: scrub
