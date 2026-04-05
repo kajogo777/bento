@@ -69,6 +69,7 @@ func printFileTree(files []string, indent string) {
 
 func newInspectCmd() *cobra.Command {
 	var flagFiles bool
+	var flagSessions bool
 
 	cmd := &cobra.Command{
 		Use:   "inspect [ref]",
@@ -236,6 +237,37 @@ Works with both local refs and remote registry refs:
 				}
 			}
 
+			// Display sessions info
+			if cfgObj != nil && len(cfgObj.Sessions) > 0 && flagSessions {
+				// Group by agent.
+				agentCounts := make(map[string]int)
+				for _, s := range cfgObj.Sessions {
+					agentCounts[s.Agent]++
+				}
+				var parts []string
+				for agent, count := range agentCounts {
+					parts = append(parts, fmt.Sprintf("%s: %d", agent, count))
+				}
+				fmt.Printf("\nSessions:   %d (%s)\n", len(cfgObj.Sessions), strings.Join(parts, ", "))
+				for _, s := range cfgObj.Sessions {
+					sid := s.SessionID
+					if len(sid) > 8 {
+						sid = sid[:8]
+					}
+					title := s.Title
+					if title != "" {
+						title = fmt.Sprintf("  %q", title)
+						if len(title) > 52 {
+							title = title[:49] + "...\""
+						}
+					}
+					fmt.Printf("  %-14s %s  %3d msgs  %s%s\n", s.Agent, sid, s.MessageCount, formatLocalTime(s.Updated), title)
+				}
+			} else if cfgObj != nil && len(cfgObj.Sessions) > 0 {
+				// Show summary even without --sessions flag.
+				fmt.Printf("\nSessions:   %d (use --sessions for details)\n", len(cfgObj.Sessions))
+			}
+
 			// Display secrets info
 			if cfgObj != nil && len(cfgObj.ScrubRecords) > 0 {
 				totalSecrets := 0
@@ -348,6 +380,7 @@ Works with both local refs and remote registry refs:
 	}
 
 	cmd.Flags().BoolVar(&flagFiles, "files", false, "show file listing for each layer (also shows recipient details)")
+	cmd.Flags().BoolVar(&flagSessions, "sessions", false, "show agent session details")
 
 	return cmd
 }

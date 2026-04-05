@@ -206,6 +206,7 @@ func NewRootCmd(version string) *cobra.Command {
 		newKeysCmd(),
 		newRecipientsCmd(),
 		newExploreCmd(),
+		newSessionsCmd(),
 	)
 
 	return rootCmd

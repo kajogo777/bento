@@ -18,6 +18,10 @@ func (c ClaudeCode) Detect(workDir string) bool {
 	if _, err := os.Stat(filepath.Join(workDir, "CLAUDE.md")); err == nil {
 		return true
 	}
+	// Also detect via project-level sessions under ~/.claude/projects/<hash>/.
+	if claudeProjectDir(workDir) != "" {
+		return true
+	}
 	return false
 }
 

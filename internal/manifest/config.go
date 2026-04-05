@@ -36,6 +36,11 @@ type BentoConfigObj struct {
 	Ignore    []string        `json:"ignore,omitempty"`
 	Retention *RetentionDef   `json:"retention,omitempty"`
 
+	// Sessions holds metadata about agent sessions detected at save-time.
+	// Enables `bento sessions` and `bento inspect --sessions` without
+	// downloading layer blobs.
+	Sessions []SessionMeta `json:"sessions,omitempty"`
+
 	// Secret scrubbing metadata. See specs/secret-scrubbing.md.
 
 	// ScrubRecords lists files that had secrets scrubbed, with their

@@ -266,6 +266,24 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		}
 	}()
 
+	// Extract session metadata from agent extensions that implement SessionParser.
+	exts := extension.Resolve(opts.Dir, cfg.Extensions)
+	var sessions []manifest.SessionMeta
+	for _, ext := range exts {
+		sp, ok := ext.(extension.SessionParser)
+		if !ok {
+			continue
+		}
+		parsed, parseErr := sp.ParseSessions(opts.Dir)
+		if parseErr != nil {
+			if !opts.Quiet {
+				fmt.Printf("Warning: session parsing for %s: %v\n", ext.Name(), parseErr)
+			}
+			continue
+		}
+		sessions = append(sessions, parsed...)
+	}
+
 	// Collect active extension names for manifest metadata
 	activeExtensions := extension.ActiveExtensionNames(opts.Dir, cfg.Extensions)
 
@@ -453,6 +471,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 	}
 	cfgObj.Repos = discoverRepos(opts.Dir)
 	cfgObj.Message = opts.Message
+	cfgObj.Sessions = sessions
 
 	// Embed env vars and secret references
 	if len(cfg.Env) > 0 {
