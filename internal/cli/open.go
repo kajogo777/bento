@@ -25,11 +25,12 @@ import (
 
 func newOpenCmd() *cobra.Command {
 	var (
-		flagLayers             string
-		flagSkipLayers         string
-		flagForce              bool
-		flagPrivateKey         string
+		flagLayers              string
+		flagSkipLayers          string
+		flagForce               bool
+		flagPrivateKey          string
 		flagAllowMissingSecrets bool
+		flagNoBackup            bool
 	)
 
 	cmd := &cobra.Command{
@@ -38,6 +39,9 @@ func newOpenCmd() *cobra.Command {
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := args[0]
+			if ref == "undo" {
+				ref = "pre-open"
+			}
 			targetDir := flagDir
 			if len(args) > 1 {
 				targetDir = args[1]
@@ -131,6 +135,9 @@ func newOpenCmd() *cobra.Command {
 				return fmt.Errorf("parsing manifest: %w", err)
 			}
 
+			// Parse bento config from checkpoint (needed for secret pre-check and bento.yaml generation).
+			bentoCfg, parseErr := manifest.UnmarshalConfig(configBytes)
+
 			// Filter layers if requested
 			layersToRestore := layers
 			if flagLayers != "" {
@@ -179,7 +186,6 @@ func newOpenCmd() *cobra.Command {
 			var secretValues map[string]string
 			var hasScrubRecords bool
 			var scrubRecords []manifest.ScrubFileRecord
-			bentoCfg, parseErr := manifest.UnmarshalConfig(configBytes)
 			if parseErr == nil && len(bentoCfg.ScrubRecords) > 0 {
 				hasScrubRecords = true
 				scrubRecords = bentoCfg.ScrubRecords
@@ -264,6 +270,44 @@ func newOpenCmd() *cobra.Command {
 				}
 			}
 
+			// Ensure bento.yaml exists so ExecuteSave can load config + extensions.
+			// For fresh dirs this generates bento.yaml from checkpoint metadata.
+			// For existing workspaces this is a no-op.
+			if _, statErr := os.Stat(filepath.Join(targetDir, "bento.yaml")); os.IsNotExist(statErr) {
+				if parseErr == nil {
+					_ = os.MkdirAll(targetDir, 0755)
+					newCfg := configFromArtifact(bentoCfg, storePath)
+					if err := config.Save(targetDir, newCfg); err != nil {
+						fmt.Printf("Warning: generating bento.yaml: %v\n", err)
+					} else {
+						fmt.Println("Generated bento.yaml from artifact metadata")
+						cfg = newCfg
+						cfgErr = nil
+					}
+				}
+			}
+
+			// Pre-open backup: save current state before overwriting anything.
+			// Best-effort — if the backup fails (e.g., store inaccessible),
+			// warn and continue without undo support.
+			var backedUp bool
+			if !flagNoBackup {
+				result, saveErr := ExecuteSave(SaveOptions{
+					Dir:                  targetDir,
+					Tag:                  "pre-open",
+					Message:              fmt.Sprintf("pre-open backup before restoring %s", tag),
+					SkipSecretScan:       true,
+					AllowMissingExternal: true,
+					Quiet:                true,
+					ForceSave:            true,
+				})
+				if saveErr != nil {
+					fmt.Printf("Warning: pre-open backup failed: %v\n", saveErr)
+				} else if result != nil && !result.Skipped {
+					backedUp = true
+				}
+			}
+
 			// Unpack layers (stream each layer directly to disk, no full load into memory)
 			fmt.Printf("Restoring checkpoint %s (sequence %d)...\n", tag, info.Sequence)
 			for i := range layersToRestore {
@@ -285,32 +329,17 @@ func newOpenCmd() *cobra.Command {
 				}
 			}
 
-			// Regenerate bento.yaml if the target directory doesn't have one.
-			// This enables the "open anywhere" workflow: pull from a registry,
-			// get a fully functional workspace that can save/push/diff immediately.
-			// See specs/portable-config.md for the full specification.
-			if _, statErr := os.Stat(filepath.Join(targetDir, "bento.yaml")); os.IsNotExist(statErr) {
-				if parseErr == nil {
-					newCfg := configFromArtifact(bentoCfg, storePath)
-					if err := config.Save(targetDir, newCfg); err != nil {
-						fmt.Printf("Warning: generating bento.yaml: %v\n", err)
-					} else {
-						fmt.Println("Generated bento.yaml from artifact metadata")
-						// Also use the regenerated config for env hydration and hooks below
-						cfg = newCfg
-						cfgErr = nil
+			// Regenerate .bentoignore if needed (bento.yaml was already
+			// generated earlier, before the pre-open backup).
+			if parseErr == nil && len(bentoCfg.Ignore) > 0 {
+				ignorePath := filepath.Join(targetDir, ".bentoignore")
+				if _, statErr := os.Stat(ignorePath); os.IsNotExist(statErr) {
+					ignoreContent := "# Bento ignore patterns (restored from checkpoint)\n"
+					for _, p := range bentoCfg.Ignore {
+						ignoreContent += p + "\n"
 					}
-
-					// Regenerate .bentoignore from embedded ignore patterns
-					if len(bentoCfg.Ignore) > 0 {
-						ignoreContent := "# Bento ignore patterns (restored from checkpoint)\n"
-						for _, p := range bentoCfg.Ignore {
-							ignoreContent += p + "\n"
-						}
-						ignorePath := filepath.Join(targetDir, ".bentoignore")
-						if err := os.WriteFile(ignorePath, []byte(ignoreContent), 0644); err != nil {
-							fmt.Printf("Warning: generating .bentoignore: %v\n", err)
-						}
+					if err := os.WriteFile(ignorePath, []byte(ignoreContent), 0644); err != nil {
+						fmt.Printf("Warning: generating .bentoignore: %v\n", err)
 					}
 				}
 			}
@@ -356,6 +385,9 @@ func newOpenCmd() *cobra.Command {
 			_ = config.UpdateHead(targetDir, manifestDigest)
 
 			fmt.Printf("Restored to %s\n", targetDir)
+			if backedUp {
+				fmt.Printf("\n  To undo: bento open undo\n")
+			}
 
 			// Run post_restore hook
 			if cfgErr == nil && cfg != nil {
@@ -378,6 +410,7 @@ func newOpenCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&flagForce, "force", false, "overwrite existing files without confirmation")
 	cmd.Flags().StringVar(&flagPrivateKey, "private-key", "", "explicit path to private key file for key wrapping")
 	cmd.Flags().BoolVar(&flagAllowMissingSecrets, "allow-missing-secrets", false, "open even if secrets cannot be hydrated (files will contain placeholders)")
+	cmd.Flags().BoolVar(&flagNoBackup, "no-backup", false, "skip pre-open backup (faster, but no undo)")
 
 	return cmd
 }

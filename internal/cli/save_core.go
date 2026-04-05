@@ -35,6 +35,7 @@ type SaveOptions struct {
 	SkipSecretScan       bool
 	AllowMissingExternal bool
 	Quiet                bool // suppress per-layer output (used by watch mode)
+	ForceSave            bool // skip the unchanged-detection check (for pre-open backups)
 }
 
 // SaveResult holds the outcome of a save operation.
@@ -384,7 +385,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 	}
 
 	// Check skip-if-unchanged: if all layers match the parent, skip the save.
-	if parentDigest != "" {
+	if parentDigest != "" && !opts.ForceSave {
 		allUnchanged := true
 		for _, r := range results {
 			if r.status != "unchanged, reusing" && r.status != "empty" {

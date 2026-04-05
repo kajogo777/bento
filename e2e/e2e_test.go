@@ -45,17 +45,18 @@ func run(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
-// runExpectFail runs the bento binary and expects a non-zero exit code.
 func runExpectFail(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command(bento, args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("bento %s expected failure but succeeded\n%s", strings.Join(args, " "), out)
+		t.Fatalf("bento %s should have failed but succeeded:\n%s", strings.Join(args, " "), out)
 	}
 	return string(out)
 }
+
+
 
 // makeWorkspace creates a temporary workspace with a bento.yaml and some files.
 func makeWorkspace(t *testing.T) string {
@@ -951,6 +952,115 @@ func TestParallelWorkspaces(t *testing.T) {
 	listOut := run(t, dirA, "list")
 	if !strings.Contains(listOut, "A-v2") || !strings.Contains(listOut, "B-v2") {
 		t.Errorf("list should show checkpoints from both workspaces:\n%s", listOut)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRestorableOpen: bento open creates a pre-open backup, undo restores it
+// ---------------------------------------------------------------------------
+
+func TestRestorableOpen(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	// Save cp-1 with original content
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v1")
+
+	// Modify and save cp-2
+	writeFile(t, dir, "main.go", "package main\n// v2\nfunc main() {}\n")
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v2")
+
+	// Open cp-1 — should create pre-open backup
+	out := run(t, dir, "open", "cp-1")
+	if !strings.Contains(out, "To undo: bento open undo") {
+		t.Errorf("open should print undo hint, got:\n%s", out)
+	}
+
+	// Verify cp-1 content restored
+	content, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	if strings.Contains(string(content), "// v2") {
+		t.Error("cp-1 restore should not have v2 content")
+	}
+
+	// Verify pre-open tag exists
+	listOut := run(t, dir, "list")
+	if !strings.Contains(listOut, "pre-open") {
+		t.Errorf("pre-open tag should exist after open:\n%s", listOut)
+	}
+
+	// Undo — should restore pre-open backup (v2 content)
+	run(t, dir, "open", "undo")
+
+	content, _ = os.ReadFile(filepath.Join(dir, "main.go"))
+	if !strings.Contains(string(content), "// v2") {
+		t.Errorf("undo should restore v2 content, got: %q", content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRestorableOpenToggle: undo twice returns to the opened checkpoint
+// ---------------------------------------------------------------------------
+
+func TestRestorableOpenToggle(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v1")
+	writeFile(t, dir, "main.go", "package main\n// v2\nfunc main() {}\n")
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v2")
+
+	// Open cp-1
+	run(t, dir, "open", "cp-1")
+
+	// Undo (back to v2)
+	run(t, dir, "open", "undo")
+	content, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	if !strings.Contains(string(content), "// v2") {
+		t.Error("first undo should restore v2")
+	}
+
+	// Undo again (back to cp-1)
+	run(t, dir, "open", "undo")
+	content, _ = os.ReadFile(filepath.Join(dir, "main.go"))
+	if strings.Contains(string(content), "// v2") {
+		t.Error("second undo should restore cp-1 (no v2)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRestorableOpenNoBackup: --no-backup skips pre-open save
+// ---------------------------------------------------------------------------
+
+func TestRestorableOpenNoBackup(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v1")
+	writeFile(t, dir, "main.go", "package main\n// v2\nfunc main() {}\n")
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v2")
+
+	// Open with --no-backup
+	out := run(t, dir, "open", "--no-backup", "cp-1")
+	if strings.Contains(out, "To undo") {
+		t.Errorf("--no-backup should suppress undo hint, got:\n%s", out)
+	}
+
+	// pre-open tag should not exist
+	listOut := run(t, dir, "list")
+	if strings.Contains(listOut, "pre-open") {
+		t.Errorf("pre-open tag should not exist with --no-backup:\n%s", listOut)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRestorableOpenUndoNoBackup: undo with no pre-open tag fails
+// ---------------------------------------------------------------------------
+
+func TestRestorableOpenUndoNoBackup(t *testing.T) {
+	dir := makeWorkspace(t)
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v1")
+
+	// Undo should fail — no pre-open tag
+	out := runExpectFail(t, dir, "open", "undo")
+	if !strings.Contains(out, "not found") {
+		t.Errorf("undo with no backup should fail with 'not found', got:\n%s", out)
 	}
 }
 
