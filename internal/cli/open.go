@@ -105,7 +105,13 @@ func newOpenCmd() *cobra.Command {
 				// Determine remote to pull from
 				pullRef := remoteRef
 				if pullRef == "" && cfgErr == nil && cfg.Remote != "" {
-					pullRef = cfg.Remote + "/" + storeName
+					// Push sends to cfg.Remote directly. Only append storeName
+					// if it differs from the workspace ID (i.e., explicit name:tag ref).
+					if storeName != "" && storeName != cfg.ID {
+						pullRef = cfg.Remote + "/" + storeName
+					} else {
+						pullRef = cfg.Remote
+					}
 				}
 				if pullRef != "" {
 					fmt.Printf("Pulling from %s:%s...\n", pullRef, tag)
