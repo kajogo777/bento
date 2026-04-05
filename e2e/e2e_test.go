@@ -1064,6 +1064,182 @@ func TestRestorableOpenUndoNoBackup(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// TestSaveAfterUndo: save after undo uses the correct parent (pre-open digest)
+// ---------------------------------------------------------------------------
+
+func TestSaveAfterUndo(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v1")
+	writeFile(t, dir, "main.go", "package main\n// v2\nfunc main() {}\n")
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v2")
+
+	// Open cp-1 (creates pre-open backup)
+	run(t, dir, "open", "cp-1")
+
+	// Undo (restores v2)
+	run(t, dir, "open", "undo")
+
+	// Now save — should succeed and continue the sequence
+	writeFile(t, dir, "main.go", "package main\n// v3\nfunc main() {}\n")
+	out := run(t, dir, "save", "--skip-secret-scan", "-m", "v3")
+	if !strings.Contains(out, "cp-") {
+		t.Errorf("save after undo should produce a checkpoint, got:\n%s", out)
+	}
+
+	// head should be updated
+	data, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
+	head := extractYAMLField(string(data), "head")
+	if head == "" {
+		t.Error("head should be set after save")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestOpenFreshDirUndo: open into fresh dir, then undo restores pre-open state
+// ---------------------------------------------------------------------------
+
+func TestOpenFreshDirUndo(t *testing.T) {
+	src := makeWorkspace(t)
+	run(t, src, "save", "--skip-secret-scan", "-m", "original")
+
+	// Open into fresh dir
+	dst := t.TempDir()
+	out := run(t, src, "open", "cp-1", dst)
+	if !strings.Contains(out, "To undo: bento open undo") {
+		t.Errorf("open into fresh dir should print undo hint, got:\n%s", out)
+	}
+
+	// Verify files are restored
+	if _, err := os.Stat(filepath.Join(dst, "main.go")); err != nil {
+		t.Fatal("main.go should exist after open")
+	}
+
+	// Undo from the fresh dir — should restore the empty state
+	undoOut := run(t, dst, "open", "undo")
+	if !strings.Contains(undoOut, "Restored") {
+		t.Errorf("undo should succeed, got:\n%s", undoOut)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestParallelOpenThenSaveParents: two workspaces from same checkpoint
+// get correct independent parents after open+save
+// ---------------------------------------------------------------------------
+
+func TestParallelOpenThenSaveParents(t *testing.T) {
+	src := makeWorkspace(t)
+
+	// Create a base checkpoint
+	run(t, src, "save", "--skip-secret-scan", "-m", "base")
+
+	// Open into two fresh dirs
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	run(t, src, "open", "cp-1", dirA)
+	run(t, src, "open", "cp-1", dirB)
+
+	// Both should have head pointing to cp-1's digest
+	yamlA, _ := os.ReadFile(filepath.Join(dirA, "bento.yaml"))
+	yamlB, _ := os.ReadFile(filepath.Join(dirB, "bento.yaml"))
+	headA := extractYAMLField(string(yamlA), "head")
+	headB := extractYAMLField(string(yamlB), "head")
+	if headA == "" || headB == "" {
+		t.Fatal("both workspaces should have head set")
+	}
+
+	// Modify and save independently
+	writeFile(t, dirA, "main.go", "package main\n// from A\nfunc main() {}\n")
+	run(t, dirA, "save", "--skip-secret-scan", "-m", "from A")
+
+	writeFile(t, dirB, "main.go", "package main\n// from B\nfunc main() {}\n")
+	run(t, dirB, "save", "--skip-secret-scan", "-m", "from B")
+
+	// Heads should differ (each saved its own checkpoint)
+	yamlA, _ = os.ReadFile(filepath.Join(dirA, "bento.yaml"))
+	yamlB, _ = os.ReadFile(filepath.Join(dirB, "bento.yaml"))
+	newHeadA := extractYAMLField(string(yamlA), "head")
+	newHeadB := extractYAMLField(string(yamlB), "head")
+	if newHeadA == newHeadB {
+		t.Error("parallel workspaces should have different heads after independent saves")
+	}
+	if newHeadA == headA {
+		t.Error("workspace A's head should have changed after save")
+	}
+	if newHeadB == headB {
+		t.Error("workspace B's head should have changed after save")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestHeadMigration: workspace with no head field saves correctly
+// ---------------------------------------------------------------------------
+
+func TestHeadMigration(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := t.TempDir()
+
+	// Write bento.yaml WITHOUT head field (simulates pre-upgrade workspace)
+	bentoYAML := "store: " + storeDir + "\n"
+	writeFile(t, dir, "bento.yaml", bentoYAML)
+	writeFile(t, dir, "main.go", "package main\n")
+
+	// Save should work — empty head means no parent
+	out := run(t, dir, "save", "--skip-secret-scan", "-m", "first after migration")
+	if !strings.Contains(out, "cp-1") {
+		t.Errorf("first save should be cp-1, got:\n%s", out)
+	}
+
+	// Head should now be set
+	data, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
+	head := extractYAMLField(string(data), "head")
+	if head == "" {
+		t.Error("head should be set after first save")
+	}
+
+	// Second save should work with parent = first save
+	writeFile(t, dir, "main.go", "package main\n// v2\n")
+	out = run(t, dir, "save", "--skip-secret-scan", "-m", "second")
+	if !strings.Contains(out, "cp-2") {
+		t.Errorf("second save should be cp-2, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestOpenStaleFilesDeletion: open removes files not in checkpoint, undo
+// brings them back
+// ---------------------------------------------------------------------------
+
+func TestOpenStaleFilesDeletion(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	// Save cp-1
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v1")
+
+	// Add a new file and save cp-2
+	writeFile(t, dir, "extra.txt", "extra content\n")
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v2 with extra")
+
+	// Open cp-1 — extra.txt should be deleted (it's not in cp-1)
+	run(t, dir, "open", "cp-1")
+
+	if _, err := os.Stat(filepath.Join(dir, "extra.txt")); err == nil {
+		t.Error("extra.txt should be deleted after opening cp-1 (not in checkpoint)")
+	}
+
+	// Undo — extra.txt should come back
+	run(t, dir, "open", "undo")
+
+	content, err := os.ReadFile(filepath.Join(dir, "extra.txt"))
+	if err != nil {
+		t.Fatalf("extra.txt should be restored after undo: %v", err)
+	}
+	if string(content) != "extra content\n" {
+		t.Errorf("extra.txt content wrong after undo: %q", content)
+	}
+}
+
 // extractYAMLField does a simple line-based extraction of a top-level YAML field.
 func extractYAMLField(yaml, field string) string {
 	for _, line := range strings.Split(yaml, "\n") {
