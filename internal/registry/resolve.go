@@ -22,6 +22,12 @@ func ParseRef(ref string) (storeName string, tag string, err error) {
 		return "", "latest", nil
 	}
 
+	// Digest refs (sha256:abc...) are passed through as-is.
+	// oras-go's Resolve handles both tags and digests.
+	if strings.HasPrefix(ref, "sha256:") {
+		return "", ref, nil
+	}
+
 	// Check for "name:tag" format.
 	if idx := strings.LastIndex(ref, ":"); idx > 0 {
 		storeName = ref[:idx]

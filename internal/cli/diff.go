@@ -80,9 +80,12 @@ func diffWorkspace(dir string, args []string) error {
 		return err
 	}
 
+	// Default to head (this directory's position), fall back to "latest".
 	ref := "latest"
 	if len(args) == 1 {
 		ref = args[0]
+	} else if cfg.Head != "" {
+		ref = cfg.Head
 	}
 	_, tag, _ := registry.ParseRef(ref)
 
@@ -388,9 +391,12 @@ func diffFile(dir string, args []string, filePath string) error {
 }
 
 func diffFileWorkspace(dir string, args []string, filePath string, cfg *config.BentoConfig, store registry.Store) error {
+	// Default to head (this directory's position), fall back to "latest".
 	ref := "latest"
 	if len(args) == 1 {
 		ref = args[0]
+	} else if cfg.Head != "" {
+		ref = cfg.Head
 	}
 	_, tag, _ := registry.ParseRef(ref)
 

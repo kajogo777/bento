@@ -76,7 +76,7 @@ func newInspectCmd() *cobra.Command {
 		Long: `Show checkpoint metadata, layers, secrets info, and recipients.
 
 Works with both local refs and remote registry refs:
-  bento inspect                              # latest local checkpoint
+  bento inspect                              # current checkpoint (head)
   bento inspect cp-3                         # local checkpoint
   bento inspect ghcr.io/org/project:cp-3     # remote checkpoint`,
 		Args: cobra.MaximumNArgs(1),
@@ -86,9 +86,13 @@ Works with both local refs and remote registry refs:
 				return err
 			}
 
+			// Default to head from bento.yaml (this directory's position).
+			// Falls back to "latest" if head is not set.
 			ref := "latest"
 			if len(args) > 0 {
 				ref = args[0]
+			} else if headCfg, headErr := config.Load(dir); headErr == nil && headCfg.Head != "" {
+				ref = headCfg.Head
 			}
 
 			// Determine if ref is remote (contains /) or local.
