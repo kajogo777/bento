@@ -39,7 +39,8 @@ func newOpenCmd() *cobra.Command {
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := args[0]
-			if ref == "undo" {
+			isUndo := ref == "undo"
+			if isUndo {
 				ref = "pre-open"
 			}
 			targetDir := flagDir
@@ -119,6 +120,9 @@ func newOpenCmd() *cobra.Command {
 						return fmt.Errorf("loading checkpoint %s after pull: %w", ref, err)
 					}
 				} else {
+					if isUndo {
+						return fmt.Errorf("nothing to undo — no previous open created a backup")
+					}
 					return fmt.Errorf("loading checkpoint %s: %w", ref, err)
 				}
 			}
@@ -276,7 +280,7 @@ func newOpenCmd() *cobra.Command {
 			if _, statErr := os.Stat(filepath.Join(targetDir, "bento.yaml")); os.IsNotExist(statErr) {
 				if parseErr == nil {
 					_ = os.MkdirAll(targetDir, 0755)
-					newCfg := configFromArtifact(bentoCfg, storePath)
+					newCfg := configFromArtifact(bentoCfg, filepath.Dir(storePath))
 					if err := config.Save(targetDir, newCfg); err != nil {
 						fmt.Printf("Warning: generating bento.yaml: %v\n", err)
 					} else {
@@ -296,7 +300,6 @@ func newOpenCmd() *cobra.Command {
 					Dir:                  targetDir,
 					Tag:                  "pre-open",
 					Message:              fmt.Sprintf("pre-open backup before restoring %s", tag),
-					SkipSecretScan:       true,
 					AllowMissingExternal: true,
 					Quiet:                true,
 					ForceSave:            true,
@@ -456,7 +459,7 @@ func filterLayers(layers []registry.LayerData, manifestBytes []byte, names []str
 // embedded in a checkpoint. Local fields (id, store) get fresh values;
 // portable fields are carried over from the artifact.
 // See specs/portable-config.md for the full specification.
-func configFromArtifact(obj *manifest.BentoConfigObj, sourceStorePath string) *config.BentoConfig {
+func configFromArtifact(obj *manifest.BentoConfigObj, storeRoot string) *config.BentoConfig {
 	// Preserve the source workspace ID so the new directory shares
 	// the same store and checkpoint history (like git worktrees).
 	newID := obj.WorkspaceID
@@ -468,12 +471,8 @@ func configFromArtifact(obj *manifest.BentoConfigObj, sourceStorePath string) *c
 		}
 	}
 
-	// Derive the store root from the source store path. The source store
-	// path is <store-root>/<workspace-id>, so strip the workspace-id suffix
-	// to get the root. This ensures the new directory uses the same store.
-	storeRoot := config.DefaultStorePath()
-	if sourceStorePath != "" {
-		storeRoot = filepath.Dir(sourceStorePath)
+	if storeRoot == "" {
+		storeRoot = config.DefaultStorePath()
 	}
 
 	cfg := &config.BentoConfig{

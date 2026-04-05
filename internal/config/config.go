@@ -499,8 +499,8 @@ func migrateWorkspaceID(dir string, cfg *BentoConfig) error {
 }
 
 // UpdateHead reads bento.yaml, sets the head field, and writes it back.
-// Unlike Load+Save, this does not trigger BackfillDefaults or validation,
-// so it preserves the file contents exactly except for the head field.
+// Unlike Load+Save, this does not trigger BackfillDefaults or validation.
+// Note: yaml.Marshal may reorder fields and strip comments.
 func UpdateHead(dir string, headDigest string) error {
 	path := filepath.Join(dir, "bento.yaml")
 	data, err := os.ReadFile(path)

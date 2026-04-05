@@ -1057,10 +1057,10 @@ func TestRestorableOpenUndoNoBackup(t *testing.T) {
 	dir := makeWorkspace(t)
 	run(t, dir, "save", "--skip-secret-scan", "-m", "v1")
 
-	// Undo should fail — no pre-open tag
+	// Undo should fail with a friendly message
 	out := runExpectFail(t, dir, "open", "undo")
-	if !strings.Contains(out, "not found") {
-		t.Errorf("undo with no backup should fail with 'not found', got:\n%s", out)
+	if !strings.Contains(out, "nothing to undo") {
+		t.Errorf("undo with no backup should say 'nothing to undo', got:\n%s", out)
 	}
 }
 
@@ -1237,6 +1237,83 @@ func TestOpenStaleFilesDeletion(t *testing.T) {
 	}
 	if string(content) != "extra content\n" {
 		t.Errorf("extra.txt content wrong after undo: %q", content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestGCPreservesPreOpen: gc with keep_last does not delete the pre-open tag
+// ---------------------------------------------------------------------------
+
+func TestGCPreservesPreOpen(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	// Create several checkpoints
+	for i := 1; i <= 4; i++ {
+		writeFile(t, dir, "data.txt", fmt.Sprintf("v%d\n", i))
+		run(t, dir, "save", "--skip-secret-scan", "-m", fmt.Sprintf("v%d", i))
+	}
+
+	// Open cp-1 (creates pre-open)
+	run(t, dir, "open", "cp-1")
+
+	// Run GC keeping only last 2 + tagged checkpoints.
+	// pre-open is a user tag (not cp-N), so --keep-tagged preserves it.
+	run(t, dir, "gc", "--keep-last", "2", "--keep-tagged")
+
+	// pre-open tag should survive GC
+	listOut := run(t, dir, "list")
+	if !strings.Contains(listOut, "pre-open") {
+		t.Errorf("pre-open should survive GC with --keep-tagged, got:\n%s", listOut)
+	}
+
+	// Undo should still work
+	run(t, dir, "open", "undo")
+	content, _ := os.ReadFile(filepath.Join(dir, "data.txt"))
+	if !strings.Contains(string(content), "v4") {
+		t.Errorf("undo after GC should restore v4 content, got: %q", content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestDiffWithPreOpen: diff against pre-open tag works
+// ---------------------------------------------------------------------------
+
+func TestDiffWithPreOpen(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v1")
+	writeFile(t, dir, "main.go", "package main\n// v2\nfunc main() {}\n")
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v2")
+
+	// Open cp-1 (creates pre-open)
+	run(t, dir, "open", "cp-1")
+
+	// Diff between cp-1 and pre-open should show differences
+	out := run(t, dir, "diff", "cp-1", "pre-open")
+	if !strings.Contains(out, "main.go") {
+		t.Errorf("diff cp-1 pre-open should show main.go changed, got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestPreOpenNotInCpSequence: pre-open backup doesn't consume cp-N sequence
+// ---------------------------------------------------------------------------
+
+func TestPreOpenNotInCpSequence(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v1")
+	writeFile(t, dir, "main.go", "package main\n// v2\nfunc main() {}\n")
+	run(t, dir, "save", "--skip-secret-scan", "-m", "v2")
+
+	// Open cp-1 (creates pre-open, NOT a cp-N)
+	run(t, dir, "open", "cp-1")
+
+	// Next save should be cp-3 (not cp-4 — pre-open didn't consume a number)
+	writeFile(t, dir, "main.go", "package main\n// v3\nfunc main() {}\n")
+	out := run(t, dir, "save", "--skip-secret-scan", "-m", "v3")
+	if !strings.Contains(out, "cp-3") {
+		t.Errorf("save after open should be cp-3 (pre-open doesn't consume sequence), got:\n%s", out)
 	}
 }
 
