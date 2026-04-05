@@ -1,5 +1,7 @@
 # 🍱 bento
 
+> **Warning:** This project is under heavy development. Expect breaking changes to the CLI, configuration format, and artifact structure between releases.
+
 **Portable agent workspaces. Pack, ship, resume.**
 
 ![bento demo](docs/demo.gif)
