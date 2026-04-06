@@ -578,6 +578,13 @@ func UnpackLayer(data []byte, targetDir string) error {
 	return UnpackLayerWithExternal(data, targetDir)
 }
 
+// HashBytes computes the SHA256 of data and returns the hex digest.
+// Use this for in-memory content (e.g., file content already loaded).
+func HashBytes(data []byte) string {
+	h := sha256.Sum256(data)
+	return fmt.Sprintf("%x", h[:])
+}
+
 // HashFileStreaming computes the SHA256 of a file by streaming it, without
 // loading the entire file into memory.
 func HashFileStreaming(path string) (string, error) {

@@ -2,8 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -302,8 +300,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 					}
 
 					// Compute content hash for change detection against parent.
-					h := sha256.Sum256(content)
-					contentHash := "sha256:" + hex.EncodeToString(h[:])
+					contentHash := workspace.HashBytes(content)
 
 					// Reuse parent placeholders if the file content is unchanged.
 					var prevPH map[string]string

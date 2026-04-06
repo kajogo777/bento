@@ -180,8 +180,7 @@ func diffWorkspace(dir string, args []string) error {
 						// file's hash matches the stored pre-scrub ContentHash,
 						// the file is unchanged — use the saved layer's hash so
 						// diffFileMaps sees no change.
-						// ContentHash uses "sha256:<hex>" format; HashFileStreaming uses bare "<hex>".
-						if expectedHash, ok := scrubContentHashes[f]; ok && "sha256:"+hash == expectedHash {
+						if expectedHash, ok := scrubContentHashes[f]; ok && hash == expectedHash {
 							mu.Lock()
 							if savedHash, exists := savedHashes[f]; exists {
 								currentHashes[f] = savedHash

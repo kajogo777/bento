@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -338,8 +336,7 @@ func newOpenCmd() *cobra.Command {
 					// stored at save time. Catches placeholder/secret mismatches or
 					// corruption. Skip for older checkpoints without ContentHash.
 					if rec.ContentHash != "" {
-						h := sha256.Sum256(content)
-						got := "sha256:" + hex.EncodeToString(h[:])
+						got := workspace.HashBytes(content)
 						if got != rec.ContentHash {
 							fmt.Printf("Warning: %s: hydrated content hash mismatch (expected %s, got %s)\n",
 								rec.Path, rec.ContentHash, got)
