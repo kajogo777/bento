@@ -275,9 +275,11 @@ Secret scrubbing requires no configuration. Secrets detected by gitleaks are
 automatically scrubbed during save and restored during open. Key components:
 
 - `internal/secrets/scrub.go` — `ScrubFile()` and `HydrateFile()` core functions
-- `internal/secrets/backend/oci.go` — `EncryptSecrets()` and `DecryptSecrets()` (NaCl secretbox)
-- `internal/secrets/backend/local.go` — local plaintext + encrypted envelope storage
-- One encryption key per checkpoint (shown at save time, used for all sharing)
+- `internal/secrets/backend/oci.go` — `EncryptSecrets()`, `DecryptSecrets()`, key wrapping (Curve25519)
+- `internal/cli/secrets_layer.go` — `extractSecretsEnvelope()` shared helper for reading secrets from OCI layers
+- Encrypted secrets stored as an OCI layer in the manifest (single source of truth)
+- Placeholder IDs are stable across saves (reused from parent checkpoint via content hash matching)
+- Push strips the secrets layer by default; `--include-secrets` keeps/re-wraps it
 - See `specs/secret-scrubbing.md` for the full design
 
 ### Cross-Platform

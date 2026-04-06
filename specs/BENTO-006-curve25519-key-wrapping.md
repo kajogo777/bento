@@ -222,25 +222,22 @@ from the registry without any local state.
 ## Save Flow
 
 ```
-1. gitleaks scan → findings
-2. ScrubFile() → scrubbed content + replacements
-3. Pack scrubbed layers
-4. Store plaintext secrets locally (~/.bento/secrets/)
-5. Load or auto-generate keypair:
+1. Load parent scrub state (content hashes + secrets from parent OCI layer)
+2. gitleaks scan → findings
+3. ScrubFile(content, findings, prevPlaceholders) → scrubbed content + replacements
+   (reuses parent placeholder IDs for unchanged files)
+4. Pack scrubbed workspace layers
+5. Skip check: if all layer digests match parent → skip save
+6. Load or auto-generate keypair:
    a. Try LoadDefaultKeypair()
    b. If ErrNoKeypair: GenerateKeypair(), SaveKeypair("default"), print public key
-6. EncryptSecrets(secrets) → ciphertext + rawDEK
-7. Collect recipient list:
-   a. Start with sender's own public key (always)
-   b. Add explicit recipients (bento.yaml + --recipient flags)
-   c. Deduplicate by public key bytes
-8. For each recipient:
-   - box.Seal(rawDEK, nonce, recipientPubKey, senderPrivKey) → wrappedDEK
-9. Build envelope:
-   {v: 1, sender, ciphertext, wrappedKeys: [{recipient, wrappedDEK}, ...]}
-10. Store envelope locally (replaces old .enc.json)
-11. Build OCI config + manifest
-12. Store to local OCI layout
+7. EncryptSecrets(secrets) → ciphertext + rawDEK
+8. BuildMultiRecipientEnvelope(ciphertext, rawDEK, senderPub, senderPriv, [self])
+   → envelope JSON
+9. PackBytesToTempLayer("secrets.enc", envJSON) → secrets OCI layer
+10. Append secrets layer to manifest layers (with annotations)
+11. Build OCI config + manifest (includes secrets layer)
+12. SaveCheckpoint to local OCI layout
 ```
 
 **No symmetric key is stored or displayed.** The envelope always contains

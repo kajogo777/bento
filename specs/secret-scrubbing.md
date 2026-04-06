@@ -32,27 +32,31 @@ them during `bento open`. No configuration required.
 ```
 bento save:
   1. gitleaks scans files, finds secrets
-  2. For each finding: replace secret value with unique placeholder in-memory
-  3. Pack the scrubbed content into OCI layers (real files on disk untouched)
-  4. Store plaintext secrets locally (~/.bento/secrets/)
-  5. Encrypt secrets into an envelope (NaCl secretbox, one-time key per checkpoint)
-  6. Store encrypted envelope locally (for push/export to use later)
-  7. Store scrub records in OCI manifest metadata
-  8. Display sharing hints (key is shown later, at push/export time)
+  2. Load parent checkpoint's scrub state (content hashes + encrypted secrets)
+  3. For each file with secrets:
+     a. Compute content hash (SHA256 of original file)
+     b. If unchanged from parent: reuse previous placeholder IDs (stable digests)
+     c. If changed or new: generate fresh random placeholder IDs
+  4. Replace secret values with placeholders in-memory
+  5. Pack the scrubbed content into OCI layers (real files on disk untouched)
+  6. Encrypt secrets into an envelope (NaCl secretbox + Curve25519 key wrapping)
+  7. Pack encrypted envelope as an OCI layer ("secrets" layer with annotations)
+  8. Store scrub records + content hashes in OCI manifest metadata
+  9. Save checkpoint (workspace layers + secrets layer in one manifest)
 
-bento open (same machine):
+bento open:
   1. Restore scrubbed files from OCI layers
   2. Read scrub records from OCI manifest
-  3. Pull plaintext secrets from local store
-  4. Replace placeholders with real values
-  5. Files on disk have real secrets — ready to work
+  3. Extract encrypted secrets from OCI secrets layer
+  4. Decrypt envelope with local keypair (or --private-key)
+  5. Replace placeholders with real values
+  6. Verify hydrated content hash matches stored ContentHash
+  7. Files on disk have real secrets — ready to work
 
-bento open (different machine):
-  1. Restore scrubbed files from OCI layers
-  2. Try local store → not found
-  3. Try OCI encrypted layer (if pushed with --include-secrets) → decrypt with key
-  4. Try --secrets-file flag → decrypt with key
-  5. If all fail: show hint with exact commands to run
+bento push:
+  Without --include-secrets: secrets layer is stripped before pushing
+  With --include-secrets: secrets layer kept; re-wrapped for recipients
+    if --sender/--recipient specified
 ```
 
 ## Placeholder Format
@@ -116,20 +120,23 @@ ScrubRecords []ScrubFileRecord `json:"scrubRecords,omitempty"`
 RestoreHint  string            `json:"restoreHint,omitempty"`
 ```
 
-No secret values, no hashes, no cryptographic material in the OCI manifest.
+Each `ScrubFileRecord` includes a `ContentHash` (SHA256 of the original pre-scrub
+file content) used for change detection and hydration integrity verification.
 
-## Local Storage
+No secret values, no hashes of secrets, no cryptographic material in the OCI manifest config.
 
-Secrets are stored in two files per checkpoint:
+## Secrets Storage
 
-```
-~/.bento/secrets/<workspaceID>/
-  <tag>.json       # plaintext: {"placeholder": "real-value", ...}  (0600)
-  <tag>.enc.json   # encrypted envelope: {"ciphertext": "...", "secretKey": "..."}  (0600)
-```
+Encrypted secrets are stored as an OCI layer in the checkpoint manifest — the
+single source of truth. No separate local files are created.
 
-The plaintext file enables seamless same-machine opens (no key needed).
-The encrypted envelope is used by `push --include-secrets` and `secrets export`.
+The secrets layer is a tar.gz containing a single `secrets.enc` file with a
+`MultiRecipientEnvelope` JSON (NaCl secretbox ciphertext + Curve25519-wrapped
+DEK). It is identified by the `dev.bento.secrets.encrypted=true` annotation
+on the layer descriptor.
+
+On `bento push`, the secrets layer is stripped by default. With `--include-secrets`,
+it is kept (and optionally re-wrapped for specified recipients).
 
 ## User Flows
 
@@ -291,48 +298,73 @@ examples/
 ### Save flow (save_core.go)
 
 ```
-1. gitleaks scans all workspace files
-2. If secrets found:
+1. Open store, load parent scrub state (content hashes + encrypted secrets from OCI layer)
+2. gitleaks scans all workspace files
+3. If secrets found:
    a. Group findings by file
-   b. For each file: ScrubFile(content, findings) → scrubbed + replacements
+   b. For each file:
+      - Compute SHA256 content hash
+      - If hash matches parent: reuse parent's placeholder IDs (prevPlaceholders)
+      - ScrubFile(content, findings, prevPlaceholders) → scrubbed + replacements
    c. Write scrubbed content to temp files
    d. Register temp files as overrides for layer packing
    e. Collect placeholder→value map
-3. Pack layers (packer reads from overrides instead of real files)
-4. Store plaintext locally: localBe.Put(key, secrets)
-5. Encrypt: EncryptSecrets(secrets) → ciphertext + secretKey
-6. Store envelope locally: localBe.Put(key+".enc", {ciphertext, secretKey})
-7. Embed scrub records + restore hint in OCI manifest
-8. Display key + sharing hints
+4. Pack workspace layers (packer reads from overrides instead of real files)
+5. Skip check: if all layer digests match parent → skip save (stable placeholders make this work)
+6. Encrypt: EncryptSecrets(secrets) → ciphertext + DEK
+7. Wrap: BuildMultiRecipientEnvelope(DEK, self) → envelope
+8. Pack envelope as OCI layer: PackBytesToTempLayer("secrets.enc", envJSON)
+9. Append secrets layer to layerInfos (with annotations)
+10. Embed scrub records + content hashes in OCI manifest config
+11. BuildManifest + SaveCheckpoint (workspace layers + secrets layer)
 ```
 
 ### Open flow (open.go)
 
 ```
 1. Restore scrubbed files from OCI layers
-2. Read scrub records from manifest
-3. Try to get secrets:
-   a. Local backend (same machine) → if found, done
-   b. OCI encrypted layer + --secret-key → if found, done
-   c. --secrets-file + --secret-key → if found, done
-4. For each scrubbed file: HydrateFile(content, secrets)
-5. If secrets not found: show hint with exact commands
+2. Read scrub records from manifest config
+3. Extract secrets from OCI secrets layer:
+   extractSecretsEnvelope(store, manifest) → envelope bytes
+4. Decrypt: TryUnwrapEnvelope(envelope, privateKey) → placeholder→value map
+5. For each scrubbed file:
+   a. HydrateFile(content, secrets)
+   b. Verify SHA256(hydrated) == ContentHash (warn on mismatch)
+6. If secrets layer missing: show hint with recovery commands
+```
+
+### Push flow (push.go)
+
+```
+Without --include-secrets:
+  1. Strip secrets layer from manifest (RemoveSecretsLayer)
+  2. Push workspace-only manifest to remote
+
+With --include-secrets:
+  1. If no re-wrapping needed: push manifest as-is (self-wrapped secrets layer)
+  2. If --sender/--recipient specified:
+     a. Extract envelope from OCI layer
+     b. RewrapEnvelope for new sender/recipients
+     c. Remove old secrets layer, inject re-wrapped layer
+     d. Push manifest with re-wrapped secrets layer
 ```
 
 ## Security Properties
 
 | Property | Guarantee |
 |----------|-----------|
-| No secrets in OCI layers | Scrubbed before packing; only placeholders |
-| No crypto material in manifest | No hashes, no salts, no keys |
-| Forward secrecy | One-time key per checkpoint; old checkpoints safe if current key leaks |
+| No secrets in workspace layers | Scrubbed before packing; only placeholders |
+| Encrypted secrets layer | NaCl secretbox (XSalsa20-Poly1305) + Curve25519 key wrapping |
+| No crypto material in config | No hashes of secrets, no salts, no keys in manifest config |
+| Forward secrecy | One-time 32-byte DEK per checkpoint |
+| Secrets not pushed by default | Push strips secrets layer unless --include-secrets |
 | WYSIWYG on disk | Real files never modified during save; hydrated immediately on open |
 | Graceful degradation | If secrets unavailable: files restore with placeholders + actionable hints |
-| Local storage security | File permissions 0600; directory 0700 |
-| Encrypted envelope | NaCl secretbox (XSalsa20-Poly1305); authenticated encryption |
-| Export is encrypted | Exported bundle is ciphertext, not readable without key |
+| Hydration integrity | ContentHash verified after hydration to detect corruption |
+| Stable placeholder IDs | Reused from parent checkpoint; no information leakage |
 
 ## GC Integration
 
-When `bento gc` prunes checkpoints, it also deletes the corresponding local
-secret files (`<tag>.json` and `<tag>.enc.json`) for each pruned checkpoint.
+Encrypted secrets are stored as OCI layer blobs in the store. When `bento gc`
+prunes checkpoints, the orphaned blobs (including secrets layers) are cleaned
+up automatically by blob GC. No separate cleanup is needed.
