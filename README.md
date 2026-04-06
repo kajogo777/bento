@@ -223,25 +223,25 @@ To suppress false positives, copy the lines above into .gitleaksignore (one per 
 
 ## Use Cases
 
-**Resume where you left off.** Agent sessions lose context when they end. Save a checkpoint mid-task, come back days later, and `bento open` restores everything: code, deps, agent memory, build caches. No re-explaining context to your agent.
+**[Resume where you left off.](docs/tutorials/resume-where-you-left-off.md)** Agent sessions lose context when they end. Save a checkpoint mid-task, come back days later, and `bento open` restores everything: code, deps, agent memory, build caches. No re-explaining context to your agent.
 
-**Move workspaces between machines.** Working locally but need a cloud VM with more power? `bento push` from your laptop, `bento pull --open` on the remote. Same workflow moving between cloud providers, no rsync, no reinstalling deps.
+**[Move workspaces between machines.](docs/tutorials/move-workspaces-between-machines.md)** Working locally but need a cloud VM with more power? `bento push` from your laptop, `bento open` on the remote. Same workflow moving between cloud providers, no rsync, no reinstalling deps.
 
-**Undo agent mistakes.** An agent trashed your build cache or went off the rails. `bento open` auto-backs up before restoring, and `bento open undo` reverses it. Watch mode auto-checkpoints as you work so you can roll back to any point.
+**[Undo agent mistakes.](docs/tutorials/undo-agent-mistakes.md)** An agent trashed your build cache or went off the rails. `bento open` auto-backs up before restoring, and `bento open undo` reverses it. Watch mode auto-checkpoints as you work so you can roll back to any point.
 
-**Hand off between agents.** Started with Claude Code, need Cursor for the frontend? Save a checkpoint and open it with a different agent. The new agent gets the full workspace state, not just the code.
+**[Hand off between agents.](docs/tutorials/hand-off-between-agents.md)** Started with Claude Code, need Cursor for the frontend? Save a checkpoint and open it with a different agent. The new agent gets the full workspace state, not just the code.
 
-**Portable sandboxes.** Save in E2B, open in Docker, push to Fly.io. Bento artifacts are standard OCI images, so any container registry works as transport and any OCI-compatible runtime can consume them.
+**[Portable sandboxes.](docs/tutorials/portable-sandboxes.md)** Save in E2B, open in Docker, push to Fly.io. Bento artifacts are standard OCI images, so any container registry works as transport and any OCI-compatible runtime can consume them.
 
-**Parallel exploration.** Fork the same checkpoint into multiple directories. Let different agents try different approaches independently. Compare results, keep the winner.
+**[Parallel exploration.](docs/tutorials/parallel-exploration.md)** Fork the same checkpoint into multiple directories. Let different agents try different approaches independently. Compare results, keep the winner.
 
-**Warm-start CI.** Instead of cold-starting every agent CI run, pull a checkpoint with pre-installed deps and agent config. Agents start warm. Failed runs are saved as checkpoints for debugging.
+**[Warm-start CI.](docs/tutorials/warm-start-ci.md)** Instead of cold-starting every agent CI run, pull a checkpoint with pre-installed deps and agent config. Agents start warm. Failed runs are saved as checkpoints for debugging.
 
-**Share workspaces with teammates.** Push a checkpoint to a shared registry. Your teammate pulls it and gets your exact environment, not a recipe to rebuild it, but the actual state.
+**[Share workspaces with teammates.](docs/tutorials/share-workspaces.md)** Push a checkpoint to a shared registry. Your teammate pulls it and gets your exact environment, not a recipe to rebuild it, but the actual state.
 
-**Workspace templates.** Publish a "starter" checkpoint with scaffolded code, pre-installed deps, and pre-configured agent memory. New projects start ready to go.
+**[Workspace templates.](docs/tutorials/workspace-templates.md)** Publish a "starter" checkpoint with scaffolded code, pre-installed deps, and pre-configured agent memory. New projects start ready to go.
 
-**Audit agent work.** Every checkpoint is an immutable snapshot. `bento diff cp-3 cp-5` shows what changed across code, deps, and agent state, not just code diffs.
+**[Audit agent work.](docs/tutorials/audit-agent-work.md)** Every checkpoint is an immutable snapshot. `bento diff cp-3 cp-5` shows what changed across code, deps, and agent state, not just code diffs.
 
 ## CLI Reference
 
