@@ -881,32 +881,22 @@ func TestScrub_OpenAllowMissingSecrets(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestScrub_NoSecretsDir: ~/.bento/secrets doesn't exist at all
+// TestScrub_NoKeypair: no keypair available to decrypt secrets
 // ---------------------------------------------------------------------------
 
 func TestScrub_NoSecretsDir(t *testing.T) {
 	dir := makeWorkspaceWithSecret(t)
-	run(t, dir, "save", "-m", "no secrets dir test")
+	run(t, dir, "save", "-m", "no keypair test")
 
-	// Remove the entire secrets directory.
-	home, _ := os.UserHomeDir()
-	wsID := ""
-	bentoYAML, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
-	for _, line := range strings.Split(string(bentoYAML), "\n") {
-		if strings.HasPrefix(line, "id: ") {
-			wsID = strings.TrimPrefix(line, "id: ")
-			break
-		}
-	}
-	secretsDir := filepath.Join(home, ".bento", "secrets", wsID)
-	os.RemoveAll(secretsDir)
+	// Delete keypair to simulate no decryption key available.
+	deleteLocalSecrets(t, dir)
 
 	// Open should fail cleanly.
 	dst := t.TempDir()
 	out := runExpectFail(t, dir, "open", "cp-1", dst)
 
 	if !strings.Contains(out, "cannot be resolved") {
-		t.Errorf("should fail when secrets dir missing, got:\n%s", out)
+		t.Errorf("should fail when keypair missing, got:\n%s", out)
 	}
 
 	// No files written.
@@ -971,20 +961,31 @@ func TestScrub_ExportShowsKeyOnStderr(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: deleteLocalSecrets removes the local secrets for a workspace
+// Helper: deleteLocalSecrets simulates a different machine by removing the
+// keypair needed to decrypt the encrypted secrets layer. Secrets are stored
+// as OCI layers (not local files), so deleting the keypair prevents decryption.
+// The original keypair is restored via t.Cleanup.
 // ---------------------------------------------------------------------------
 
 func deleteLocalSecrets(t *testing.T, workDir string) {
 	t.Helper()
 	home, _ := os.UserHomeDir()
-	bentoYAML, _ := os.ReadFile(filepath.Join(workDir, "bento.yaml"))
-	for _, line := range strings.Split(string(bentoYAML), "\n") {
-		if strings.HasPrefix(line, "id: ") {
-			wsID := strings.TrimPrefix(line, "id: ")
-			os.RemoveAll(filepath.Join(home, ".bento", "secrets", wsID))
-			return
-		}
+	keysDir := filepath.Join(home, ".bento", "keys")
+	keyFile := filepath.Join(keysDir, "default.json")
+
+	// Back up the keypair file so we can restore it after the test.
+	backup, err := os.ReadFile(keyFile)
+	if err != nil {
+		// No keypair to delete — nothing to do.
+		return
 	}
+	t.Cleanup(func() {
+		_ = os.MkdirAll(keysDir, 0700)
+		_ = os.WriteFile(keyFile, backup, 0600)
+	})
+
+	// Remove the keypair to prevent decryption.
+	_ = os.Remove(keyFile)
 }
 
 // ---------------------------------------------------------------------------
@@ -1103,20 +1104,18 @@ func TestScrub_PushPullWithSecrets(t *testing.T) {
 	bentoYAML = append(bentoYAML, []byte("remote: localhost:5000/bento-scrub-test\n")...)
 	os.WriteFile(filepath.Join(dir, "bento.yaml"), bentoYAML, 0644)
 
-	// Push with --include-secrets.
+	// Push with --include-secrets (self-wrapped, no re-wrap needed since
+	// no --recipient specified).
 	pushOut := run(t, dir, "push", "--include-secrets")
 	if !strings.Contains(pushOut, "Done") {
 		t.Fatalf("push should succeed, got:\n%s", pushOut)
 	}
-	// Push output should show re-wrap info.
-	if !strings.Contains(pushOut, "Re-wrapped") {
-		t.Errorf("push output should show re-wrap info, got:\n%s", pushOut)
+	// Secrets layer is already present from save, so push keeps it as-is.
+	if !strings.Contains(pushOut, "already present") {
+		t.Errorf("push should report secrets layer already present, got:\n%s", pushOut)
 	}
 
-	// Delete local secrets to simulate different machine.
-	deleteLocalSecrets(t, dir)
-
-	// Pull and open — should decrypt via keypair auto-discovery from OCI layer.
+	// Pull and open — should decrypt via the same keypair (same machine).
 	dst := t.TempDir()
 	dstBentoYAML := fmt.Sprintf("store: %s\nremote: localhost:5000/bento-scrub-test\n", t.TempDir())
 	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstBentoYAML), 0644)
