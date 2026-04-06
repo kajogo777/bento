@@ -233,11 +233,11 @@ func diffWorkspace(dir string, args []string) error {
 
 	// Print results in original layer order.
 	hasChanges := false
-	for _, res := range layerResults {
+	for i, res := range layerResults {
 		if res.skip {
 			continue
 		}
-		printLayerDiff(res.name, res.added, res.removed, res.modified, res.lineCounts, &hasChanges)
+		printLayerDiff(i, numLayers, res.name, res.added, res.removed, res.modified, res.lineCounts, &hasChanges)
 	}
 
 	if !hasChanges {
@@ -382,16 +382,16 @@ func diffCheckpoints(dir string, args []string) error {
 
 	// Print results in original layer order.
 	hasChanges := false
-	for _, res := range cpResults {
+	for i, res := range cpResults {
 		if res.skip {
 			continue
 		}
 		if res.unchanged {
-			fmt.Printf("\n  %s%s: unchanged%s (%s)\n",
-				colorDim, res.name, colorReset, truncateDigest(res.digest))
+			fmt.Printf("\n  %s[%d/%d] %s: unchanged%s (%s)\n",
+				colorDim, i+1, numLayers, res.name, colorReset, truncateDigest(res.digest))
 			continue
 		}
-		printLayerDiff(res.name, res.added, res.removed, res.modified, res.lineCounts, &hasChanges)
+		printLayerDiff(i, numLayers, res.name, res.added, res.removed, res.modified, res.lineCounts, &hasChanges)
 	}
 	if !hasChanges {
 		fmt.Println("\nNo changes between checkpoints.")

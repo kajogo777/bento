@@ -129,9 +129,10 @@ func lineCountAnnotation(lc fileLineCounts) string {
 
 // printLayerDiff prints the diff for a single layer.
 // lineCounts maps file path → line change counts; pass nil to omit annotations.
-func printLayerDiff(name string, added, removed, modified []string, lineCounts map[string]fileLineCounts, hasChanges *bool) {
+func printLayerDiff(index, numLayers int, name string, added, removed, modified []string, lineCounts map[string]fileLineCounts, hasChanges *bool) {
+	prefix := fmt.Sprintf("[%d/%d] ", index+1, numLayers)
 	if len(added) == 0 && len(removed) == 0 && len(modified) == 0 {
-		fmt.Printf("\n  %s%s: unchanged%s\n", colorDim, name, colorReset)
+		fmt.Printf("\n  %s%s%s: unchanged%s\n", colorDim, prefix, name, colorReset)
 		return
 	}
 	*hasChanges = true
@@ -152,7 +153,7 @@ func printLayerDiff(name string, added, removed, modified []string, lineCounts m
 	if total == 1 {
 		word = "change"
 	}
-	fmt.Printf("\n  %s: %d %s (%s)\n", name, total, word, strings.Join(parts, ", "))
+	fmt.Printf("\n  %s%s: %d %s (%s)\n", prefix, name, total, word, strings.Join(parts, ", "))
 
 	printFile := func(sigil, color, f string) {
 		ann := ""
