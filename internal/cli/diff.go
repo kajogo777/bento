@@ -140,18 +140,34 @@ func diffWorkspace(dir string, args []string) error {
 		skip                     bool
 	}
 
-	numLayers := len(layerDefs)
+	// Iterate manifest layers (not layerDefs) so all layers — including
+	// non-workspace layers like secrets — are shown consistently.
+	numLayers := len(m.Layers)
 	layerResults := make([]layerDiffResult, numLayers)
 
 	g := new(errgroup.Group)
 	g.SetLimit(runtime.NumCPU())
 
-	for i, ld := range layerDefs {
+	for i, desc := range m.Layers {
 		if i >= len(layers) {
 			layerResults[i].skip = true
 			continue
 		}
-		i, ld := i, ld // capture loop variables
+
+		layerName := fmt.Sprintf("layer-%d", i)
+		if name, ok := desc.Annotations[manifest.AnnotationTitle]; ok {
+			layerName = name
+		}
+
+		// Non-workspace layers (e.g., secrets) have no workspace files to
+		// compare — they're always "unchanged" from the workspace perspective.
+		sr, hasWorkspaceFiles := scanResults[layerName]
+		if !hasWorkspaceFiles {
+			layerResults[i] = layerDiffResult{name: layerName}
+			continue
+		}
+
+		i := i // capture loop variable
 		g.Go(func() error {
 			// Stream the saved layer to compute hashes (avoids loading GBs into memory)
 			r, err := layers[i].NewReader()
@@ -162,7 +178,6 @@ func diffWorkspace(dir string, args []string) error {
 			savedHashes, _ := workspace.ListLayerFilesWithHashesFromReader(r)
 			_ = r.Close()
 
-			sr := scanResults[ld.Name]
 			currentHashes := make(map[string]string)
 
 			// Hash workspace and external files concurrently using errgroup.
@@ -221,7 +236,7 @@ func diffWorkspace(dir string, args []string) error {
 				removed:    removed,
 				modified:   modified,
 				lineCounts: lineCounts,
-				name:       ld.Name,
+				name:       layerName,
 			}
 			return nil
 		})
