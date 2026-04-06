@@ -155,6 +155,12 @@ func printLayerDiff(index, numLayers int, name string, added, removed, modified 
 	}
 	fmt.Printf("\n  %s%s: %d %s (%s)\n", prefix, name, total, word, strings.Join(parts, ", "))
 
+	// Don't list individual files for the secrets layer — it's an
+	// internal envelope, not user-facing workspace content.
+	if name == "secrets" {
+		return
+	}
+
 	printFile := func(sigil, color, f string) {
 		ann := ""
 		if lineCounts != nil {
