@@ -41,7 +41,7 @@ Each checkpoint also stores workspace metadata: environment variables, secret re
 
 ```bash
 # macOS / Linux (Homebrew)
-brew tap kajogo777/bento
+brew tap kajogo777/bento https://github.com/kajogo777/bento
 brew install kajogo777/bento/bento
 
 # Upgrade
