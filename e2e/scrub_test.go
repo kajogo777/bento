@@ -613,6 +613,35 @@ func TestScrub_HydrationIntegrity(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestScrub_DiffShowsNoChangesAfterSave: bento diff immediately after save
+// should report no changes, even for files with secrets. The diff must use
+// ContentHash to compare workspace files against scrubbed layer content.
+// ---------------------------------------------------------------------------
+
+func TestScrub_DiffShowsNoChangesAfterSave(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+
+	run(t, dir, "save", "-m", "diff baseline")
+
+	// Diff immediately after save — no files changed.
+	out := run(t, dir, "diff")
+	if !strings.Contains(strings.ToLower(out), "no changes") {
+		t.Errorf("diff after save should report 'no changes', got:\n%s", out)
+	}
+
+	// Modify a non-secret file and verify diff picks it up.
+	writeFile(t, dir, "README.md", "# Modified\n")
+	out2 := run(t, dir, "diff")
+	if !strings.Contains(out2, "README.md") {
+		t.Errorf("diff should show README.md as modified, got:\n%s", out2)
+	}
+	// The secret file should NOT appear as modified.
+	if strings.Contains(out2, ".mcp.json") {
+		t.Errorf("diff should not show .mcp.json as modified (unchanged), got:\n%s", out2)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestScrub_OpenOlderCheckpoint: opening cp-1 after cp-2 exists works
 // ---------------------------------------------------------------------------
 

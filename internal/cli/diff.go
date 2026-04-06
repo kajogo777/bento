@@ -89,7 +89,7 @@ func diffWorkspace(dir string, args []string) error {
 	}
 	_, tag, _ := registry.ParseRef(ref)
 
-	manifestBytes, _, layers, err := store.LoadCheckpoint(tag)
+	manifestBytes, configBytes, layers, err := store.LoadCheckpoint(tag)
 	if err != nil {
 		return fmt.Errorf("no checkpoints found. Run `bento save` first")
 	}
@@ -101,6 +101,20 @@ func diffWorkspace(dir string, args []string) error {
 
 	var m ocispec.Manifest
 	_ = json.Unmarshal(manifestBytes, &m)
+
+	// Load scrub records to get per-file content hashes. The saved layer has
+	// scrubbed content (with placeholders), but the workspace has real secrets.
+	// Instead of re-scrubbing, we compare the workspace file's hash against the
+	// stored ContentHash (SHA256 of original pre-scrub content). If they match,
+	// the file hasn't changed — use the saved layer's hash for comparison.
+	scrubContentHashes := make(map[string]string) // relPath → "sha256:<hex>" of original content
+	if bentoCfg, parseErr := manifest.UnmarshalConfig(configBytes); parseErr == nil {
+		for _, rec := range bentoCfg.ScrubRecords {
+			if rec.ContentHash != "" {
+				scrubContentHashes[rec.Path] = rec.ContentHash
+			}
+		}
+	}
 
 	resolved := resolveExtensions(dir, cfg)
 	layerDefs := resolved.Layers
@@ -161,9 +175,25 @@ func diffWorkspace(dir string, args []string) error {
 				hg.Go(func() error {
 					hash, err := workspace.HashFileStreaming(filepath.Join(dir, f))
 					if err == nil {
-						mu.Lock()
-						currentHashes[f] = hash
-						mu.Unlock()
+						// For files with scrubbed secrets, the saved layer has
+						// placeholder content (different hash). If the workspace
+						// file's hash matches the stored pre-scrub ContentHash,
+						// the file is unchanged — use the saved layer's hash so
+						// diffFileMaps sees no change.
+						// ContentHash uses "sha256:<hex>" format; HashFileStreaming uses bare "<hex>".
+						if expectedHash, ok := scrubContentHashes[f]; ok && "sha256:"+hash == expectedHash {
+							mu.Lock()
+							if savedHash, exists := savedHashes[f]; exists {
+								currentHashes[f] = savedHash
+							} else {
+								currentHashes[f] = hash
+							}
+							mu.Unlock()
+						} else {
+							mu.Lock()
+							currentHashes[f] = hash
+							mu.Unlock()
+						}
 					}
 					return nil // skip files that error, matching original behavior
 				})
@@ -712,3 +742,4 @@ func truncateDigest(d string) string {
 	}
 	return d
 }
+
