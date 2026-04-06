@@ -44,10 +44,16 @@ func PlaceholderRe() *regexp.Regexp { return placeholderRe }
 // It replaces each detected secret value with a unique placeholder and
 // returns the scrubbed content plus the list of replacements made.
 //
+// prevPlaceholders is an optional map of secret_value → placeholder from a
+// parent checkpoint. When a detected secret matches a key in this map, the
+// previous placeholder is reused (if it doesn't collide with existing content),
+// producing identical scrubbed output for unchanged secrets. Pass nil to
+// generate fresh random placeholders for all secrets.
+//
 // The original content slice is not modified; a new byte slice is returned.
 // If findings is empty, the original content is returned unchanged with
 // a nil replacements slice.
-func ScrubFile(content []byte, findings []ScanResult) (scrubbed []byte, replacements []Replacement) {
+func ScrubFile(content []byte, findings []ScanResult, prevPlaceholders map[string]string) (scrubbed []byte, replacements []Replacement) {
 	if len(findings) == 0 {
 		return content, nil
 	}
@@ -72,7 +78,14 @@ func ScrubFile(content []byte, findings []ScanResult) (scrubbed []byte, replacem
 			continue
 		}
 		if _, ok := seen[f.Match]; !ok {
-			ph := generatePlaceholder(result)
+			// Reuse a previous placeholder if available and it doesn't
+			// collide with existing content (other than the secret itself).
+			var ph string
+			if prev, hasPrev := prevPlaceholders[f.Match]; hasPrev && !bytes.Contains(result, []byte(prev)) {
+				ph = prev
+			} else {
+				ph = generatePlaceholder(result)
+			}
 			d := &deduped{
 				secret:      f.Match,
 				ruleID:      f.Pattern,

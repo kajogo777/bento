@@ -553,6 +553,66 @@ func TestScrub_OCILayerContainsNoCleartext(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestScrub_StablePlaceholders_NoChangeSkip: saving unchanged workspace with
+// secrets twice should skip on the second save ("no changes detected")
+// because placeholder IDs are now stable across saves.
+// ---------------------------------------------------------------------------
+
+func TestScrub_StablePlaceholders_NoChangeSkip(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+
+	// First save — scrubs secrets and stores checkpoint.
+	out1 := run(t, dir, "save", "-m", "first")
+	if !strings.Contains(out1, "Scrubbed") {
+		t.Fatalf("first save should scrub, got:\n%s", out1)
+	}
+	if !strings.Contains(out1, "cp-1") {
+		t.Fatalf("first save should produce cp-1, got:\n%s", out1)
+	}
+
+	// Second save — nothing changed on disk, so it must be skipped.
+	out2 := run(t, dir, "save", "-m", "second")
+	if !strings.Contains(strings.ToLower(out2), "no changes") {
+		t.Errorf("second save of unchanged workspace should be skipped with 'no changes', got:\n%s", out2)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestScrub_HydrationIntegrity: content hash stored at save time is verified
+// during open, ensuring the hydrated file matches the original pre-scrub content.
+// ---------------------------------------------------------------------------
+
+func TestScrub_HydrationIntegrity(t *testing.T) {
+	dir := makeWorkspaceWithSecret(t)
+
+	// Read original .mcp.json before save.
+	origMCP, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run(t, dir, "save", "-m", "integrity test")
+
+	// Open to a fresh directory.
+	dst := t.TempDir()
+	out := run(t, dir, "open", "cp-1", dst)
+
+	// The open output should NOT contain a hash mismatch warning.
+	if strings.Contains(out, "hash mismatch") {
+		t.Errorf("open should not report hash mismatch for valid round-trip, got:\n%s", out)
+	}
+
+	// Verify the restored file is byte-identical to the original.
+	dstContent, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("reading restored .mcp.json: %v", err)
+	}
+	if string(dstContent) != string(origMCP) {
+		t.Errorf("restored .mcp.json not byte-identical.\nOriginal: %q\nRestored: %q", origMCP, dstContent)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestScrub_OpenOlderCheckpoint: opening cp-1 after cp-2 exists works
 // ---------------------------------------------------------------------------
 

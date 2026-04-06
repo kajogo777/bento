@@ -34,6 +34,10 @@ type Store interface {
 	// DeleteCheckpoint removes a manifest entry from the index.
 	// It does not delete blobs; that is left to garbage collection.
 	DeleteCheckpoint(digest string) error
+
+	// FetchBlob reads a blob by digest into memory. Use for small blobs
+	// (configs, secrets envelopes). For large blobs, use LoadCheckpoint.
+	FetchBlob(digest string) ([]byte, error)
 }
 
 // LayerData holds metadata and content access for a single layer blob.

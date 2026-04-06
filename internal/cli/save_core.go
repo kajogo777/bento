@@ -2,7 +2,8 @@ package cli
 
 import (
 	"bufio"
-	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -48,6 +49,78 @@ type SaveResult struct {
 	Hint    string // backend-specific restore hint (display variant, may contain secrets)
 }
 
+// parentScrubState holds the previous checkpoint's scrub information,
+// used to produce stable placeholder IDs for unchanged files.
+type parentScrubState struct {
+	// placeholders maps file_path → (secret_value → placeholder_string).
+	placeholders map[string]map[string]string
+	// hashes maps file_path → "sha256:<hex>" of original (pre-scrub) content.
+	hashes map[string]string
+}
+
+// loadParentScrubState decrypts the parent checkpoint's secrets and builds
+// a reverse map (secret_value → placeholder) per file. This allows the scrub
+// loop to reuse previous placeholder IDs for unchanged files, avoiding false
+// "changed" layer digests.
+//
+// Returns empty maps (not nil) on any failure — callers can always use the
+// result without nil checks.
+func loadParentScrubState(store registry.Store, parentDigest string) parentScrubState {
+	result := parentScrubState{
+		placeholders: make(map[string]map[string]string),
+		hashes:       make(map[string]string),
+	}
+
+	prevManifestBytes, prevConfigBytes, loadErr := store.LoadManifest(parentDigest)
+	if loadErr != nil {
+		return result
+	}
+	prevCfg, cfgErr := manifest.UnmarshalConfig(prevConfigBytes)
+	if cfgErr != nil || len(prevCfg.ScrubRecords) == 0 {
+		return result
+	}
+
+	// Build per-file placeholder lists and content hashes from parent config.
+	parentPlaceholdersByFile := make(map[string][]string, len(prevCfg.ScrubRecords))
+	for _, rec := range prevCfg.ScrubRecords {
+		result.hashes[rec.Path] = rec.ContentHash
+		phs := make([]string, 0, len(rec.Replacements))
+		for _, r := range rec.Replacements {
+			phs = append(phs, r.Placeholder)
+		}
+		parentPlaceholdersByFile[rec.Path] = phs
+	}
+
+	// Extract encrypted secrets envelope from the parent manifest's OCI layer.
+	envBytes, envErr := extractSecretsEnvelope(store, prevManifestBytes)
+	if envErr != nil || envBytes == nil {
+		return result
+	}
+
+	recipPub, recipPriv, kpErr := keys.LoadDefaultKeypair()
+	if kpErr != nil {
+		return result
+	}
+	sv, unwrapErr := backend.TryUnwrapEnvelope(envBytes, recipPub, recipPriv)
+	if unwrapErr != nil {
+		return result
+	}
+
+	// sv maps placeholder → secret_value. Invert per-file.
+	for filePath, phs := range parentPlaceholdersByFile {
+		fileMap := make(map[string]string, len(phs))
+		for _, ph := range phs {
+			if secretVal, ok := sv[ph]; ok {
+				fileMap[secretVal] = ph
+			}
+		}
+		if len(fileMap) > 0 {
+			result.placeholders[filePath] = fileMap
+		}
+	}
+	return result
+}
+
 // ExecuteSave performs a full save operation: scan, pack, build manifest, store.
 // It acquires a file lock to prevent concurrent saves from corrupting the store.
 // If all layer digests match the parent checkpoint, the save is skipped and
@@ -90,12 +163,32 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 
 	// Secret scan and scrub
 	var scrubRecords []manifest.ScrubFileRecord
-	var scrubRestoreHint string
+
 	var scrubSecrets map[string]string // placeholder → value, stored after seq is known
 	// fileOverrides maps normalized relative path → temp file with scrubbed content.
 	// Passed to PackLayerWithExternalToTemp so scrubbed content is packed
 	// instead of the real files on disk.
 	fileOverrides := make(map[string]string)
+
+	// Open store early — needed both for loading parent scrub state and
+	// later for packing/saving the checkpoint.
+	store, err := registry.NewStore(cfg.StorePath())
+	if err != nil {
+		return nil, fmt.Errorf("opening store: %w", err)
+	}
+
+	// Load parent scrub state for placeholder reuse. This prevents unchanged
+	// files with secrets from generating different placeholder IDs on each save,
+	// which would cause the layer to appear "changed" even when nothing changed.
+	var prevScrub parentScrubState
+	if parentDigest := cfg.Head; parentDigest != "" {
+		prevScrub = loadParentScrubState(store, parentDigest)
+	} else {
+		prevScrub = parentScrubState{
+			placeholders: make(map[string]map[string]string),
+			hashes:       make(map[string]string),
+		}
+	}
 
 	// Resolve secret scan mode from config, flags, and environment.
 	secretsMode := cfg.Secrets.Mode
@@ -208,7 +301,17 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 						return nil, fmt.Errorf("reading %s for scrubbing: %w", relPath, readErr)
 					}
 
-					scrubbed, replacements := secrets.ScrubFile(content, hits)
+					// Compute content hash for change detection against parent.
+					h := sha256.Sum256(content)
+					contentHash := "sha256:" + hex.EncodeToString(h[:])
+
+					// Reuse parent placeholders if the file content is unchanged.
+					var prevPH map[string]string
+					if prevHash, ok := prevScrub.hashes[relPath]; ok && prevHash == contentHash {
+						prevPH = prevScrub.placeholders[relPath]
+					}
+
+					scrubbed, replacements := secrets.ScrubFile(content, hits, prevPH)
 					if len(replacements) == 0 {
 						continue
 					}
@@ -228,7 +331,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 					fileOverrides[normalized] = tmpFile.Name()
 
 					// Build scrub record for manifest.
-					record := manifest.ScrubFileRecord{Path: relPath}
+					record := manifest.ScrubFileRecord{Path: relPath, ContentHash: contentHash}
 					for _, r := range replacements {
 						allSecrets[r.Placeholder] = r.Secret()
 						record.Replacements = append(record.Replacements, manifest.ScrubReplacement{
@@ -286,12 +389,6 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 
 	// Collect active extension names for manifest metadata
 	activeExtensions := extension.ActiveExtensionNames(opts.Dir, cfg.Extensions)
-
-	// Open store
-	store, err := registry.NewStore(cfg.StorePath())
-	if err != nil {
-		return nil, fmt.Errorf("opening store: %w", err)
-	}
 
 	// Acquire file lock for concurrent save safety
 	lockPath := filepath.Join(cfg.StorePath(), ".save-lock")
@@ -537,14 +634,8 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		KeepTagged: cfg.Retention.KeepTagged,
 	}
 
-	// Encrypt scrubbed secrets and store locally (encrypted only — no plaintext on disk).
+	// Encrypt scrubbed secrets and pack as an OCI layer in the manifest.
 	if len(scrubSecrets) > 0 {
-		tag := fmt.Sprintf("cp-%d", seq)
-		if opts.Tag != "" {
-			tag = opts.Tag
-		}
-		backendKey := cfg.ID + "/" + tag
-
 		// Generate encrypted envelope (DEK wrapped to default keypair only).
 		ciphertext, rawDEK, encErr := backend.EncryptSecrets(scrubSecrets)
 		if encErr != nil {
@@ -572,27 +663,36 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 			return nil, fmt.Errorf("marshaling envelope: %w", marshalErr)
 		}
 
-		// Store the encrypted envelope locally (push will re-wrap for sharing).
-		localBe := backend.DefaultBackend()
-		ctx := context.Background()
-		envKey := backendKey + ".enc"
-		if _, envPutErr := localBe.Put(ctx, envKey, map[string]string{"envelope": string(envJSON)}); envPutErr != nil {
-			fmt.Printf("Warning: storing encrypted envelope: %v\n", envPutErr)
-			fmt.Println("  bento push --include-secrets may not work for this checkpoint.")
+		// Pack encrypted envelope as an OCI layer (single source of truth).
+		packed, packErr := workspace.PackBytesToTempLayer("secrets.enc", envJSON)
+		if packErr != nil {
+			return nil, fmt.Errorf("packing secrets layer: %w", packErr)
 		}
+
+		layerInfos = append(layerInfos, manifest.LayerInfo{
+			Name:       "secrets",
+			MediaType:  manifest.LayerMediaType,
+			Path:       packed.Path,
+			Size:       packed.Size,
+			GzipDigest: packed.GzipDigest,
+			DiffID:     packed.DiffID,
+			FileCount:  1,
+			Annotations: map[string]string{
+				manifest.AnnotationSecretsEncrypted:   "true",
+				manifest.AnnotationSecretsKeyWrapping: "curve25519",
+				manifest.AnnotationSecretsSender:      keys.FormatPublicKey(senderPub),
+			},
+		})
 
 		if !opts.Quiet {
-			fmt.Println("Secrets encrypted locally")
+			fmt.Println("Secrets encrypted and packed into checkpoint")
 		}
-
-		_, persistHint := localBe.Hint(backendKey, nil)
-		scrubRestoreHint = persistHint
 	}
 
 	// Embed scrub records in manifest.
 	if len(scrubRecords) > 0 {
 		cfgObj.ScrubRecords = scrubRecords
-		cfgObj.RestoreHint = scrubRestoreHint
+		cfgObj.RestoreHint = "Secrets are stored in the checkpoint's encrypted secrets layer.\n   To share: bento push --include-secrets"
 	}
 
 	manifestBytes, configBytes, err := manifest.BuildManifest(cfgObj, layerInfos)

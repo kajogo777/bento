@@ -560,6 +560,12 @@ func (s *LocalStore) fetchBlob(desc ocispec.Descriptor) ([]byte, error) {
 	return data, nil
 }
 
+// FetchBlob reads a blob by digest string into memory.
+// Use for small blobs (configs, secrets envelopes). Verifies integrity.
+func (s *LocalStore) FetchBlob(digestStr string) ([]byte, error) {
+	return s.fetchBlob(ocispec.Descriptor{Digest: digest.Digest(digestStr)})
+}
+
 // fetchBlobToTemp streams a blob to a temporary file and verifies its digest.
 // Returns the path to the temp file. Callers must remove it when done.
 func (s *LocalStore) fetchBlobToTemp(desc ocispec.Descriptor) (string, error) {

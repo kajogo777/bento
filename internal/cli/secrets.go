@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -62,19 +61,23 @@ Use --sender and --recipient to re-wrap for specific recipients.
 				return err
 			}
 
-			// Read the encrypted envelope from local storage.
-			be := backend.DefaultBackend()
-			envKey := cfg.ID + "/" + tag + ".enc"
-			ctx := context.Background()
-			envelope, err := be.Get(ctx, envKey, nil)
-			if err != nil {
+			// Read the encrypted envelope from the OCI secrets layer.
+			store, storeErr := registry.NewStore(cfg.StorePath())
+			if storeErr != nil {
+				return fmt.Errorf("opening store: %w", storeErr)
+			}
+			manifestBytes, _, loadErr := store.LoadManifest(tag)
+			if loadErr != nil {
+				return fmt.Errorf("loading manifest for %s: %w", tag, loadErr)
+			}
+			envBytes, envErr := extractSecretsEnvelope(store, manifestBytes)
+			if envErr != nil {
+				return fmt.Errorf("reading secrets layer for %s: %w", tag, envErr)
+			}
+			if envBytes == nil {
 				return fmt.Errorf("no encrypted envelope for %s — was this checkpoint saved with secrets?", tag)
 			}
-
-			envJSON := envelope["envelope"]
-			if envJSON == "" {
-				return fmt.Errorf("encrypted envelope is empty for %s", tag)
-			}
+			envJSON := string(envBytes)
 
 			// If --sender or --recipient specified, re-wrap the envelope.
 			needsRewrap := flagSender != "" || cfg.Sender != "" || len(flagRecipients) > 0 || len(cfg.Recipients) > 0

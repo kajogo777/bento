@@ -39,6 +39,10 @@ func (m *mockStore) Tag(digest, tag string) error {
 	return nil
 }
 
+func (m *mockStore) FetchBlob(digest string) ([]byte, error) {
+	return nil, fmt.Errorf("not found")
+}
+
 func (m *mockStore) DeleteCheckpoint(digest string) error {
 	m.deleted = append(m.deleted, digest)
 	return nil

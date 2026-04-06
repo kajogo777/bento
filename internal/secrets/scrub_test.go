@@ -1,13 +1,15 @@
 package secrets
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 )
 
 func TestScrubFile_NoFindings(t *testing.T) {
 	content := []byte(`{"token": "__BENTO_SCRUBBED[f2cf17649421]__"}`)
-	scrubbed, replacements := ScrubFile(content, nil)
+	scrubbed, replacements := ScrubFile(content, nil, nil)
 
 	if string(scrubbed) != string(content) {
 		t.Errorf("expected unchanged content, got %q", scrubbed)
@@ -23,7 +25,7 @@ func TestScrubFile_SingleFinding(t *testing.T) {
 		{Match: "__BENTO_SCRUBBED[f2cf17649421]__", Pattern: "openai-api-key"},
 	}
 
-	scrubbed, replacements := ScrubFile(content, findings)
+	scrubbed, replacements := ScrubFile(content, findings, nil)
 
 	if len(replacements) != 1 {
 		t.Fatalf("expected 1 replacement, got %d", len(replacements))
@@ -64,7 +66,7 @@ func TestScrubFile_MultipleFindings(t *testing.T) {
 		{Match: "ghp_xyz789token", Pattern: "github-token"},
 	}
 
-	scrubbed, replacements := ScrubFile(content, findings)
+	scrubbed, replacements := ScrubFile(content, findings, nil)
 
 	if len(replacements) != 2 {
 		t.Fatalf("expected 2 replacements, got %d", len(replacements))
@@ -96,7 +98,7 @@ func TestScrubFile_DuplicateSecret(t *testing.T) {
 		{Match: "__BENTO_SCRUBBED[f2cf17649421]__", Pattern: "openai-api-key"},
 	}
 
-	scrubbed, replacements := ScrubFile(content, findings)
+	scrubbed, replacements := ScrubFile(content, findings, nil)
 
 	// Deduplicated: one replacement for both occurrences.
 	if len(replacements) != 1 {
@@ -116,7 +118,7 @@ func TestScrubFile_EmptyMatch(t *testing.T) {
 		{Match: "", Pattern: "empty-rule"},
 	}
 
-	scrubbed, replacements := ScrubFile(content, findings)
+	scrubbed, replacements := ScrubFile(content, findings, nil)
 
 	if len(replacements) != 0 {
 		t.Errorf("expected 0 replacements for empty match, got %d", len(replacements))
@@ -186,7 +188,7 @@ func TestScrubHydrate_RoundTrip(t *testing.T) {
 	}
 
 	// Scrub
-	scrubbed, replacements := ScrubFile(original, findings)
+	scrubbed, replacements := ScrubFile(original, findings, nil)
 
 	// Build values map (simulates backend round-trip)
 	values := make(map[string]string)
@@ -208,7 +210,7 @@ func TestPlaceholderFormat(t *testing.T) {
 		{Match: "test content", Pattern: "test-rule"},
 	}
 
-	_, replacements := ScrubFile(content, findings)
+	_, replacements := ScrubFile(content, findings, nil)
 	if len(replacements) != 1 {
 		t.Fatal("expected 1 replacement")
 	}
@@ -231,7 +233,7 @@ func TestScrubFile_SubstringSecret(t *testing.T) {
 		{Match: "key1234", Pattern: "long-key"},
 	}
 
-	scrubbed, replacements := ScrubFile(content, findings)
+	scrubbed, replacements := ScrubFile(content, findings, nil)
 
 	if len(replacements) != 2 {
 		t.Fatalf("expected 2 replacements, got %d", len(replacements))
@@ -271,7 +273,7 @@ func TestScrubFile_ContentContainsPlaceholderPattern(t *testing.T) {
 		{Match: "real-secret-value", Pattern: "test-rule"},
 	}
 
-	scrubbed, replacements := ScrubFile(content, findings)
+	scrubbed, replacements := ScrubFile(content, findings, nil)
 
 	if len(replacements) != 1 {
 		t.Fatalf("expected 1 replacement, got %d", len(replacements))
@@ -326,7 +328,7 @@ func TestScrubFile_EmptyContent(t *testing.T) {
 		{Match: "secret", Pattern: "test-rule"},
 	}
 
-	scrubbed, replacements := ScrubFile(content, findings)
+	scrubbed, replacements := ScrubFile(content, findings, nil)
 
 	// Empty content can't contain "secret", so no replacement should occur.
 	if len(replacements) != 1 {
@@ -346,5 +348,200 @@ func TestHydrateFile_EmptyValues(t *testing.T) {
 
 	if string(hydrated) != string(content) {
 		t.Error("empty values map should leave content unchanged")
+	}
+}
+
+func TestScrubFile_ReusesPreviousPlaceholders(t *testing.T) {
+	content := []byte(`{"token": "sk-secret123", "other": "ghp_tokenXYZ"}`)
+	findings := []ScanResult{
+		{Match: "sk-secret123", Pattern: "openai-api-key"},
+		{Match: "ghp_tokenXYZ", Pattern: "github-token"},
+	}
+
+	// First scrub: no previous placeholders.
+	scrubbed1, replacements1 := ScrubFile(content, findings, nil)
+	if len(replacements1) != 2 {
+		t.Fatalf("expected 2 replacements, got %d", len(replacements1))
+	}
+
+	// Build previous placeholder map (secret → placeholder) from first scrub.
+	prevPH := make(map[string]string)
+	for _, r := range replacements1 {
+		prevPH[r.Secret()] = r.Placeholder
+	}
+
+	// Second scrub: with previous placeholders.
+	scrubbed2, replacements2 := ScrubFile(content, findings, prevPH)
+	if len(replacements2) != 2 {
+		t.Fatalf("expected 2 replacements, got %d", len(replacements2))
+	}
+
+	// Scrubbed output must be identical.
+	if string(scrubbed1) != string(scrubbed2) {
+		t.Errorf("scrubbed output differs with reused placeholders:\n  first:  %s\n  second: %s", scrubbed1, scrubbed2)
+	}
+
+	// Each placeholder must match.
+	for i := range replacements1 {
+		if replacements1[i].Placeholder != replacements2[i].Placeholder {
+			t.Errorf("placeholder %d differs: %s vs %s", i, replacements1[i].Placeholder, replacements2[i].Placeholder)
+		}
+	}
+}
+
+func TestScrubFile_FallsBackToRandomForNewSecrets(t *testing.T) {
+	content := []byte(`{"token": "sk-secret123", "new": "new-secret-456"}`)
+	findings := []ScanResult{
+		{Match: "sk-secret123", Pattern: "openai-api-key"},
+		{Match: "new-secret-456", Pattern: "generic-secret"},
+	}
+
+	// Previous placeholders only cover the first secret.
+	prevPH := map[string]string{
+		"sk-secret123": "__BENTO_SCRUBBED[aabbccddeeff]__",
+	}
+
+	_, replacements := ScrubFile(content, findings, prevPH)
+	if len(replacements) != 2 {
+		t.Fatalf("expected 2 replacements, got %d", len(replacements))
+	}
+
+	// First secret should reuse the previous placeholder.
+	foundReused := false
+	for _, r := range replacements {
+		if r.Secret() == "sk-secret123" {
+			if r.Placeholder != "__BENTO_SCRUBBED[aabbccddeeff]__" {
+				t.Errorf("expected reused placeholder __BENTO_SCRUBBED[aabbccddeeff]__, got %s", r.Placeholder)
+			}
+			foundReused = true
+		}
+		if r.Secret() == "new-secret-456" {
+			// New secret should get a fresh random placeholder (not in prevPH).
+			if r.Placeholder == "__BENTO_SCRUBBED[aabbccddeeff]__" {
+				t.Error("new secret should not reuse the existing placeholder")
+			}
+			if !placeholderRe.MatchString(r.Placeholder) {
+				t.Errorf("new secret placeholder doesn't match format: %s", r.Placeholder)
+			}
+		}
+	}
+	if !foundReused {
+		t.Error("did not find the reused placeholder for sk-secret123")
+	}
+}
+
+func TestScrubFile_PrevPlaceholderCollisionFallsBack(t *testing.T) {
+	// The file content already contains the previous placeholder string
+	// (not as a secret, but as literal text). Reuse should be skipped.
+	prevPH := map[string]string{
+		"real-secret-value": "__BENTO_SCRUBBED[aabbccddeeff]__",
+	}
+	content := []byte(`{"note": "__BENTO_SCRUBBED[aabbccddeeff]__", "secret": "real-secret-value"}`)
+	findings := []ScanResult{
+		{Match: "real-secret-value", Pattern: "test-rule"},
+	}
+
+	_, replacements := ScrubFile(content, findings, prevPH)
+	if len(replacements) != 1 {
+		t.Fatalf("expected 1 replacement, got %d", len(replacements))
+	}
+
+	// The previous placeholder collides with existing content, so a new
+	// random one must be generated.
+	if replacements[0].Placeholder == "__BENTO_SCRUBBED[aabbccddeeff]__" {
+		t.Error("should not reuse placeholder that collides with existing content")
+	}
+	if !placeholderRe.MatchString(replacements[0].Placeholder) {
+		t.Errorf("fallback placeholder doesn't match format: %s", replacements[0].Placeholder)
+	}
+}
+
+// TestScrubFile_StablePlaceholders_Regression is a regression test verifying
+// that scrubbing the same file content twice with the same previous placeholder
+// mapping produces byte-identical output. This is critical because the save
+// pipeline detects unchanged layers by comparing SHA256 digests of the packed
+// tar.gz — if placeholders differ, unchanged files appear as "changed".
+func TestScrubFile_StablePlaceholders_Regression(t *testing.T) {
+	content := []byte(`{
+  "mcpServers": {
+    "api": {
+      "env": {
+        "OPENAI_API_KEY": "sk-proj-abc123def456",
+        "GITHUB_TOKEN": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    }
+  }
+}`)
+	findings := []ScanResult{
+		{Match: "sk-proj-abc123def456", Pattern: "openai-api-key"},
+		{Match: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", Pattern: "github-token"},
+	}
+
+	// Simulate first save: no previous placeholders.
+	scrubbed1, replacements1 := ScrubFile(content, findings, nil)
+
+	// Build the reverse map (as save_core.go does from parent checkpoint).
+	prevPH := make(map[string]string)
+	for _, r := range replacements1 {
+		prevPH[r.Secret()] = r.Placeholder
+	}
+
+	// Simulate second save: same content, same findings, with previous placeholders.
+	scrubbed2, _ := ScrubFile(content, findings, prevPH)
+
+	// The scrubbed output must be byte-identical across saves.
+	if string(scrubbed1) != string(scrubbed2) {
+		t.Fatalf("REGRESSION: scrubbed output differs across saves for identical input.\n"+
+			"First:\n%s\n\nSecond:\n%s\n\n"+
+			"This causes unnecessary re-bundling of layers containing secrets.",
+			scrubbed1, scrubbed2)
+	}
+
+	// Verify round-trip still works.
+	values := make(map[string]string)
+	for _, r := range replacements1 {
+		values[r.Placeholder] = r.Secret()
+	}
+	hydrated := HydrateFile(scrubbed2, values)
+	if string(hydrated) != string(content) {
+		t.Errorf("round-trip failed after stable scrub.\nOriginal:\n%s\nHydrated:\n%s", content, hydrated)
+	}
+}
+
+func TestHydrateFile_ContentHashMismatchDetectable(t *testing.T) {
+	content := []byte(`{"token": "sk-real-secret-123"}`)
+	findings := []ScanResult{
+		{Match: "sk-real-secret-123", Pattern: "openai-api-key"},
+	}
+
+	scrubbed, replacements := ScrubFile(content, findings, nil)
+	if len(replacements) != 1 {
+		t.Fatalf("expected 1 replacement, got %d", len(replacements))
+	}
+
+	// Compute the "correct" content hash (what save_core.go stores).
+	correctHash := sha256.Sum256(content)
+	correctHashStr := "sha256:" + hex.EncodeToString(correctHash[:])
+
+	// Hydrate with the CORRECT secret — hash should match.
+	correctValues := map[string]string{
+		replacements[0].Placeholder: "sk-real-secret-123",
+	}
+	hydrated := HydrateFile(scrubbed, correctValues)
+	gotHash := sha256.Sum256(hydrated)
+	gotHashStr := "sha256:" + hex.EncodeToString(gotHash[:])
+	if gotHashStr != correctHashStr {
+		t.Errorf("correct hydration should match content hash: got %s, want %s", gotHashStr, correctHashStr)
+	}
+
+	// Hydrate with a WRONG secret — hash should NOT match.
+	wrongValues := map[string]string{
+		replacements[0].Placeholder: "sk-WRONG-secret-999",
+	}
+	badHydrated := HydrateFile(scrubbed, wrongValues)
+	badHash := sha256.Sum256(badHydrated)
+	badHashStr := "sha256:" + hex.EncodeToString(badHash[:])
+	if badHashStr == correctHashStr {
+		t.Error("hydration with wrong secret should produce different hash, but it matched")
 	}
 }

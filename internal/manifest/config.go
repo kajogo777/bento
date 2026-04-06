@@ -54,8 +54,9 @@ type BentoConfigObj struct {
 
 // ScrubFileRecord groups all secret replacements for a single file.
 type ScrubFileRecord struct {
-	Path         string              `json:"path"`         // relative file path
-	Replacements []ScrubReplacement  `json:"replacements"` // all scrubs in this file
+	Path         string              `json:"path"`                   // relative file path
+	ContentHash  string              `json:"contentHash,omitempty"`  // SHA256 of original (pre-scrub) file content
+	Replacements []ScrubReplacement  `json:"replacements"`           // all scrubs in this file
 }
 
 // ScrubReplacement records a single placeholder substitution.

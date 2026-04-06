@@ -1,13 +1,11 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 
 	"github.com/kajogo777/bento/internal/policy"
 	"github.com/kajogo777/bento/internal/registry"
-	"github.com/kajogo777/bento/internal/secrets/backend"
 	"github.com/spf13/cobra"
 )
 
@@ -45,39 +43,13 @@ func newGCCmd() *cobra.Command {
 				KeepTagged: keepTagged,
 			}
 
-			// Capture checkpoint list before GC for backend cleanup.
-			entriesBefore, _ := store.ListCheckpoints()
-
 			deleted, err := policy.GarbageCollect(store, opts)
 			if err != nil {
 				return fmt.Errorf("garbage collection: %w", err)
 			}
 
-			// Clean up local secret entries for deleted checkpoints.
-			if len(deleted) > 0 {
-				be := backend.DefaultBackend()
-				deletedSet := make(map[string]bool, len(deleted))
-				for _, d := range deleted {
-					deletedSet[d] = true
-				}
-				ctx := context.Background()
-				cleaned := 0
-				for _, e := range entriesBefore {
-					if !deletedSet[e.Digest] {
-						continue
-					}
-					if e.Tag == "" || e.Tag == "latest" {
-						continue
-					}
-					key := cfg.ID + "/" + e.Tag
-					// Clean the encrypted envelope.
-					_ = be.Delete(ctx, key+".enc")
-					cleaned++
-				}
-				if cleaned > 0 {
-					fmt.Printf("Cleaned %d secret entry(ies).\n", cleaned)
-				}
-			}
+			// Secrets are stored as OCI layers in the manifest, so they're
+			// cleaned up automatically by blob GC below. No separate cleanup needed.
 
 			if len(deleted) == 0 {
 				fmt.Println("Nothing to clean up.")

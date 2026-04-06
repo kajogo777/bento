@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -200,59 +202,23 @@ func newOpenCmd() *cobra.Command {
 				hasScrubRecords = true
 				scrubRecords = bentoCfg.ScrubRecords
 
-				backendKey := bentoCfg.WorkspaceID + "/" + tag
-				ctx := context.Background()
-
-				// Try 1: local encrypted envelope (same-machine opens).
-				localBe := backend.DefaultBackend()
-				envKey := backendKey + ".enc"
-				if envData, envErr := localBe.Get(ctx, envKey, nil); envErr == nil {
-					if envJSON := envData["envelope"]; envJSON != "" {
-						if recipPub, recipPriv, kpErr := keys.LoadDefaultKeypair(); kpErr == nil {
-							if sv, unwrapErr := backend.TryUnwrapEnvelope([]byte(envJSON), recipPub, recipPriv); unwrapErr == nil {
-								secretValues = sv
-							}
+				// Try 1: OCI secrets layer (canonical source — present in new checkpoints
+				// and pushed checkpoints with --include-secrets).
+				if envBytes, envErr := extractSecretsEnvelope(store, manifestBytes); envErr == nil && envBytes != nil {
+					var recipPub, recipPriv [32]byte
+					var kpErr error
+					if flagPrivateKey != "" {
+						absPath, _ := filepath.Abs(flagPrivateKey)
+						recipPub, recipPriv, kpErr = keys.LoadKeypairFrom(filepath.Dir(absPath), strings.TrimSuffix(filepath.Base(absPath), ".json"))
+						if kpErr != nil {
+							fmt.Printf("Warning: loading private key from %s: %v\n", flagPrivateKey, kpErr)
 						}
+					} else {
+						recipPub, recipPriv, kpErr = keys.LoadDefaultKeypair()
 					}
-				}
-
-				// Try 2: key wrapping auto-discovery from OCI layer.
-				if secretValues == nil {
-					var ociManifest ocispec.Manifest
-					if jsonErr := json.Unmarshal(manifestBytes, &ociManifest); jsonErr == nil {
-						for li, ld := range ociManifest.Layers {
-							if ld.Annotations[manifest.AnnotationSecretsEncrypted] == "true" && li < len(layers) {
-								r, rErr := layers[li].NewReader()
-								if rErr == nil {
-									cipherBytes, exErr := workspace.ExtractFileContentFromLayer(r, "secrets.enc", 10*1024*1024)
-									_ = r.Close()
-									if exErr == nil {
-										// Check if this is a multi-recipient envelope (has wrappedKeys).
-										var env backend.MultiRecipientEnvelope
-										if json.Unmarshal(cipherBytes, &env) == nil && len(env.WrappedKeys) > 0 {
-											// Try to unwrap with user's private key.
-											var recipPub, recipPriv [32]byte
-											var kpErr error
-											if flagPrivateKey != "" {
-												absPath, _ := filepath.Abs(flagPrivateKey)
-												recipPub, recipPriv, kpErr = keys.LoadKeypairFrom(filepath.Dir(absPath), strings.TrimSuffix(filepath.Base(absPath), ".json"))
-												if kpErr != nil {
-													fmt.Printf("Warning: loading private key from %s: %v\n", flagPrivateKey, kpErr)
-												}
-											} else {
-												recipPub, recipPriv, kpErr = keys.LoadDefaultKeypair()
-											}
-											if kpErr == nil {
-												if sv, unwrapErr := backend.TryUnwrapEnvelope(cipherBytes, recipPub, recipPriv); unwrapErr == nil {
-													secretValues = sv
-													fmt.Println("  Decrypted secrets with keypair auto-discovery")
-												}
-											}
-										}
-									}
-								}
-								break
-							}
+					if kpErr == nil {
+						if sv, unwrapErr := backend.TryUnwrapEnvelope(envBytes, recipPub, recipPriv); unwrapErr == nil {
+							secretValues = sv
 						}
 					}
 				}
@@ -367,6 +333,19 @@ func newOpenCmd() *cobra.Command {
 						continue
 					}
 					content = secrets.HydrateFile(content, secretValues)
+
+					// Verify hydrated content matches the original pre-scrub hash
+					// stored at save time. Catches placeholder/secret mismatches or
+					// corruption. Skip for older checkpoints without ContentHash.
+					if rec.ContentHash != "" {
+						h := sha256.Sum256(content)
+						got := "sha256:" + hex.EncodeToString(h[:])
+						if got != rec.ContentHash {
+							fmt.Printf("Warning: %s: hydrated content hash mismatch (expected %s, got %s)\n",
+								rec.Path, rec.ContentHash, got)
+						}
+					}
+
 					if writeErr := os.WriteFile(filePath, content, fi.Mode()); writeErr != nil {
 						continue
 					}

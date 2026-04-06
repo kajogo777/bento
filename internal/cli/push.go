@@ -89,8 +89,10 @@ Examples:
 				}
 			}
 
-			// If --include-secrets, inject the encrypted envelope as an OCI layer.
-			if flagIncludeSecrets && hasScrubRecords {
+			// Handle secrets layer for push:
+			// - Without --include-secrets: strip secrets layer (don't share)
+			// - With --include-secrets: keep layer, re-wrap if sender/recipients changed
+			{
 				tag := flagTag
 				if tag == "" {
 					tag = "latest"
@@ -101,7 +103,7 @@ Examples:
 					return fmt.Errorf("loading checkpoint %s: %w", tag, loadErr)
 				}
 
-				// Check if OCI layer already exists.
+				// Check if OCI layer exists.
 				var ociManifest ocispec.Manifest
 				hasSecretsLayer := false
 				if jsonErr := json.Unmarshal(manifestBytes, &ociManifest); jsonErr == nil {
@@ -113,135 +115,148 @@ Examples:
 					}
 				}
 
-				if !hasSecretsLayer || len(flagRecipients) > 0 || flagSender != "" {
-					// Remove existing secrets layer if re-wrapping.
-					if hasSecretsLayer {
-						localStore := store.(*registry.LocalStore)
-						if removeErr := localStore.RemoveSecretsLayer(tag); removeErr != nil {
-							return fmt.Errorf("removing existing secrets layer: %w", removeErr)
-						}
-					}
-
-					// Read the encrypted envelope from local storage.
-					cpTag := fmt.Sprintf("cp-%d", pushCheckpoint)
-					envKey := cfg.ID + "/" + cpTag + ".enc"
-					localBe := backend.DefaultBackend()
-					ctx := context.Background()
-					envelope, getErr := localBe.Get(ctx, envKey, nil)
-					if getErr != nil {
-						return fmt.Errorf("no encrypted envelope found for %s — save with secrets first", cpTag)
-					}
-
-					envJSON := envelope["envelope"]
-					if envJSON == "" {
-						return fmt.Errorf("no wrapped envelope found for %s — re-save to generate one", cpTag)
-					}
-
-					// Determine sender keypair for push.
-					var senderPub, senderPriv [32]byte
-					senderName := flagSender
-					if senderName == "" {
-						senderName = cfg.Sender
-					}
-					if senderName != "" {
-						var kpErr error
-						senderPub, senderPriv, kpErr = keys.LoadKeypair(senderName)
-						if kpErr != nil {
-							return fmt.Errorf("loading sender keypair %q: %w", senderName, kpErr)
-						}
-					} else {
-						var kpErr error
-						senderPub, senderPriv, _, kpErr = keys.LoadOrCreateKeypair()
-						if kpErr != nil {
-							return fmt.Errorf("loading default keypair: %w", kpErr)
-						}
-					}
-
-					// Unwrap DEK from save-time envelope using default keypair.
-					// If no sender was specified, the sender IS the default keypair — reuse it.
-					defaultPub, defaultPriv := senderPub, senderPriv
-					if senderName != "" {
-						var defaultErr error
-						defaultPub, defaultPriv, defaultErr = keys.LoadDefaultKeypair()
-						if defaultErr != nil {
-							return fmt.Errorf("loading default keypair for unwrap: %w", defaultErr)
-						}
-					}
-
-					// Resolve recipients: bento.yaml + CLI flags + sender as self.
-					var recipientSpecs []string
-					for _, r := range cfg.Recipients {
-						recipientSpecs = append(recipientSpecs, r.Name)
-					}
-					recipientSpecs = append(recipientSpecs, flagRecipients...)
-
-					var configRecipients []keys.ConfigRecipient
-					for _, r := range cfg.Recipients {
-						configRecipients = append(configRecipients, keys.ConfigRecipient{
-							Name: r.Name,
-							Key:  r.Key,
-						})
-					}
-
-					recipientPubs, resolveErr := keys.ResolveRecipients(recipientSpecs, configRecipients, senderPub, "")
-					if resolveErr != nil {
-						return fmt.Errorf("resolving recipients: %w", resolveErr)
-					}
-
-					// Re-wrap the envelope for the push sender and recipients.
-					newEnvelope, rewrapErr := backend.RewrapEnvelope(
-						[]byte(envJSON),
-						defaultPub, defaultPriv,
-						senderPub, senderPriv,
-						recipientPubs,
-					)
-					if rewrapErr != nil {
-						return fmt.Errorf("re-wrapping envelope: %w", rewrapErr)
-					}
-
-					secretsContent, marshalErr := json.Marshal(newEnvelope)
-					if marshalErr != nil {
-						return fmt.Errorf("marshaling re-wrapped envelope: %w", marshalErr)
-					}
-
-					layerAnnotations := map[string]string{
-						manifest.AnnotationTitle:              "secrets",
-						manifest.AnnotationSecretsEncrypted:   "true",
-						manifest.AnnotationSecretsKeyWrapping: "curve25519",
-						manifest.AnnotationSecretsSender:      newEnvelope.Sender,
-					}
-
-					fmt.Printf("Re-wrapped secrets for %d recipient(s)\n", len(recipientPubs))
-					fmt.Printf("Sealed by: %s\n", newEnvelope.Sender)
-
-					// Pack as OCI layer and inject into the checkpoint.
-					packed, packErr := workspace.PackBytesToTempLayer("secrets.enc", secretsContent)
-					if packErr != nil {
-						return fmt.Errorf("packing secrets layer: %w", packErr)
-					}
-					defer func() { _ = os.Remove(packed.Path) }()
-
-					secretsLayer := registry.LayerData{
-						MediaType: manifest.LayerMediaType,
-						Path:      packed.Path,
-						Digest:    packed.GzipDigest,
-						Size:      packed.Size,
-						DiffID:    packed.DiffID,
-					}
-
+				if hasSecretsLayer && !flagIncludeSecrets {
+					// Strip the secrets layer — user didn't opt into sharing secrets.
 					localStore := store.(*registry.LocalStore)
-					if injectErr := localStore.InjectLayer(tag, secretsLayer, layerAnnotations); injectErr != nil {
-						return fmt.Errorf("injecting secrets layer: %w", injectErr)
+					if removeErr := localStore.RemoveSecretsLayer(tag); removeErr != nil {
+						return fmt.Errorf("removing secrets layer for push: %w", removeErr)
 					}
 
-					// Also update the cp-N tag to point to the new manifest.
+					// Also update the cp-N tag to point to the stripped manifest.
+					cpTag := fmt.Sprintf("cp-%d", pushCheckpoint)
 					if cpTag != tag {
 						if newDigest, resolveErr := store.ResolveTag(tag); resolveErr == nil {
 							_ = store.Tag(newDigest, cpTag)
 						}
 					}
-				} else {
-					fmt.Println("Encrypted secrets layer already present.")
+
+					fmt.Println("Secrets layer stripped (use --include-secrets to share)")
+				} else if flagIncludeSecrets && hasScrubRecords {
+					// Read the existing envelope from OCI layer.
+					envBytes, envErr := extractSecretsEnvelope(store, manifestBytes)
+					if envErr != nil {
+						return fmt.Errorf("reading secrets layer: %w", envErr)
+					}
+					if envBytes == nil {
+						return fmt.Errorf("no secrets layer found — re-save with secrets to generate one")
+					}
+
+					// Re-wrap if sender or recipients changed; otherwise keep as-is.
+					if len(flagRecipients) > 0 || flagSender != "" {
+						// Remove existing secrets layer before re-injecting.
+						if hasSecretsLayer {
+							localStore := store.(*registry.LocalStore)
+							if removeErr := localStore.RemoveSecretsLayer(tag); removeErr != nil {
+								return fmt.Errorf("removing existing secrets layer: %w", removeErr)
+							}
+						}
+
+						// Determine sender keypair for push.
+						var senderPub, senderPriv [32]byte
+						senderName := flagSender
+						if senderName == "" {
+							senderName = cfg.Sender
+						}
+						if senderName != "" {
+							var kpErr error
+							senderPub, senderPriv, kpErr = keys.LoadKeypair(senderName)
+							if kpErr != nil {
+								return fmt.Errorf("loading sender keypair %q: %w", senderName, kpErr)
+							}
+						} else {
+							var kpErr error
+							senderPub, senderPriv, _, kpErr = keys.LoadOrCreateKeypair()
+							if kpErr != nil {
+								return fmt.Errorf("loading default keypair: %w", kpErr)
+							}
+						}
+
+						// Unwrap DEK from save-time envelope using default keypair.
+						defaultPub, defaultPriv := senderPub, senderPriv
+						if senderName != "" {
+							var defaultErr error
+							defaultPub, defaultPriv, defaultErr = keys.LoadDefaultKeypair()
+							if defaultErr != nil {
+								return fmt.Errorf("loading default keypair for unwrap: %w", defaultErr)
+							}
+						}
+
+						// Resolve recipients: bento.yaml + CLI flags + sender as self.
+						var recipientSpecs []string
+						for _, r := range cfg.Recipients {
+							recipientSpecs = append(recipientSpecs, r.Name)
+						}
+						recipientSpecs = append(recipientSpecs, flagRecipients...)
+
+						var configRecipients []keys.ConfigRecipient
+						for _, r := range cfg.Recipients {
+							configRecipients = append(configRecipients, keys.ConfigRecipient{
+								Name: r.Name,
+								Key:  r.Key,
+							})
+						}
+
+						recipientPubs, resolveErr := keys.ResolveRecipients(recipientSpecs, configRecipients, senderPub, "")
+						if resolveErr != nil {
+							return fmt.Errorf("resolving recipients: %w", resolveErr)
+						}
+
+						// Re-wrap the envelope for the push sender and recipients.
+						newEnvelope, rewrapErr := backend.RewrapEnvelope(
+							envBytes,
+							defaultPub, defaultPriv,
+							senderPub, senderPriv,
+							recipientPubs,
+						)
+						if rewrapErr != nil {
+							return fmt.Errorf("re-wrapping envelope: %w", rewrapErr)
+						}
+
+						secretsContent, marshalErr := json.Marshal(newEnvelope)
+						if marshalErr != nil {
+							return fmt.Errorf("marshaling re-wrapped envelope: %w", marshalErr)
+						}
+
+						layerAnnotations := map[string]string{
+							manifest.AnnotationTitle:              "secrets",
+							manifest.AnnotationSecretsEncrypted:   "true",
+							manifest.AnnotationSecretsKeyWrapping: "curve25519",
+							manifest.AnnotationSecretsSender:      newEnvelope.Sender,
+						}
+
+						fmt.Printf("Re-wrapped secrets for %d recipient(s)\n", len(recipientPubs))
+						fmt.Printf("Sealed by: %s\n", newEnvelope.Sender)
+
+						// Pack as OCI layer and inject into the checkpoint.
+						packed, packErr := workspace.PackBytesToTempLayer("secrets.enc", secretsContent)
+						if packErr != nil {
+							return fmt.Errorf("packing secrets layer: %w", packErr)
+						}
+						defer func() { _ = os.Remove(packed.Path) }()
+
+						secretsLayer := registry.LayerData{
+							MediaType: manifest.LayerMediaType,
+							Path:      packed.Path,
+							Digest:    packed.GzipDigest,
+							Size:      packed.Size,
+							DiffID:    packed.DiffID,
+						}
+
+						localStore := store.(*registry.LocalStore)
+						if injectErr := localStore.InjectLayer(tag, secretsLayer, layerAnnotations); injectErr != nil {
+							return fmt.Errorf("injecting secrets layer: %w", injectErr)
+						}
+
+						// Also update the cp-N tag to point to the new manifest.
+						cpTag := fmt.Sprintf("cp-%d", pushCheckpoint)
+						if cpTag != tag {
+							if newDigest, resolveErr := store.ResolveTag(tag); resolveErr == nil {
+								_ = store.Tag(newDigest, cpTag)
+							}
+						}
+					} else {
+						fmt.Println("Encrypted secrets layer already present.")
+					}
 				}
 			}
 
