@@ -141,15 +141,27 @@ Works with both local refs and remote registry refs:
 				return fmt.Errorf("opening store: %w", err)
 			}
 
+			// When a remote ref is provided, always pull fresh to avoid stale local cache.
+			// For local refs, try local first and fall back to remote.
+			pullRef := remoteRef
+			if pullRef == "" && cfgErr == nil && cfg.Remote != "" {
+				pullRef = cfg.Remote + "/" + storeName
+			}
+
+			if remoteRef != "" && pullRef != "" {
+				fmt.Printf("Pulling from %s:%s...\n", pullRef, tag)
+				localStore := store.(*registry.LocalStore)
+				ctx := context.Background()
+				if pullErr := registry.PullFromRemote(ctx, localStore, pullRef, tag); pullErr != nil {
+					return fmt.Errorf("pulling %s: %w", ref, pullErr)
+				}
+			}
+
 			// Load manifest + config (lightweight, no layer blob downloads).
 			manifestBytes, configBytes, err := store.LoadManifest(tag)
 			if err != nil {
-				// Try pulling from remote if local not found.
-				pullRef := remoteRef
-				if pullRef == "" && cfgErr == nil && cfg.Remote != "" {
-					pullRef = cfg.Remote + "/" + storeName
-				}
-				if pullRef != "" {
+				// Local load failed — try pulling from remote if we haven't already.
+				if remoteRef == "" && pullRef != "" {
 					fmt.Printf("Pulling from %s:%s...\n", pullRef, tag)
 					localStore := store.(*registry.LocalStore)
 					ctx := context.Background()

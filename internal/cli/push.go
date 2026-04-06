@@ -141,8 +141,8 @@ Examples:
 						return fmt.Errorf("no secrets layer found — re-save with secrets to generate one")
 					}
 
-					// Re-wrap if sender or recipients changed; otherwise keep as-is.
-					if len(flagRecipients) > 0 || flagSender != "" {
+					// Re-wrap if sender or recipients specified (CLI flags or bento.yaml); otherwise keep as-is.
+					if len(flagRecipients) > 0 || flagSender != "" || len(cfg.Recipients) > 0 || cfg.Sender != "" {
 						// Remove existing secrets layer before re-injecting.
 						if hasSecretsLayer {
 							localStore := store.(*registry.LocalStore)

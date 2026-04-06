@@ -287,6 +287,71 @@ func TestKeyWrapping_PushPullWithDataKey(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestKeyWrapping_BentoYAMLRecipients: recipients configured in bento.yaml
+// should trigger re-wrap at push time without needing --recipient CLI flag.
+// This is the "team workflow" where recipients are committed to the project.
+// ---------------------------------------------------------------------------
+
+func TestKeyWrapping_BentoYAMLRecipients(t *testing.T) {
+	registryAddr, cleanup := startRegistry(t)
+	defer cleanup()
+
+	senderKeysDir := keysDir(t, "sender")
+	recipientKeysDir := keysDir(t, "recipient")
+
+	// Generate sender and recipient keypairs in isolated dirs.
+	runWithKeysDir(t, ".", senderKeysDir, "keys", "generate")
+	recipOut := runWithKeysDir(t, ".", recipientKeysDir, "keys", "generate")
+	recipPub := extractPubFromOutput(t, recipOut)
+
+	// Create workspace with a secret.
+	dir, _ := makeWorkspaceWithSecretAndStore(t)
+
+	// Add recipient to bento.yaml (the team workflow).
+	appendToFile(t, dir, "bento.yaml", fmt.Sprintf("recipients:\n  - name: charlie\n    key: %s\n", recipPub))
+
+	// Save (envelope wraps for sender only at save time).
+	runWithKeysDir(t, dir, senderKeysDir, "save", "-m", "yaml-recipients test")
+
+	// Configure remote.
+	repoName := fmt.Sprintf("bento-e2e-yamlrecip-%d", time.Now().UnixNano()%100000)
+	appendToFile(t, dir, "bento.yaml", "remote: "+registryAddr+"/"+repoName+"\n")
+
+	// Push with --include-secrets but NO --recipient flag.
+	// bento.yaml recipients should trigger re-wrap automatically.
+	pushOut := runWithKeysDir(t, dir, senderKeysDir, "push", "--include-secrets")
+	if !strings.Contains(pushOut, "Done") {
+		t.Fatalf("push failed:\n%s", pushOut)
+	}
+	if !strings.Contains(pushOut, "Re-wrapped") {
+		t.Errorf("push should re-wrap for bento.yaml recipients, got:\n%s", pushOut)
+	}
+
+	// Simulate "different machine": open as recipient using only their key.
+	dst := t.TempDir()
+	dstYAML := fmt.Sprintf("store: %s\n", t.TempDir())
+	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstYAML), 0644)
+
+	remoteRef := fmt.Sprintf("%s/%s:cp-1", registryAddr, repoName)
+	openOut := runWithKeysDir(t, dst, recipientKeysDir, "open", remoteRef, dst)
+	if !strings.Contains(openOut, "Hydrated") {
+		t.Errorf("open should hydrate via key wrapping, got:\n%s", openOut)
+	}
+
+	// Verify file has real secret, no placeholders.
+	content, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("reading .mcp.json: %v", err)
+	}
+	if strings.Contains(string(content), "__BENTO_SCRUBBED") {
+		t.Error("should not contain placeholders")
+	}
+	if !strings.Contains(string(content), "AKIA3EXAMPLE7KEYTEST") {
+		t.Errorf("should contain real secret, got:\n%s", content)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestKeyWrapping_WrongDataKeyFails: wrong --data-key can't decrypt
 // ---------------------------------------------------------------------------
 

@@ -98,22 +98,32 @@ func newOpenCmd() *cobra.Command {
 				return fmt.Errorf("opening store: %w", err)
 			}
 
+			// When a remote ref is provided, always pull fresh to avoid stale local cache.
+			// For local refs, try local first and fall back to remote.
+			pullRef := remoteRef
+			if pullRef == "" && cfgErr == nil && cfg.Remote != "" {
+				if storeName != "" && storeName != cfg.ID {
+					pullRef = cfg.Remote + "/" + storeName
+				} else {
+					pullRef = cfg.Remote
+				}
+			}
+
+			if remoteRef != "" && pullRef != "" {
+				fmt.Printf("Pulling from %s:%s...\n", pullRef, tag)
+				localStore := store.(*registry.LocalStore)
+				ctx := context.Background()
+				if pullErr := registry.PullFromRemote(ctx, localStore, pullRef, tag); pullErr != nil {
+					return fmt.Errorf("pulling %s: %w", ref, pullErr)
+				}
+			}
+
 			// Load checkpoint (try local first, fall back to remote pull).
 			// Layers are backed by temp files; we defer cleanup for all of them.
 			manifestBytes, configBytes, layers, err := store.LoadCheckpoint(tag)
 			if err != nil {
-				// Determine remote to pull from
-				pullRef := remoteRef
-				if pullRef == "" && cfgErr == nil && cfg.Remote != "" {
-					// Push sends to cfg.Remote directly. Only append storeName
-					// if it differs from the workspace ID (i.e., explicit name:tag ref).
-					if storeName != "" && storeName != cfg.ID {
-						pullRef = cfg.Remote + "/" + storeName
-					} else {
-						pullRef = cfg.Remote
-					}
-				}
-				if pullRef != "" {
+				// Local load failed — try pulling from remote if we haven't already.
+				if remoteRef == "" && pullRef != "" {
 					fmt.Printf("Pulling from %s:%s...\n", pullRef, tag)
 					localStore := store.(*registry.LocalStore)
 					ctx := context.Background()
