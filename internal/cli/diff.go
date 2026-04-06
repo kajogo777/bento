@@ -311,6 +311,11 @@ func diffCheckpoints(dir string, args []string) error {
 	g.SetLimit(runtime.NumCPU())
 
 	for i := 0; i < numLayers; i++ {
+		// Skip the secrets layer — it's an internal implementation detail.
+		if i < len(m1.Layers) && m1.Layers[i].Annotations[manifest.AnnotationSecretsEncrypted] == "true" {
+			cpResults[i].skip = true
+			continue
+		}
 		i := i // capture loop variable
 		name := layerName(m1.Layers, i)
 		g.Go(func() error {
@@ -380,18 +385,27 @@ func diffCheckpoints(dir string, args []string) error {
 		return err
 	}
 
-	// Print results in original layer order.
+	// Print results in original layer order, excluding secrets layers.
 	hasChanges := false
-	for i, res := range cpResults {
+	visibleCount := 0
+	for _, res := range cpResults {
+		if !res.skip {
+			visibleCount++
+		}
+	}
+	displayIdx := 0
+	for _, res := range cpResults {
 		if res.skip {
 			continue
 		}
 		if res.unchanged {
 			fmt.Printf("\n  %s[%d/%d] %s: unchanged%s (%s)\n",
-				colorDim, i+1, numLayers, res.name, colorReset, truncateDigest(res.digest))
+				colorDim, displayIdx+1, visibleCount, res.name, colorReset, truncateDigest(res.digest))
+			displayIdx++
 			continue
 		}
-		printLayerDiff(i, numLayers, res.name, res.added, res.removed, res.modified, res.lineCounts, &hasChanges)
+		printLayerDiff(displayIdx, visibleCount, res.name, res.added, res.removed, res.modified, res.lineCounts, &hasChanges)
+		displayIdx++
 	}
 	if !hasChanges {
 		fmt.Println("\nNo changes between checkpoints.")
