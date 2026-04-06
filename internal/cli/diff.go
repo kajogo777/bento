@@ -231,29 +231,13 @@ func diffWorkspace(dir string, args []string) error {
 		return err
 	}
 
-	// Check if the manifest has a secrets layer to include in output.
-	hasSecretsLayer := false
-	for _, ld := range m.Layers {
-		if ld.Annotations[manifest.AnnotationSecretsEncrypted] == "true" {
-			hasSecretsLayer = true
-			break
-		}
-	}
-	totalLayers := numLayers
-	if hasSecretsLayer {
-		totalLayers++
-	}
-
 	// Print results in original layer order.
 	hasChanges := false
 	for i, res := range layerResults {
 		if res.skip {
 			continue
 		}
-		printLayerDiff(i, totalLayers, res.name, res.added, res.removed, res.modified, res.lineCounts, &hasChanges)
-	}
-	if hasSecretsLayer {
-		fmt.Printf("\n  %s[%d/%d] secrets: unchanged%s\n", colorDim, totalLayers, totalLayers, colorReset)
+		printLayerDiff(i, numLayers, res.name, res.added, res.removed, res.modified, res.lineCounts, &hasChanges)
 	}
 
 	if !hasChanges {
