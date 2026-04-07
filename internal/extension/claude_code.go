@@ -91,18 +91,35 @@ func (c ClaudeCode) Contribute(workDir string) Contribution {
 	}
 }
 
-// claudeProjectDir returns the external directory that Claude Code uses for
-// this workspace's project-specific data (auto-memory, sessions, etc.), or
-// empty string if it doesn't exist.
-//
-// Claude Code derives the directory name by replacing path separators with
-// dashes in the absolute workspace path. For example:
+// claudeProjectPlaceholder is the stable placeholder used in archive paths
+// to replace the workspace-derived project hash directory.
+const claudeProjectPlaceholder = "/~/.claude/projects/__BENTO_WORKSPACE__"
+
+func (c ClaudeCode) NormalizePath(workDir string) func(path string) string {
+	projectDir := claudeProjectDir(workDir)
+	if projectDir == "" {
+		return nil
+	}
+	return PrefixReplacer(PortablePath(projectDir), claudeProjectPlaceholder)
+}
+
+func (c ClaudeCode) ResolvePath(workDir string) func(path string) string {
+	hash := claudeProjectHash(workDir)
+	if hash == "" {
+		return nil
+	}
+	return PrefixReplacer(claudeProjectPlaceholder, "/~/.claude/projects/"+hash)
+}
+
+// claudeProjectHash computes the directory name that Claude Code uses for
+// a workspace's project-specific data. It derives the name by replacing path
+// separators with dashes in the absolute workspace path. For example:
 //
 //	/Users/alice/projects/myapp → -Users-alice-projects-myapp
 //
-// The directory is walked recursively by the scanner, so the memory/
-// subdirectory is captured automatically.
-func claudeProjectDir(workDir string) string {
+// This function does NOT check filesystem existence, making it safe for
+// use at restore time when the target directory may not exist yet.
+func claudeProjectHash(workDir string) string {
 	absDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return ""
@@ -110,8 +127,20 @@ func claudeProjectDir(workDir string) string {
 	if resolved, err := filepath.EvalSymlinks(absDir); err == nil {
 		absDir = resolved
 	}
+	return strings.ReplaceAll(absDir, string(filepath.Separator), "-")
+}
 
-	hash := strings.ReplaceAll(absDir, string(filepath.Separator), "-")
+// claudeProjectDir returns the external directory that Claude Code uses for
+// this workspace's project-specific data (auto-memory, sessions, etc.), or
+// empty string if it doesn't exist.
+//
+// The directory is walked recursively by the scanner, so the memory/
+// subdirectory is captured automatically.
+func claudeProjectDir(workDir string) string {
+	hash := claudeProjectHash(workDir)
+	if hash == "" {
+		return ""
+	}
 	projectDir := ExpandHome("~/.claude/projects/" + hash)
 	if info, err := os.Stat(projectDir); err != nil || !info.IsDir() {
 		return ""

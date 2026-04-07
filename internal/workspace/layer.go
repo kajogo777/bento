@@ -481,7 +481,10 @@ func CleanStaleFiles(targetDir string, keepFiles map[string]bool) error {
 // itself (see portablePath / absFromArchivePath in scanner.go).
 // All file content is streamed directly to disk without loading full files
 // into memory.
-func UnpackLayerWithExternalFromReader(r io.Reader, targetDir string) error {
+//
+// The optional resolvePath function expands portable placeholders back to
+// machine-specific paths. Pass nil to skip placeholder expansion.
+func UnpackLayerWithExternalFromReader(r io.Reader, targetDir string, resolvePath func(string) string) error {
 	gr, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("gzip reader: %w", err)
@@ -502,6 +505,12 @@ func UnpackLayerWithExternalFromReader(r io.Reader, targetDir string) error {
 
 		// Route __external__ files back to their original absolute locations.
 		if strings.HasPrefix(name, "__external__") {
+			// Expand portable placeholders to machine-specific paths.
+			if resolvePath != nil {
+				stripped := strings.TrimPrefix(name, "__external__")
+				resolved := resolvePath(stripped)
+				name = "__external__" + resolved
+			}
 			targetPath := absFromArchivePath(name)
 			if targetPath == "" || strings.Contains(targetPath, "..") {
 				_, _ = io.Copy(io.Discard, tr)
@@ -568,14 +577,14 @@ func UnpackLayerWithExternalFromReader(r io.Reader, targetDir string) error {
 
 // UnpackLayerWithExternal extracts a tar.gz archive to targetDir.
 // For large layers prefer UnpackLayerWithExternalFromReader with an os.File.
-func UnpackLayerWithExternal(data []byte, targetDir string) error {
-	return UnpackLayerWithExternalFromReader(bytes.NewReader(data), targetDir)
+func UnpackLayerWithExternal(data []byte, targetDir string, resolvePath func(string) string) error {
+	return UnpackLayerWithExternalFromReader(bytes.NewReader(data), targetDir, resolvePath)
 }
 
 // UnpackLayer extracts a tar.gz archive to targetDir.
 // External-prefixed files are skipped (use UnpackLayerWithExternal for those).
 func UnpackLayer(data []byte, targetDir string) error {
-	return UnpackLayerWithExternal(data, targetDir)
+	return UnpackLayerWithExternal(data, targetDir, nil)
 }
 
 // HashBytes computes the SHA256 of data and returns the hex digest.

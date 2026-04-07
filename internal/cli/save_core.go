@@ -129,8 +129,8 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		return nil, fmt.Errorf("loading bento.yaml: %w", err)
 	}
 
-	// Resolve extensions
-	resolved := resolveExtensions(opts.Dir, cfg)
+	// Resolve extensions (once — reused for layers, hooks, normalizers, sessions).
+	resolved, exts := resolveExtensionsWithList(opts.Dir, cfg)
 	layers := resolved.Layers
 
 	// Run pre_save hook
@@ -152,8 +152,11 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		ignorePatterns = append(ignorePatterns, bentoIgnore...)
 	}
 
+	// Compose path normalizers from extensions for portable archive paths.
+	normalizePath := composeNormalizers(exts, opts.Dir)
+
 	// Scan workspace
-	scanner := workspace.NewScanner(opts.Dir, layers, ignorePatterns)
+	scanner := workspace.NewScanner(opts.Dir, layers, ignorePatterns, normalizePath)
 	scanResults, err := scanner.Scan()
 	if err != nil {
 		return nil, fmt.Errorf("scanning workspace: %w", err)
@@ -367,7 +370,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 	}()
 
 	// Extract session metadata from agent extensions that implement SessionParser.
-	exts := extension.Resolve(opts.Dir, cfg.Extensions)
+	// (exts was resolved earlier for path normalizer composition)
 	var sessions []manifest.SessionMeta
 	for _, ext := range exts {
 		sp, ok := ext.(extension.SessionParser)
@@ -859,3 +862,52 @@ func promptSecretsMode(scanHits []secrets.ScanResult, quiet bool) string {
 	}
 }
 
+// composeNormalizers builds a single path normalizer function from all
+// extensions that implement NormalizePath.
+func composeNormalizers(exts []extension.Extension, workDir string) func(string) string {
+	var fns []func(string) string
+	for _, ext := range exts {
+		if fn := ext.NormalizePath(workDir); fn != nil {
+			fns = append(fns, fn)
+		}
+	}
+	if len(fns) == 0 {
+		return nil
+	}
+	return func(path string) string {
+		for _, fn := range fns {
+			result := fn(path)
+			if result != path {
+				return result // first match wins
+			}
+		}
+		return path
+	}
+}
+
+// composeResolvers builds a single path resolver function from extensions
+// listed in the OCI config's PathMappers field.
+func composeResolvers(mapperNames []string, workDir string) func(string) string {
+	var fns []func(string) string
+	for _, name := range mapperNames {
+		ext := extension.FindByName(name)
+		if ext == nil {
+			continue
+		}
+		if fn := ext.ResolvePath(workDir); fn != nil {
+			fns = append(fns, fn)
+		}
+	}
+	if len(fns) == 0 {
+		return nil
+	}
+	return func(path string) string {
+		for _, fn := range fns {
+			result := fn(path)
+			if result != path {
+				return result
+			}
+		}
+		return path
+	}
+}

@@ -31,7 +31,6 @@ type LayerDef struct {
 	WatchMethod string // "realtime", "periodic", or "off"; defaults to "realtime"
 }
 
-// SessionInfo holds metadata extracted from the workspace about active agents.
 // Extension is a composable unit that contributes patterns to bento's layer model.
 // Each extension has a single concern: an agent, a language/framework, or a tool.
 type Extension interface {
@@ -43,6 +42,16 @@ type Extension interface {
 
 	// Contribute returns the patterns and config this extension adds.
 	Contribute(workDir string) Contribution
+
+	// NormalizePath returns a function that replaces workspace-derived
+	// components in portable paths with stable placeholders. Called at save time.
+	// Return nil if no normalization is needed.
+	NormalizePath(workDir string) func(path string) string
+
+	// ResolvePath returns a function that expands placeholders back to
+	// workspace-derived components for the target workDir. Called at restore time.
+	// Must not check filesystem existence. Return nil if not needed.
+	ResolvePath(workDir string) func(path string) string
 }
 
 // Contribution holds what an extension adds to the build.
@@ -215,6 +224,40 @@ func ExpandHome(path string) string {
 		}
 	}
 	return path
+}
+
+// PrefixReplacer returns a function that replaces a path prefix with a
+// different prefix. If the path doesn't match, it's returned unchanged.
+// Used by extensions to build NormalizePath/ResolvePath functions.
+func PrefixReplacer(from, to string) func(string) string {
+	return func(path string) string {
+		if strings.HasPrefix(path, from+"/") {
+			return to + path[len(from):]
+		}
+		if path == from {
+			return to
+		}
+		return path
+	}
+}
+
+// PortablePath converts an absolute path to a portable form for use in archive
+// entry names. Home-directory paths are converted to /~/ so they restore
+// correctly on machines with different usernames. The result always uses
+// forward slashes so archive keys are consistent across platforms.
+func PortablePath(absPath string) string {
+	normalized := strings.ReplaceAll(absPath, string(filepath.Separator), "/")
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		normalizedHome := strings.ReplaceAll(home, string(filepath.Separator), "/")
+		if strings.HasPrefix(normalized, normalizedHome+"/") {
+			return "/~/" + normalized[len(normalizedHome)+1:]
+		}
+	}
+	if !strings.HasPrefix(normalized, "/") {
+		normalized = "/" + normalized
+	}
+	return normalized
 }
 
 // IsExternalPattern returns true if the pattern refers to a path outside the workspace.

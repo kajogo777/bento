@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kajogo777/bento/internal/extension"
@@ -34,7 +35,7 @@ func TestScanAssignsFilesToLayers(t *testing.T) {
 		{Name: "docs", Patterns: []string{"*.md"}},
 	}
 
-	s := NewScanner(dir, layers, nil)
+	s := NewScanner(dir, layers, nil, nil)
 	result, err := s.Scan()
 	if err != nil {
 		t.Fatalf("Scan returned error: %v", err)
@@ -63,7 +64,7 @@ func TestScanIgnoredFilesExcluded(t *testing.T) {
 		{Name: "meta", Patterns: []string{".DS_Store"}},
 	}
 
-	s := NewScanner(dir, layers, []string{"*.log", ".DS_Store"})
+	s := NewScanner(dir, layers, []string{"*.log", ".DS_Store"}, nil)
 	result, err := s.Scan()
 	if err != nil {
 		t.Fatalf("Scan returned error: %v", err)
@@ -87,7 +88,7 @@ func TestScanUnmatchedFilesExcluded(t *testing.T) {
 		{Name: "source", Patterns: []string{"src/**"}},
 	}
 
-	s := NewScanner(dir, layers, nil)
+	s := NewScanner(dir, layers, nil, nil)
 	result, err := s.Scan()
 	if err != nil {
 		t.Fatalf("Scan returned error: %v", err)
@@ -116,7 +117,7 @@ func TestScanFirstLayerWins(t *testing.T) {
 		{Name: "second", Patterns: []string{"src/**"}},
 	}
 
-	s := NewScanner(dir, layers, nil)
+	s := NewScanner(dir, layers, nil, nil)
 	result, err := s.Scan()
 	if err != nil {
 		t.Fatalf("Scan returned error: %v", err)
@@ -143,7 +144,7 @@ func TestScanExternalPatterns(t *testing.T) {
 		{Name: "project", Patterns: []string{"**"}, CatchAll: true},
 	}
 
-	s := NewScanner(dir, layers, nil)
+	s := NewScanner(dir, layers, nil, nil)
 	result, err := s.Scan()
 	if err != nil {
 		t.Fatalf("Scan returned error: %v", err)
@@ -174,7 +175,7 @@ func TestScanRejectsPathTraversalInExternalPatterns(t *testing.T) {
 		{Name: "agent", Patterns: []string{"~/../../etc/passwd"}},
 	}
 
-	s := NewScanner(dir, layers, nil)
+	s := NewScanner(dir, layers, nil, nil)
 	result, err := s.Scan()
 	if err != nil {
 		t.Fatalf("Scan returned error: %v", err)
@@ -182,5 +183,72 @@ func TestScanRejectsPathTraversalInExternalPatterns(t *testing.T) {
 
 	if len(result["agent"].ExternalFiles) != 0 {
 		t.Errorf("agent layer should have 0 external files (.. rejected), got %d", len(result["agent"].ExternalFiles))
+	}
+}
+
+func TestScanWithNormalizePath(t *testing.T) {
+	dir := t.TempDir()
+	extDir := t.TempDir()
+
+	createFile(t, extDir, "session.jsonl", "data")
+
+	layers := []extension.LayerDef{
+		{Name: "agent", Patterns: []string{extDir + "/"}},
+		{Name: "project", Patterns: []string{"**"}, CatchAll: true},
+	}
+
+	// Build a normalizer that replaces the extDir's portable path with a placeholder
+	portableExtDir := extension.PortablePath(extDir)
+	placeholder := "/~/test/__BENTO_WORKSPACE__"
+	normalizer := func(path string) string {
+		if strings.HasPrefix(path, portableExtDir+"/") {
+			return placeholder + path[len(portableExtDir):]
+		}
+		if path == portableExtDir {
+			return placeholder
+		}
+		return path
+	}
+
+	s := NewScanner(dir, layers, nil, normalizer)
+	result, err := s.Scan()
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+
+	// Verify archive paths use the placeholder, not the real path
+	for _, ef := range result["agent"].ExternalFiles {
+		if strings.Contains(ef.ArchivePath, portableExtDir) {
+			t.Errorf("archive path should not contain real path: %s", ef.ArchivePath)
+		}
+		if !strings.Contains(ef.ArchivePath, "__BENTO_WORKSPACE__") {
+			t.Errorf("archive path should contain __BENTO_WORKSPACE__ placeholder: %s", ef.ArchivePath)
+		}
+	}
+}
+
+func TestScanWithNilNormalizePath(t *testing.T) {
+	dir := t.TempDir()
+	extDir := t.TempDir()
+
+	createFile(t, extDir, "session.jsonl", "data")
+
+	layers := []extension.LayerDef{
+		{Name: "agent", Patterns: []string{extDir + "/"}},
+	}
+
+	// nil normalizer = no transformation
+	s := NewScanner(dir, layers, nil, nil)
+	result, err := s.Scan()
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+
+	// Verify archive paths use the real portable path (no placeholder)
+	portableExtDir := extension.PortablePath(extDir)
+	for _, ef := range result["agent"].ExternalFiles {
+		if !strings.Contains(ef.ArchivePath, portableExtDir) {
+			t.Errorf("archive path should contain real portable path when normalizer is nil: %s", ef.ArchivePath)
+		}
 	}
 }

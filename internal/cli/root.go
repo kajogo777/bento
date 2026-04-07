@@ -35,12 +35,25 @@ func loadConfigAndStore(dir string) (*config.BentoConfig, registry.Store, error)
 // resolveExtensions returns the merge result from active extensions.
 // If custom layers are defined in bento.yaml, they take precedence and bypass extensions.
 func resolveExtensions(dir string, cfg *config.BentoConfig) extension.MergeResult {
+	merged, _ := resolveExtensionsWithList(dir, cfg)
+	return merged
+}
+
+// resolveExtensionsWithList returns both the merge result and the resolved
+// extension instances. Use this when you need the extensions for additional
+// operations (e.g., composing path normalizers) without resolving them twice.
+func resolveExtensionsWithList(dir string, cfg *config.BentoConfig) (extension.MergeResult, []extension.Extension) {
 	if len(cfg.Layers) > 0 {
 		return extension.MergeResult{
 			Layers: configToLayerDefs(cfg.Layers),
-		}
+		}, nil
 	}
-	return extension.ResolveAndMerge(dir, cfg.Extensions)
+	exts := extension.Resolve(dir, cfg.Extensions)
+	var contributions []extension.Contribution
+	for _, ext := range exts {
+		contributions = append(contributions, ext.Contribute(dir))
+	}
+	return extension.Merge(contributions), exts
 }
 
 // configToLayerDefs converts bento.yaml layer definitions to extension.LayerDefs.

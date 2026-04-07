@@ -25,17 +25,21 @@ type ScanResult struct {
 
 // Scanner walks a workspace directory tree and assigns files to layers.
 type Scanner struct {
-	workDir string
-	layers  []extension.LayerDef
-	ignore  *IgnoreMatcher
+	workDir       string
+	layers        []extension.LayerDef
+	ignore        *IgnoreMatcher
+	normalizePath func(string) string // optional save-time path normalizer
 }
 
 // NewScanner creates a new Scanner for the given workspace directory.
-func NewScanner(workDir string, layers []extension.LayerDef, ignorePatterns []string) *Scanner {
+// The optional normalizePath function replaces workspace-derived path
+// components with portable placeholders in archive entry names.
+func NewScanner(workDir string, layers []extension.LayerDef, ignorePatterns []string, normalizePath func(string) string) *Scanner {
 	return &Scanner{
-		workDir: workDir,
-		layers:  layers,
-		ignore:  NewIgnoreMatcher(ignorePatterns),
+		workDir:       workDir,
+		layers:        layers,
+		ignore:        NewIgnoreMatcher(ignorePatterns),
+		normalizePath: normalizePath,
 	}
 }
 
@@ -130,7 +134,7 @@ func (s *Scanner) Scan() (map[string]*ScanResult, error) {
 				if !s.ignore.Match(filepath.Base(source)) {
 					result[layer.Name].ExternalFiles = append(result[layer.Name].ExternalFiles, ExternalFile{
 						AbsPath:     source,
-						ArchivePath: "__external__" + portablePath(source),
+						ArchivePath: "__external__" + s.applyNormalize(portablePath(source)),
 					})
 				}
 				continue
@@ -149,7 +153,7 @@ func (s *Scanner) Scan() (map[string]*ScanResult, error) {
 				}
 				result[layer.Name].ExternalFiles = append(result[layer.Name].ExternalFiles, ExternalFile{
 					AbsPath:     path,
-					ArchivePath: "__external__" + portablePath(path),
+					ArchivePath: "__external__" + s.applyNormalize(portablePath(path)),
 				})
 				return nil
 			})
@@ -167,25 +171,18 @@ func (s *Scanner) Scan() (map[string]*ScanResult, error) {
 	return result, nil
 }
 
+// applyNormalize applies the scanner's normalizePath function if set.
+func (s *Scanner) applyNormalize(path string) string {
+	if s.normalizePath != nil {
+		return s.normalizePath(path)
+	}
+	return path
+}
+
 // portablePath converts an absolute path to a portable form for use in archive
-// entry names. Home-directory paths are converted to /~/ so they restore
-// correctly on machines with different usernames. The result always uses
-// forward slashes so archive keys are consistent across platforms.
+// entry names. Delegates to extension.PortablePath.
 func portablePath(absPath string) string {
-	normalized := NormalizePath(absPath)
-	home, err := os.UserHomeDir()
-	if err == nil && home != "" {
-		normalizedHome := NormalizePath(home)
-		if strings.HasPrefix(normalized, normalizedHome+"/") {
-			return "/~/" + normalized[len(normalizedHome)+1:]
-		}
-	}
-	// Ensure the path starts with "/" for consistent archive naming.
-	// On Unix this is already the case; on Windows we prepend "/" to "C:/...".
-	if !strings.HasPrefix(normalized, "/") {
-		normalized = "/" + normalized
-	}
-	return normalized
+	return extension.PortablePath(absPath)
 }
 
 // absFromArchivePath converts a portable archive path back to an absolute path

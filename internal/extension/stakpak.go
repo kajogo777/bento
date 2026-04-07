@@ -8,7 +8,9 @@ import (
 // Stakpak detects the Stakpak AI agent framework.
 type Stakpak struct{}
 
-func (s Stakpak) Name() string { return "stakpak" }
+func (s Stakpak) Name() string                                       { return "stakpak" }
+func (s Stakpak) NormalizePath(_ string) func(path string) string     { return nil }
+func (s Stakpak) ResolvePath(_ string) func(path string) string       { return nil }
 
 func (s Stakpak) Detect(workDir string) bool {
 	if info, err := os.Stat(filepath.Join(workDir, ".stakpak")); err == nil && info.IsDir() {

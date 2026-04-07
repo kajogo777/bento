@@ -95,7 +95,7 @@ Layers with watch: off are not monitored (still included in saves).`,
 					}
 
 					// Collect workspace files from all layers.
-					scanner := workspace.NewScanner(dir, layers, ignorePatterns)
+					scanner := workspace.NewScanner(dir, layers, ignorePatterns, nil)
 					if scanResults, scanErr := scanner.Scan(); scanErr == nil {
 						var allFiles []string
 						for _, sr := range scanResults {

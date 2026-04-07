@@ -116,8 +116,12 @@ func diffWorkspace(dir string, args []string) error {
 		}
 	}
 
-	resolved := resolveExtensions(dir, cfg)
+	resolved, exts := resolveExtensionsWithList(dir, cfg)
 	layerDefs := resolved.Layers
+
+	// Compose path normalizers so workspace-side keys use the same
+	// placeholders as the checkpoint-side keys.
+	normalizePath := composeNormalizers(exts, dir)
 
 	ignorePatterns := append(config.DefaultIgnorePatterns, resolved.Ignore...)
 	ignorePatterns = append(ignorePatterns, cfg.Ignore...)
@@ -125,7 +129,7 @@ func diffWorkspace(dir string, args []string) error {
 		ignorePatterns = append(ignorePatterns, bentoIgnore...)
 	}
 
-	scanner := workspace.NewScanner(dir, layerDefs, ignorePatterns)
+	scanner := workspace.NewScanner(dir, layerDefs, ignorePatterns, normalizePath)
 	scanResults, err := scanner.Scan()
 	if err != nil {
 		return fmt.Errorf("scanning workspace: %w", err)

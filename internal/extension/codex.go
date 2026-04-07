@@ -11,7 +11,9 @@ import (
 // Codex detects the Codex agent framework.
 type Codex struct{}
 
-func (c Codex) Name() string { return "codex" }
+func (c Codex) Name() string                                       { return "codex" }
+func (c Codex) NormalizePath(_ string) func(path string) string     { return nil }
+func (c Codex) ResolvePath(_ string) func(path string) string       { return nil }
 
 func (c Codex) Detect(workDir string) bool {
 	if info, err := os.Stat(filepath.Join(workDir, ".codex")); err == nil && info.IsDir() {

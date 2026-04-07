@@ -49,6 +49,54 @@ func (c Cursor) Contribute(workDir string) Contribution {
 	}
 }
 
+// cursorWorkspacePlaceholder returns the platform-appropriate placeholder
+// for Cursor's workspace storage directory.
+func cursorWorkspacePlaceholder() string {
+	base := ""
+	switch runtime.GOOS {
+	case "darwin":
+		base = "/~/Library/Application Support/Cursor/User/workspaceStorage"
+	case "linux":
+		base = "/~/.config/Cursor/User/workspaceStorage"
+	default:
+		// Windows: APPDATA is not under home, so we use absolute path form.
+		appData := os.Getenv("APPDATA")
+		if appData == "" {
+			return ""
+		}
+		base = PortablePath(filepath.Join(appData, "Cursor", "User", "workspaceStorage"))
+	}
+	return base + "/__BENTO_WORKSPACE__"
+}
+
+func (c Cursor) NormalizePath(workDir string) func(path string) string {
+	wsDir := cursorWorkspaceDir(workDir)
+	if wsDir == "" {
+		return nil
+	}
+	placeholder := cursorWorkspacePlaceholder()
+	if placeholder == "" {
+		return nil
+	}
+	return PrefixReplacer(PortablePath(wsDir), placeholder)
+}
+
+func (c Cursor) ResolvePath(workDir string) func(path string) string {
+	storagePath := cursorWorkspaceStoragePath()
+	if storagePath == "" {
+		return nil
+	}
+	hash := cursorFindWorkspaceHash(storagePath, workDir)
+	if hash == "" {
+		return nil
+	}
+	placeholder := cursorWorkspacePlaceholder()
+	if placeholder == "" {
+		return nil
+	}
+	return PrefixReplacer(placeholder, PortablePath(filepath.Join(storagePath, hash)))
+}
+
 func cursorWorkspaceDir(workDir string) string {
 	storagePath := cursorWorkspaceStoragePath()
 	if storagePath == "" {

@@ -240,3 +240,83 @@ func TestPackLayerWithFileOverrides(t *testing.T) {
 		t.Errorf("original file was modified: %q", diskContent)
 	}
 }
+
+func TestUnpackWithResolvePath(t *testing.T) {
+	// Build a tar.gz with a placeholder external path
+	placeholder := "/~/.agent/projects/__BENTO_WORKSPACE__"
+	archivePath := "__external__" + placeholder + "/session.jsonl"
+	data := buildTarGzBytes(t, map[string]string{
+		archivePath: `{"type":"user","content":"hello"}`,
+	})
+
+	targetDir := t.TempDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+
+	cleanupDir := filepath.Join(home, ".agent")
+	t.Cleanup(func() { os.RemoveAll(cleanupDir) })
+
+	// Resolver expands __BENTO_WORKSPACE__ to a specific hash
+	targetHash := "-target-workspace-hash"
+	targetPrefix := "/~/.agent/projects/" + targetHash
+	resolver := func(path string) string {
+		if strings.HasPrefix(path, placeholder+"/") {
+			return targetPrefix + path[len(placeholder):]
+		}
+		if path == placeholder {
+			return targetPrefix
+		}
+		return path
+	}
+
+	if err := UnpackLayerWithExternal(data, targetDir, resolver); err != nil {
+		t.Fatalf("UnpackLayerWithExternal: %v", err)
+	}
+
+	// Verify file was written to the resolved path
+	expectedPath := filepath.Join(home, ".agent", "projects", targetHash, "session.jsonl")
+	got, err := os.ReadFile(expectedPath)
+	if err != nil {
+		t.Fatalf("expected file at %s, got error: %v", expectedPath, err)
+	}
+
+	if !strings.Contains(string(got), "hello") {
+		t.Errorf("unexpected content: %q", got)
+	}
+}
+
+func TestUnpackWithNilResolvePath(t *testing.T) {
+	// Build a tar.gz with a placeholder external path
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+
+	cleanupDir := filepath.Join(home, ".bentotest-nil-resolve")
+	t.Cleanup(func() { os.RemoveAll(cleanupDir) })
+
+	// Use a distinctive path that won't conflict
+	archivePath := "__external__/~/.bentotest-nil-resolve/session.jsonl"
+	data := buildTarGzBytes(t, map[string]string{
+		archivePath: "test-data",
+	})
+
+	targetDir := t.TempDir()
+
+	// nil resolver = no placeholder expansion, path used as-is
+	if err := UnpackLayerWithExternal(data, targetDir, nil); err != nil {
+		t.Fatalf("UnpackLayerWithExternal: %v", err)
+	}
+
+	expectedPath := filepath.Join(home, ".bentotest-nil-resolve", "session.jsonl")
+	got, err := os.ReadFile(expectedPath)
+	if err != nil {
+		t.Fatalf("expected file at %s: %v", expectedPath, err)
+	}
+
+	if string(got) != "test-data" {
+		t.Errorf("unexpected content: %q", got)
+	}
+}

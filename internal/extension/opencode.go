@@ -9,7 +9,9 @@ import (
 // OpenCode detects the OpenCode agent framework.
 type OpenCode struct{}
 
-func (o OpenCode) Name() string { return "opencode" }
+func (o OpenCode) Name() string                                       { return "opencode" }
+func (o OpenCode) NormalizePath(_ string) func(path string) string     { return nil }
+func (o OpenCode) ResolvePath(_ string) func(path string) string       { return nil }
 
 func (o OpenCode) Detect(workDir string) bool {
 	if info, err := os.Stat(filepath.Join(workDir, ".opencode")); err == nil && info.IsDir() {

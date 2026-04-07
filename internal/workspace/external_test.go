@@ -188,7 +188,7 @@ func TestPackUnpackExternal_AbsolutePath(t *testing.T) {
 	if err := os.Remove(srcFile); err != nil {
 		t.Fatalf("removing source: %v", err)
 	}
-	if err := UnpackLayerWithExternal(data, t.TempDir()); err != nil {
+	if err := UnpackLayerWithExternal(data, t.TempDir(), nil); err != nil {
 		t.Fatalf("UnpackLayerWithExternal: %v", err)
 	}
 	got, err := os.ReadFile(srcFile)
@@ -251,7 +251,7 @@ func TestPackUnpackExternal_HomeRelativePath(t *testing.T) {
 	if err := os.Remove(srcFile); err != nil {
 		t.Fatalf("removing source: %v", err)
 	}
-	if err := UnpackLayerWithExternal(data, t.TempDir()); err != nil {
+	if err := UnpackLayerWithExternal(data, t.TempDir(), nil); err != nil {
 		t.Fatalf("UnpackLayerWithExternal: %v", err)
 	}
 	got, err := os.ReadFile(srcFile)
@@ -278,7 +278,7 @@ func TestDiffKeyConsistency_RelativePath(t *testing.T) {
 	layers := []extension.LayerDef{
 		{Name: "project", Patterns: []string{"src/**"}},
 	}
-	s := NewScanner(workDir, layers, nil)
+	s := NewScanner(workDir, layers, nil, nil)
 	result, _ := s.Scan()
 
 	data, err := PackLayerWithExternal(workDir, result["project"].WorkspaceFiles, nil, false)
@@ -305,7 +305,7 @@ func TestDiffKeyConsistency_AbsolutePath(t *testing.T) {
 	layers := []extension.LayerDef{
 		{Name: "agent", Patterns: []string{extDir + "/"}},
 	}
-	s := NewScanner(workDir, layers, nil)
+	s := NewScanner(workDir, layers, nil, nil)
 	result, _ := s.Scan()
 
 	if len(result["agent"].ExternalFiles) == 0 {
@@ -349,7 +349,7 @@ func TestDiffKeyConsistency_HomeRelativePath(t *testing.T) {
 	layers := []extension.LayerDef{
 		{Name: "agent", Patterns: []string{extDir + "/"}},
 	}
-	s := NewScanner(workDir, layers, nil)
+	s := NewScanner(workDir, layers, nil, nil)
 	result, _ := s.Scan()
 
 	if len(result["agent"].ExternalFiles) == 0 {
@@ -542,7 +542,7 @@ func TestScannerArchivePaths_Absolute(t *testing.T) {
 	layers := []extension.LayerDef{
 		{Name: "agent", Patterns: []string{extDir + "/"}},
 	}
-	s := NewScanner(workDir, layers, nil)
+	s := NewScanner(workDir, layers, nil, nil)
 	result, err := s.Scan()
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -576,7 +576,7 @@ func TestScannerArchivePaths_HomeRelative(t *testing.T) {
 	layers := []extension.LayerDef{
 		{Name: "agent", Patterns: []string{extDir + "/"}},
 	}
-	s := NewScanner(workDir, layers, nil)
+	s := NewScanner(workDir, layers, nil, nil)
 	result, err := s.Scan()
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -652,5 +652,73 @@ func assertNotContains(t *testing.T, label string, slice []string, notWant strin
 			t.Errorf("%s: %q should not be in %v", label, notWant, slice)
 			return
 		}
+	}
+}
+
+func TestCrossMachineDiffConsistency(t *testing.T) {
+	// Two scanners on different workDirs with different real paths but
+	// the same placeholder should produce identical archive paths.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+
+	workDirA := t.TempDir()
+	workDirB := t.TempDir()
+
+	// Create external dirs that simulate different path-hashes
+	extDirA := filepath.Join(home, ".testAgent", "projectA")
+	extDirB := filepath.Join(home, ".testAgent", "projectB")
+	os.MkdirAll(extDirA, 0755)
+	os.MkdirAll(extDirB, 0755)
+	t.Cleanup(func() { os.RemoveAll(filepath.Join(home, ".testAgent")) })
+
+	writeFileAt(t, filepath.Join(extDirA, "session.jsonl"), "data-a")
+	writeFileAt(t, filepath.Join(extDirB, "session.jsonl"), "data-b")
+
+	placeholder := "/~/.testAgent/__BENTO_WORKSPACE__"
+	portableA := extension.PortablePath(extDirA)
+	portableB := extension.PortablePath(extDirB)
+
+	normalizerA := func(path string) string {
+		if strings.HasPrefix(path, portableA+"/") {
+			return placeholder + path[len(portableA):]
+		}
+		return path
+	}
+	normalizerB := func(path string) string {
+		if strings.HasPrefix(path, portableB+"/") {
+			return placeholder + path[len(portableB):]
+		}
+		return path
+	}
+
+	layersA := []extension.LayerDef{{Name: "agent", Patterns: []string{extDirA + "/"}}}
+	layersB := []extension.LayerDef{{Name: "agent", Patterns: []string{extDirB + "/"}}}
+
+	scannerA := NewScanner(workDirA, layersA, nil, normalizerA)
+	scannerB := NewScanner(workDirB, layersB, nil, normalizerB)
+
+	resultA, err := scannerA.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultB, err := scannerB.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(resultA["agent"].ExternalFiles) != 1 || len(resultB["agent"].ExternalFiles) != 1 {
+		t.Fatal("expected 1 external file from each scanner")
+	}
+
+	archiveA := resultA["agent"].ExternalFiles[0].ArchivePath
+	archiveB := resultB["agent"].ExternalFiles[0].ArchivePath
+
+	if archiveA != archiveB {
+		t.Errorf("archive paths should be identical across machines:\n  A: %s\n  B: %s", archiveA, archiveB)
+	}
+	if !strings.Contains(archiveA, "__BENTO_WORKSPACE__") {
+		t.Errorf("archive path should contain placeholder: %s", archiveA)
 	}
 }

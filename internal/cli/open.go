@@ -291,6 +291,12 @@ func newOpenCmd() *cobra.Command {
 				}
 			}
 
+			// Compose path resolver from active extensions for portable external paths.
+			var resolvePath func(string) string
+			if parseErr == nil && len(bentoCfg.Extensions) > 0 {
+				resolvePath = composeResolvers(bentoCfg.Extensions, targetDir)
+			}
+
 			// Unpack layers (stream each layer directly to disk, no full load into memory)
 			fmt.Printf("Restoring checkpoint %s (sequence %d)...\n", tag, info.Sequence)
 			for i := range layersToRestore {
@@ -298,7 +304,7 @@ func newOpenCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("opening layer %d: %w", i, err)
 				}
-				unpackErr := workspace.UnpackLayerWithExternalFromReader(r, targetDir)
+				unpackErr := workspace.UnpackLayerWithExternalFromReader(r, targetDir, resolvePath)
 				_ = r.Close()
 				if unpackErr != nil {
 					return fmt.Errorf("unpacking layer: %w", unpackErr)

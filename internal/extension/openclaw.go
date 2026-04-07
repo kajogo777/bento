@@ -65,6 +65,28 @@ func (o OpenClaw) Contribute(workDir string) Contribution {
 	}
 }
 
+// openClawSessionPlaceholder is the stable placeholder for OpenClaw's
+// workspace-derived agent session directory.
+const openClawSessionPlaceholder = "/~/.openclaw/agents/__BENTO_WORKSPACE__/sessions"
+
+func (o OpenClaw) NormalizePath(workDir string) func(path string) string {
+	openclawHome := openClawHome()
+	sessDir := openClawSessionDir(openclawHome, workDir)
+	if sessDir == "" {
+		return nil
+	}
+	return PrefixReplacer(PortablePath(sessDir), openClawSessionPlaceholder)
+}
+
+func (o OpenClaw) ResolvePath(workDir string) func(path string) string {
+	openclawHome := openClawHome()
+	agentID := openClawAgentForWorkspace(openclawHome, workDir)
+	if agentID == "" {
+		return nil
+	}
+	return PrefixReplacer(openClawSessionPlaceholder, PortablePath(filepath.Join(openclawHome, "agents", agentID, "sessions")))
+}
+
 // openClawHome returns the OpenClaw home directory.
 func openClawHome() string {
 	if h := os.Getenv("OPENCLAW_STATE_DIR"); h != "" {

@@ -9,7 +9,9 @@ import (
 // in the agent layer, regardless of which agent is active.
 type AgentsMD struct{}
 
-func (a AgentsMD) Name() string { return "agents-md" }
+func (a AgentsMD) Name() string                                       { return "agents-md" }
+func (a AgentsMD) NormalizePath(_ string) func(path string) string     { return nil }
+func (a AgentsMD) ResolvePath(_ string) func(path string) string       { return nil }
 
 func (a AgentsMD) Detect(workDir string) bool {
 	_, err := os.Stat(filepath.Join(workDir, "AGENTS.md"))

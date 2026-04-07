@@ -13,7 +13,9 @@ import (
 // (npm, yarn, pnpm, bun, deno) and adds node_modules to the deps layer.
 type Node struct{}
 
-func (n Node) Name() string { return "node" }
+func (n Node) Name() string                                     { return "node" }
+func (n Node) NormalizePath(_ string) func(path string) string   { return nil }
+func (n Node) ResolvePath(_ string) func(path string) string     { return nil }
 
 func (n Node) Detect(workDir string) bool {
 	// npm / yarn / pnpm / bun all use package.json.
@@ -80,7 +82,9 @@ func hasFile(workDir, name string) bool {
 // adds .venv to the deps layer.
 type Python struct{}
 
-func (p Python) Name() string { return "python" }
+func (p Python) Name() string                                     { return "python" }
+func (p Python) NormalizePath(_ string) func(path string) string   { return nil }
+func (p Python) ResolvePath(_ string) func(path string) string     { return nil }
 
 func (p Python) Detect(workDir string) bool {
 	for _, marker := range []string{
@@ -122,7 +126,9 @@ func (p Python) Contribute(_ string) Contribution {
 // GoMod detects Go modules and adds vendor to deps.
 type GoMod struct{}
 
-func (g GoMod) Name() string { return "go-mod" }
+func (g GoMod) Name() string                                     { return "go-mod" }
+func (g GoMod) NormalizePath(_ string) func(path string) string   { return nil }
+func (g GoMod) ResolvePath(_ string) func(path string) string     { return nil }
 
 func (g GoMod) Detect(workDir string) bool {
 	_, err := os.Stat(filepath.Join(workDir, "go.mod"))
@@ -146,7 +152,9 @@ func (g GoMod) Contribute(_ string) Contribution {
 // node_modules.
 type Rust struct{}
 
-func (r Rust) Name() string { return "rust" }
+func (r Rust) Name() string                                     { return "rust" }
+func (r Rust) NormalizePath(_ string) func(path string) string   { return nil }
+func (r Rust) ResolvePath(_ string) func(path string) string     { return nil }
 
 func (r Rust) Detect(workDir string) bool {
 	_, err := os.Stat(filepath.Join(workDir, "Cargo.toml"))
@@ -174,7 +182,9 @@ func (r Rust) Contribute(_ string) Contribution {
 // to the deps layer.
 type Ruby struct{}
 
-func (r Ruby) Name() string { return "ruby" }
+func (r Ruby) Name() string                                     { return "ruby" }
+func (r Ruby) NormalizePath(_ string) func(path string) string   { return nil }
+func (r Ruby) ResolvePath(_ string) func(path string) string     { return nil }
 
 func (r Ruby) Detect(workDir string) bool {
 	for _, marker := range []string{"Gemfile", "Gemfile.lock", "Rakefile"} {
@@ -206,7 +216,9 @@ func (r Ruby) Contribute(_ string) Contribution {
 // _build/ holds compiled BEAM files (placed in a build-cache layer).
 type Elixir struct{}
 
-func (e Elixir) Name() string { return "elixir" }
+func (e Elixir) Name() string                                     { return "elixir" }
+func (e Elixir) NormalizePath(_ string) func(path string) string   { return nil }
+func (e Elixir) ResolvePath(_ string) func(path string) string     { return nil }
 
 func (e Elixir) Detect(workDir string) bool {
 	_, err := os.Stat(filepath.Join(workDir, "mix.exs"))
@@ -238,7 +250,9 @@ func (e Elixir) Contribute(_ string) Contribution {
 // build-cache layer).
 type OCaml struct{}
 
-func (o OCaml) Name() string { return "ocaml" }
+func (o OCaml) Name() string                                     { return "ocaml" }
+func (o OCaml) NormalizePath(_ string) func(path string) string   { return nil }
+func (o OCaml) ResolvePath(_ string) func(path string) string     { return nil }
 
 func (o OCaml) Detect(workDir string) bool {
 	for _, marker := range []string{"dune-project", "dune-workspace"} {
