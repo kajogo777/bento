@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kajogo777/bento/internal/config"
 	"github.com/kajogo777/bento/internal/extension"
 )
 
@@ -223,6 +224,74 @@ func TestScanWithNormalizePath(t *testing.T) {
 		}
 		if !strings.Contains(ef.ArchivePath, "__BENTO_WORKSPACE__") {
 			t.Errorf("archive path should contain __BENTO_WORKSPACE__ placeholder: %s", ef.ArchivePath)
+		}
+	}
+}
+
+func TestScanGitNotIgnoredByDefault(t *testing.T) {
+	dir := t.TempDir()
+
+	createFile(t, dir, ".git/HEAD", "ref: refs/heads/main")
+	createFile(t, dir, ".git/config", "[core]\n\tbare = false")
+	createFile(t, dir, "src/main.go", "package main")
+
+	layers := []extension.LayerDef{
+		{Name: "project", Patterns: []string{"**"}, CatchAll: true},
+	}
+
+	// Use only the actual DefaultIgnorePatterns — .git should NOT be in them
+	s := NewScanner(dir, layers, config.DefaultIgnorePatterns, nil)
+	result, err := s.Scan()
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+
+	files := result["project"].WorkspaceFiles
+	hasGitHead := false
+	hasGitConfig := false
+	for _, f := range files {
+		if f == ".git/HEAD" {
+			hasGitHead = true
+		}
+		if f == ".git/config" {
+			hasGitConfig = true
+		}
+	}
+	if !hasGitHead {
+		t.Error(".git/HEAD should be included in scan (not ignored)")
+	}
+	if !hasGitConfig {
+		t.Error(".git/config should be included in scan (not ignored)")
+	}
+}
+
+func TestScanEnvAndDbNotIgnoredByDefault(t *testing.T) {
+	dir := t.TempDir()
+
+	createFile(t, dir, ".env", "SECRET=foo")
+	createFile(t, dir, ".env.local", "LOCAL=bar")
+	createFile(t, dir, "app.sqlite", "sqlite data")
+	createFile(t, dir, "data.db", "db data")
+	createFile(t, dir, "creds.pem", "pem data")
+
+	layers := []extension.LayerDef{
+		{Name: "project", Patterns: []string{"**"}, CatchAll: true},
+	}
+
+	s := NewScanner(dir, layers, config.DefaultIgnorePatterns, nil)
+	result, err := s.Scan()
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+
+	files := make(map[string]bool)
+	for _, f := range result["project"].WorkspaceFiles {
+		files[f] = true
+	}
+
+	for _, expected := range []string{".env", ".env.local", "app.sqlite", "data.db", "creds.pem"} {
+		if !files[expected] {
+			t.Errorf("%s should be included in scan (not ignored)", expected)
 		}
 	}
 }

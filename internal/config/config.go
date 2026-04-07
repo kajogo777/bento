@@ -230,11 +230,6 @@ var DefaultIgnorePatterns = []string{
 	"bento.yaml",
 	".bentoignore",
 	"bin/**",
-	".git/**",
-	".env", ".env.local", ".env.*.local",
-	"*.pem", "*.key", "*.p12", "token.json", "credentials",
-	"auth.json", "oauth_tokens", "credentials.json",
-	"*.sqlite", "*.db", "*.sqlite-shm", "*.sqlite-wal",
 	".DS_Store", "Thumbs.db",
 	"*.swp", "*.swo", "*~",
 }

@@ -320,3 +320,62 @@ func TestUnpackWithNilResolvePath(t *testing.T) {
 		t.Errorf("unexpected content: %q", got)
 	}
 }
+
+func TestCleanStaleFiles_RemovesStaleGitFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	// Simulate a workspace with .git and a source file
+	createFile(t, dir, ".git/HEAD", "ref: refs/heads/main")
+	createFile(t, dir, ".git/objects/abc123", "stale object")
+	createFile(t, dir, "src/main.go", "package main")
+
+	// Checkpoint only has .git/HEAD and src/main.go — not the stale object
+	keepFiles := map[string]bool{
+		".git/HEAD":  true,
+		"src/main.go": true,
+	}
+
+	if err := CleanStaleFiles(dir, keepFiles); err != nil {
+		t.Fatalf("CleanStaleFiles: %v", err)
+	}
+
+	// .git/HEAD should still exist
+	if _, err := os.Stat(filepath.Join(dir, ".git", "HEAD")); err != nil {
+		t.Error(".git/HEAD should be preserved (in keepFiles)")
+	}
+
+	// .git/objects/abc123 should be removed (stale)
+	if _, err := os.Stat(filepath.Join(dir, ".git", "objects", "abc123")); err == nil {
+		t.Error(".git/objects/abc123 should be removed (not in keepFiles)")
+	}
+
+	// src/main.go should still exist
+	if _, err := os.Stat(filepath.Join(dir, "src", "main.go")); err != nil {
+		t.Error("src/main.go should be preserved (in keepFiles)")
+	}
+}
+
+func TestCleanStaleFiles_PreservesBentoConfig(t *testing.T) {
+	dir := t.TempDir()
+
+	createFile(t, dir, "bento.yaml", "id: ws-test")
+	createFile(t, dir, ".bentoignore", "*.tmp")
+	createFile(t, dir, "stale.txt", "remove me")
+
+	// keepFiles has nothing — but bento.yaml and .bentoignore should survive
+	keepFiles := map[string]bool{}
+
+	if err := CleanStaleFiles(dir, keepFiles); err != nil {
+		t.Fatalf("CleanStaleFiles: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "bento.yaml")); err != nil {
+		t.Error("bento.yaml should be preserved regardless of keepFiles")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".bentoignore")); err != nil {
+		t.Error(".bentoignore should be preserved regardless of keepFiles")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "stale.txt")); err == nil {
+		t.Error("stale.txt should be removed (not in keepFiles)")
+	}
+}

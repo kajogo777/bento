@@ -415,14 +415,6 @@ func CleanStaleFiles(targetDir string, keepFiles map[string]bool) error {
 			return nil
 		}
 
-		// Always preserve .git directory
-		if normalized == ".git" || strings.HasPrefix(normalized, ".git/") {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
 		// Preserve bento config files
 		if normalized == "bento.yaml" || normalized == ".bentoignore" {
 			return nil
