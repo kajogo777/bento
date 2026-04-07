@@ -158,6 +158,10 @@ func newOpenCmd() *cobra.Command {
 			// Parse bento config from checkpoint (needed for secret pre-check and bento.yaml generation).
 			bentoCfg, parseErr := manifest.UnmarshalConfig(configBytes)
 
+			// Exclude non-workspace layers (e.g., encrypted secrets envelope).
+			// These have special semantics and must not be unpacked as files.
+			layers = excludeSecretsLayers(layers, manifestBytes)
+
 			// Filter layers if requested
 			layersToRestore := layers
 			if flagLayers != "" {
@@ -449,6 +453,27 @@ func filterLayers(layers []registry.LayerData, manifestBytes []byte, names []str
 				result = append(result, ld)
 			}
 		}
+	}
+	return result
+}
+
+// excludeSecretsLayers removes layers annotated as encrypted secrets envelopes.
+// These layers contain key-wrapped secret data (secrets.enc) that is handled
+// separately during hydration and must not be unpacked as workspace files.
+func excludeSecretsLayers(layers []registry.LayerData, manifestBytes []byte) []registry.LayerData {
+	var m ocispec.Manifest
+	if err := json.Unmarshal(manifestBytes, &m); err != nil {
+		return layers
+	}
+
+	var result []registry.LayerData
+	for i, ld := range layers {
+		if i < len(m.Layers) {
+			if m.Layers[i].Annotations[manifest.AnnotationSecretsEncrypted] == "true" {
+				continue
+			}
+		}
+		result = append(result, ld)
 	}
 	return result
 }
