@@ -190,9 +190,11 @@ func TestClaudeCodeNormalizeResolveRoundtrip(t *testing.T) {
 
 func TestNilExtensionsReturnNil(t *testing.T) {
 	nilExts := []Extension{
-		Codex{}, OpenCode{}, Stakpak{}, AgentsMD{}, Node{},
+		Codex{}, Stakpak{}, AgentsMD{}, Node{},
 		Python{}, GoMod{}, Rust{}, Ruby{}, Elixir{}, OCaml{},
 		ToolVersions{},
+		// OpenCode is excluded: it returns non-nil when the global
+		// storage directory (~/.local/share/opencode/storage/) exists.
 	}
 	for _, ext := range nilExts {
 		if fn := ext.NormalizePath("/tmp/test"); fn != nil {

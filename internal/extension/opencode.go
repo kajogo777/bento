@@ -10,8 +10,25 @@ import (
 type OpenCode struct{}
 
 func (o OpenCode) Name() string                                       { return "opencode" }
-func (o OpenCode) NormalizePath(_ string) func(path string) string     { return nil }
-func (o OpenCode) ResolvePath(_ string) func(path string) string       { return nil }
+// openCodeStoragePlaceholder is the stable placeholder used in archive paths
+// to replace the user-specific storage directory.
+const openCodeStoragePlaceholder = "/~/.local/share/opencode/storage"
+
+func (o OpenCode) NormalizePath(_ string) func(path string) string {
+	storageDir := openCodeStorageDir()
+	if storageDir == "" {
+		return nil
+	}
+	return PrefixReplacer(PortablePath(storageDir), openCodeStoragePlaceholder)
+}
+
+func (o OpenCode) ResolvePath(_ string) func(path string) string {
+	storageDir := openCodeStorageDir()
+	if storageDir == "" {
+		return nil
+	}
+	return PrefixReplacer(openCodeStoragePlaceholder, PortablePath(storageDir))
+}
 
 func (o OpenCode) Detect(workDir string) bool {
 	if info, err := os.Stat(filepath.Join(workDir, ".opencode")); err == nil && info.IsDir() {
@@ -20,34 +37,60 @@ func (o OpenCode) Detect(workDir string) bool {
 	if _, err := os.Stat(filepath.Join(workDir, "opencode.json")); err == nil {
 		return true
 	}
+	// Also detect if sessions exist for this workspace in the global storage.
+	if openCodeProjectHash(workDir) != "" {
+		return true
+	}
 	return false
 }
 
 func (o OpenCode) Contribute(workDir string) Contribution {
 	agentPatterns := []string{".opencode/**", "opencode.json"}
 
-	// Include the global SQLite database which stores all sessions, messages,
-	// and file snapshots. OpenCode uses a single DB for all projects with no
-	// per-workspace isolation at the database level.
+	// Include the global SQLite database (v1.4+) which stores all sessions,
+	// messages, and parts. Also include WAL/SHM files for consistency.
 	if dbPath := openCodeDBPath(); dbPath != "" {
 		agentPatterns = append(agentPatterns, dbPath)
+		agentPatterns = append(agentPatterns, dbPath+"-wal")
+		agentPatterns = append(agentPatterns, dbPath+"-shm")
 	}
 
-	// Legacy file-based storage from older OpenCode versions. Before the
-	// SQLite migration, sessions and messages were stored as individual
-	// files under ~/.local/share/opencode/storage/.
-	if storageDir := openCodeLegacyStorageDir(); storageDir != "" {
+	// File-based storage (used by the Go-based OpenCode and some TS versions).
+	// Sessions, messages, and parts are stored as individual JSON files under
+	// ~/.local/share/opencode/storage/.
+	if storageDir := openCodeStorageDir(); storageDir != "" {
 		agentPatterns = append(agentPatterns, storageDir+"/")
 	}
 
-	// User-level custom commands. OpenCode looks in two locations:
-	// XDG config dir (~/.config/opencode/commands/) and the dotfile
-	// fallback (~/.opencode/commands/).
-	if cmdDir := openCodeUserCommandsDir(); cmdDir != "" {
-		agentPatterns = append(agentPatterns, cmdDir+"/")
+	// User-global config files under ~/.config/opencode/.
+	configDir := openCodeConfigDir()
+	if configDir != "" {
+		// Config files.
+		for _, name := range []string{"opencode.json", "tui.json"} {
+			full := filepath.Join(configDir, name)
+			if fileExists(full) {
+				agentPatterns = append(agentPatterns, full)
+			}
+		}
+
+		// User-level directories: commands, modes, plugins, skills, tools, themes, agents.
+		for _, dir := range []string{"commands", "modes", "plugins", "skills", "tools", "themes", "agents"} {
+			full := filepath.Join(configDir, dir)
+			if info, err := os.Stat(full); err == nil && info.IsDir() {
+				agentPatterns = append(agentPatterns, full+"/")
+			}
+		}
 	}
-	if cmdDir := openCodeDotfileCommandsDir(); cmdDir != "" {
-		agentPatterns = append(agentPatterns, cmdDir+"/")
+
+	// Dotfile fallback (~/.opencode/) — same directories as XDG config.
+	dotDir := ExpandHome("~/.opencode")
+	if info, err := os.Stat(dotDir); err == nil && info.IsDir() {
+		for _, dir := range []string{"commands", "modes", "plugins", "skills", "tools", "themes", "agents"} {
+			full := filepath.Join(dotDir, dir)
+			if info, err := os.Stat(full); err == nil && info.IsDir() {
+				agentPatterns = append(agentPatterns, full+"/")
+			}
+		}
 	}
 
 	return Contribution{
@@ -88,11 +131,10 @@ func openCodeDBPath() string {
 	return dbPath
 }
 
-// openCodeLegacyStorageDir returns the path to the older file-based storage
-// directory if it exists. Before the SQLite migration, OpenCode stored
-// sessions and messages as individual files under storage/session/ and
-// storage/message/.
-func openCodeLegacyStorageDir() string {
+// openCodeStorageDir returns the path to the file-based storage directory
+// if it exists. OpenCode stores sessions, messages, parts, and project
+// metadata as individual JSON files under storage/.
+func openCodeStorageDir() string {
 	base := openCodeDataDir()
 	if base == "" {
 		return ""
