@@ -29,6 +29,7 @@ bento open ghcr.io/myorg/templates/python-api:latest ~/my-new-api
 # Pulling from ghcr.io/myorg/templates/python-api:latest...
 # Generated bento.yaml from artifact metadata
 # Restoring checkpoint latest (sequence 1)...
+# Remote: ghcr.io/myorg/templates/python-api
 # Restored to /Users/alice/my-new-api
 #
 #   To undo: bento open undo

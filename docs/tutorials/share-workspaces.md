@@ -20,6 +20,7 @@ bento open ghcr.io/myorg/workspaces/my-project:cp-7 ~/debug-auth
 # Pulling from ghcr.io/myorg/workspaces/my-project:cp-7...
 # Generated bento.yaml from artifact metadata
 # Restoring checkpoint cp-7 (sequence 7)...
+# Remote: ghcr.io/myorg/workspaces/my-project
 # Restored to /home/bob/debug-auth
 #
 #   To undo: bento open undo

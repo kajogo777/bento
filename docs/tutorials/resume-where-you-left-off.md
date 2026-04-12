@@ -17,6 +17,22 @@ bento save -m "auth refactor in progress, tests passing"
 # Tagged: cp-1, latest
 ```
 
+Days or weeks later, check where you left off:
+
+```bash
+bento status
+# Workspace: /Users/alice/my-project
+# Extensions: claude-code, node
+#
+# Head:      cp-1 (saved 3 days ago)
+# Message:   auth refactor in progress, tests passing
+# Local:     1 checkpoint(s)
+#
+# Remote:    (none)
+#
+# Changes:   clean
+```
+
 See your checkpoint history:
 
 ```bash
@@ -25,7 +41,7 @@ bento list
 # cp-1   2026-03-20 10:30     sha256:abc123def45... auth refactor in progress, tests passing
 ```
 
-Days or weeks later, resume:
+Resume from where you left off:
 
 ```bash
 bento open cp-1

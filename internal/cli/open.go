@@ -389,6 +389,16 @@ func newOpenCmd() *cobra.Command {
 			manifestDigest := digest.FromBytes(manifestBytes).String()
 			_ = config.UpdateHead(targetDir, manifestDigest)
 
+			// Persist remote to bento.yaml when opening from a remote ref.
+			// This sets the remote once so subsequent push/pull just work.
+			if remoteRef != "" {
+				if updated, err := config.UpdateRemote(targetDir, remoteRef); err != nil {
+					fmt.Printf("Warning: saving remote to bento.yaml: %v\n", err)
+				} else if updated {
+					fmt.Printf("Remote: %s\n", remoteRef)
+				}
+			}
+
 			fmt.Printf("Restored to %s\n", targetDir)
 			if backedUp {
 				fmt.Printf("\n  To undo: bento open undo\n")

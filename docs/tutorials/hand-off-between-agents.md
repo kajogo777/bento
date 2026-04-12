@@ -42,6 +42,7 @@ bento open ghcr.io/myorg/workspaces/my-project:latest ~/my-project
 # Pulling from ghcr.io/myorg/workspaces/my-project:latest...
 # Generated bento.yaml from artifact metadata
 # Restoring checkpoint latest (sequence 5)...
+# Remote: ghcr.io/myorg/workspaces/my-project
 # Restored to /home/bob/my-project
 #
 #   To undo: bento open undo

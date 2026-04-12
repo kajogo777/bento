@@ -171,13 +171,15 @@ watch:
 |---------|---------|
 | `bento init` | Initialize workspace tracking |
 | `bento save` | Save a checkpoint |
-| `bento open` | Restore a checkpoint |
+| `bento open` | Restore a checkpoint (persists remote on first open from registry) |
 | `bento list` | List checkpoints |
+| `bento status` | Show workspace status, head, changes, and remote sync state |
 | `bento diff` | Compare checkpoints or workspace vs latest |
 | `bento fork` | Branch from a checkpoint |
 | `bento tag` | Tag a checkpoint |
 | `bento inspect` | Show metadata and layer summary |
-| `bento push` | Push to OCI registry |
+| `bento push` | Push to OCI registry (persists remote on first push with URL) |
+| `bento pull` | Pull checkpoints from remote registry (persists remote on first pull with URL) |
 | `bento gc` | Garbage collection |
 | `bento env` | Manage env vars and secret refs |
 | `bento watch` | Auto-checkpoint on file changes |

@@ -515,6 +515,30 @@ func UpdateHead(dir string, headDigest string) error {
 	return os.WriteFile(path, out, 0644)
 }
 
+// UpdateRemote reads bento.yaml, sets the remote field if not already set,
+// and writes it back. Returns true if the remote was updated.
+// Unlike Load+Save, this does not trigger BackfillDefaults or validation.
+func UpdateRemote(dir string, remote string) (bool, error) {
+	path := filepath.Join(dir, "bento.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	var cfg BentoConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return false, err
+	}
+	if cfg.Remote != "" {
+		return false, nil
+	}
+	cfg.Remote = remote
+	out, err := yaml.Marshal(&cfg)
+	if err != nil {
+		return false, err
+	}
+	return true, os.WriteFile(path, out, 0644)
+}
+
 // Save writes a BentoConfig to bento.yaml in the given directory.
 func Save(dir string, cfg *BentoConfig) error {
 	data, err := yaml.Marshal(cfg)

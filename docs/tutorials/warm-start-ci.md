@@ -51,6 +51,7 @@ bento open ghcr.io/myorg/ci-runs/my-project:cp-15 ~/debug-ci
 # Pulling from ghcr.io/myorg/ci-runs/my-project:cp-15...
 # Generated bento.yaml from artifact metadata
 # Restoring checkpoint cp-15 (sequence 15)...
+# Remote: ghcr.io/myorg/ci-runs/my-project
 # Restored to /Users/alice/debug-ci
 #
 #   To undo: bento open undo

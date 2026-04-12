@@ -66,6 +66,16 @@ Examples:
 				return fmt.Errorf("no remote configured. Set 'remote' in bento.yaml or pass a registry URL")
 			}
 
+			// Persist remote to bento.yaml when passed as a CLI argument.
+			// This sets the remote once so subsequent push/pull just work.
+			if len(args) > 0 {
+				if updated, err := config.UpdateRemote(dir, remote); err != nil {
+					fmt.Printf("Warning: saving remote to bento.yaml: %v\n", err)
+				} else if updated {
+					fmt.Printf("Remote: %s\n", remote)
+				}
+			}
+
 			// Open local store
 			store, err := registry.NewStore(cfg.StorePath())
 			if err != nil {

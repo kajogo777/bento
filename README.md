@@ -16,7 +16,9 @@ bento save -m "auth module done"    # checkpoint
 bento open cp-3                     # restore (backs up current state first)
 bento open undo                     # undo the last open
 bento open cp-1 ~/workspace-b      # parallel workspace (like git worktrees)
-bento push                          # share via registry
+bento push ghcr.io/myorg/project    # push to registry (remembers remote)
+bento status                        # where am I? what's changed? am I in sync?
+bento pull                          # sync checkpoints from remote
 ```
 
 ## The Problem
@@ -82,8 +84,16 @@ bento open cp-1
 bento open cp-1 ~/workspace-a
 bento open cp-1 ~/workspace-b
 
-# Push to a registry
+# Push to a registry (remote is remembered for future push/pull)
 bento push ghcr.io/myorg/workspaces/my-project
+# Remote: ghcr.io/myorg/workspaces/my-project
+
+# Check workspace status
+bento status
+# Head:      cp-2 (saved 5 minutes ago)
+# Remote:    ghcr.io/myorg/workspaces/my-project
+#   Sync:    up to date (cp-2)
+# Changes:   clean
 ```
 
 ## Core Concepts
@@ -225,7 +235,7 @@ To suppress false positives, copy the lines above into .gitleaksignore (one per 
 
 **[Resume where you left off.](docs/tutorials/resume-where-you-left-off.md)** Agent sessions lose context when they end. Save a checkpoint mid-task, come back days later, and `bento open` restores everything: code, deps, agent memory, build caches. No re-explaining context to your agent.
 
-**[Move workspaces between machines.](docs/tutorials/move-workspaces-between-machines.md)** Working locally but need a cloud VM with more power? `bento push` from your laptop, `bento open` on the remote. Same workflow moving between cloud providers, no rsync, no reinstalling deps.
+**[Move workspaces between machines.](docs/tutorials/move-workspaces-between-machines.md)** Working locally but need a cloud VM with more power? `bento push` from your laptop, `bento open` on the remote. The remote URL is remembered on both sides, so subsequent `push`, `pull`, and `status` just work — no retyping URLs. Same workflow moving between cloud providers, no rsync, no reinstalling deps.
 
 **[Undo agent mistakes.](docs/tutorials/undo-agent-mistakes.md)** An agent trashed your build cache or went off the rails. `bento open` auto-backs up before restoring, and `bento open undo` reverses it. Watch mode auto-checkpoints as you work so you can roll back to any point.
 
@@ -252,11 +262,13 @@ bento open <ref> [<target-dir>]               Restore a checkpoint (backs up cur
 bento open undo                               Undo the last open
 bento open --no-backup <ref>                  Restore without backup
 bento list                                    List checkpoints
+bento status                                  Show workspace status and remote sync state
 bento diff [ref1] [ref2]                      Compare workspace or two checkpoints
 bento tag <ref> <new-tag>                     Tag a checkpoint
 bento inspect [ref]                           Show metadata and layer summary
 bento inspect [ref] --files                   Show metadata with file listing
-bento push [<remote>]                         Push to registry
+bento push [<remote>]                         Push to registry (remembers remote)
+bento pull [<remote>] [--tag <tag>]           Pull checkpoints from remote (remembers remote)
 bento watch [-m <message>] [--debounce <s>]   Watch and auto-checkpoint on changes
 bento gc [--keep-last <n>] [--keep-tagged]    Clean up old checkpoints and blobs
 bento env show                                Show env vars and secret refs
