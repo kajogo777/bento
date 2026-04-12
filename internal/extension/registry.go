@@ -10,6 +10,7 @@ func allBuiltinExtensions() []Extension {
 		OpenClaw{},
 		Cursor{},
 		Stakpak{},  // Stakpak agent framework
+		Pi{},       // Pi coding agent
 		AgentsMD{}, // cross-agent AGENTS.md (always checked)
 
 		// Deps extensions

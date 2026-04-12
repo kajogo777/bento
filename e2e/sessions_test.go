@@ -353,6 +353,277 @@ func TestSessionsMultipleSaves(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestPiSessionsBasic: Pi sessions are extracted and listed
+// ---------------------------------------------------------------------------
+
+func TestPiSessionsBasic(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	// Seed Pi marker.
+	writeFile(t, dir, ".pi/settings.json", `{"defaultProvider":"anthropic"}`)
+
+	// Create Pi session directory matching this workspace.
+	projectDir := makePiProjectDir(t, dir)
+
+	// Write a synthetic session file.
+	sessionID := "2026-04-01T10-00-00-000Z_test-e2e-0000-1111-2222-333333333333"
+	writePiSessionJSONL(t, filepath.Join(projectDir, sessionID+".jsonl"), []piSessionLine{
+		{Type: "session", Timestamp: "2026-04-01T10:00:00.000Z"},
+		{Type: "message", ID: "a1b2c3d4", Role: "user", Timestamp: "2026-04-01T10:00:01.000Z",
+			Content: `"implement auth module"`},
+		{Type: "message", ID: "b2c3d4e5", ParentID: "a1b2c3d4", Role: "assistant", Timestamp: "2026-04-01T10:00:05.000Z",
+			Content:      `[{"type":"text","text":"I'll create the auth module."}]`,
+			Model:        "claude-sonnet-4-20250514",
+			Provider:     "anthropic",
+			StopReason:   "stop",
+			InputTokens:  100,
+			OutputTokens: 50},
+		{Type: "message", ID: "c3d4e5f6", ParentID: "b2c3d4e5", Role: "user", Timestamp: "2026-04-01T10:00:10.000Z",
+			Content: `"add tests"`},
+		{Type: "message", ID: "d4e5f6g7", ParentID: "c3d4e5f6", Role: "assistant", Timestamp: "2026-04-01T10:00:15.000Z",
+			Content:    `[{"type":"text","text":"Done!"}]`,
+			Model:      "claude-sonnet-4-20250514",
+			Provider:   "anthropic",
+			StopReason: "stop"},
+	})
+
+	// Write a second session.
+	sessionID2 := "2026-04-02T10-00-00-000Z_test-e2e-4444-5555-6666-777777777777"
+	writePiSessionJSONL(t, filepath.Join(projectDir, sessionID2+".jsonl"), []piSessionLine{
+		{Type: "session", Timestamp: "2026-04-02T10:00:00.000Z"},
+		{Type: "message", ID: "e5f6g7h8", Role: "user", Timestamp: "2026-04-02T10:00:01.000Z",
+			Content: `"fix the bug"`},
+		{Type: "message", ID: "f6g7h8i9", ParentID: "e5f6g7h8", Role: "assistant", Timestamp: "2026-04-02T10:00:05.000Z",
+			Content:  `[{"type":"thinking","thinking":"Analyzing..."},{"type":"text","text":"Found the bug."}]`,
+			Model:    "claude-sonnet-4-20250514",
+			Provider: "anthropic",
+			StopReason: "stop"},
+	})
+
+	// Save checkpoint (sessions should be extracted).
+	out := run(t, dir, "save", "--skip-secret-scan", "-m", "with pi sessions")
+	if !strings.Contains(out, "cp-1") {
+		t.Fatalf("expected cp-1 in output:\n%s", out)
+	}
+
+	// -- Test: bento sessions lists from checkpoint metadata --
+	sessOut := run(t, dir, "sessions")
+	if !strings.Contains(sessOut, "pi") {
+		t.Errorf("sessions output should contain agent name 'pi':\n%s", sessOut)
+	}
+	if !strings.Contains(sessOut, "implement auth module") {
+		t.Errorf("sessions output should contain title:\n%s", sessOut)
+	}
+	if !strings.Contains(sessOut, "fix the bug") {
+		t.Errorf("sessions output should contain second title:\n%s", sessOut)
+	}
+
+	// -- Test: bento sessions --json --
+	jsonOut := run(t, dir, "sessions", "--json")
+	var sessionsList []manifest.SessionMeta
+	if err := json.Unmarshal([]byte(jsonOut), &sessionsList); err != nil {
+		t.Fatalf("sessions --json is not valid JSON: %v\n%s", err, jsonOut)
+	}
+	if len(sessionsList) != 2 {
+		t.Errorf("expected 2 sessions, got %d", len(sessionsList))
+	}
+
+	// Find first session and verify metadata.
+	var found *manifest.SessionMeta
+	for i, s := range sessionsList {
+		if s.SessionID == sessionID {
+			found = &sessionsList[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("session %s not found in JSON output", sessionID)
+	}
+	if found.Agent != "pi" {
+		t.Errorf("expected agent=pi, got %s", found.Agent)
+	}
+	if found.MessageCount != 4 {
+		t.Errorf("expected 4 messages, got %d", found.MessageCount)
+	}
+	if found.Title != "implement auth module" {
+		t.Errorf("expected title 'implement auth module', got %q", found.Title)
+	}
+	if found.Model != "claude-sonnet-4-20250514" {
+		t.Errorf("expected model claude-sonnet-4-20250514, got %s", found.Model)
+	}
+
+	// -- Test: bento sessions --agent filter --
+	filteredOut := run(t, dir, "sessions", "--agent", "pi")
+	if strings.Contains(filteredOut, "No sessions") {
+		t.Errorf("filtering by agent=pi should find sessions:\n%s", filteredOut)
+	}
+	filteredNone := run(t, dir, "sessions", "--agent", "nonexistent")
+	if !strings.Contains(filteredNone, "No sessions") {
+		t.Errorf("expected no sessions for nonexistent agent:\n%s", filteredNone)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestPiSessionsInspect: full Pi session content via bento sessions inspect
+// ---------------------------------------------------------------------------
+
+func TestPiSessionsInspect(t *testing.T) {
+	dir := makeWorkspace(t)
+	writeFile(t, dir, ".pi/settings.json", `{}`)
+
+	projectDir := makePiProjectDir(t, dir)
+
+	sessionID := "2026-04-01T10-00-00-000Z_test-e2e-inspect-aaaa-bbbb-cccccccccccc"
+	writePiSessionJSONL(t, filepath.Join(projectDir, sessionID+".jsonl"), []piSessionLine{
+		{Type: "session", Timestamp: "2026-04-01T10:00:00.000Z"},
+		{Type: "message", ID: "a1000001", Role: "user", Timestamp: "2026-04-01T10:00:01.000Z",
+			Content: `"hello world"`},
+		{Type: "message", ID: "a1000002", ParentID: "a1000001", Role: "assistant", Timestamp: "2026-04-01T10:00:05.000Z",
+			Content:      `[{"type":"thinking","thinking":"The user said hello."},{"type":"text","text":"Hi there!"}]`,
+			Model:        "claude-sonnet-4-20250514",
+			Provider:     "anthropic",
+			StopReason:   "stop",
+			InputTokens:  10,
+			OutputTokens: 5},
+	})
+
+	// Save checkpoint.
+	run(t, dir, "save", "--skip-secret-scan")
+
+	// -- Test: normalized JSON output --
+	jsonOut := run(t, dir, "sessions", "inspect", sessionID)
+	var session manifest.NormalizedSession
+	if err := json.Unmarshal([]byte(jsonOut), &session); err != nil {
+		t.Fatalf("sessions inspect output is not valid JSON: %v\n%s", err, jsonOut)
+	}
+
+	if session.Agent != "pi" {
+		t.Errorf("expected agent=pi, got %s", session.Agent)
+	}
+	if session.SessionID != sessionID {
+		t.Errorf("expected sessionId=%s, got %s", sessionID, session.SessionID)
+	}
+	if len(session.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(session.Messages))
+	}
+
+	// Verify user message.
+	userMsg := session.Messages[0]
+	if userMsg.Role != "user" {
+		t.Errorf("expected first message role=user, got %s", userMsg.Role)
+	}
+	if len(userMsg.Content) != 1 || userMsg.Content[0].Type != "text" {
+		t.Errorf("expected first message to have one text block, got %d blocks", len(userMsg.Content))
+	}
+	if userMsg.Content[0].Text != "hello world" {
+		t.Errorf("expected text 'hello world', got %q", userMsg.Content[0].Text)
+	}
+
+	// Verify assistant message with thinking + text.
+	assistMsg := session.Messages[1]
+	if assistMsg.Role != "assistant" {
+		t.Errorf("expected second message role=assistant, got %s", assistMsg.Role)
+	}
+	if assistMsg.Model != "claude-sonnet-4-20250514" {
+		t.Errorf("expected model=claude-sonnet-4-20250514, got %s", assistMsg.Model)
+	}
+	if assistMsg.Usage == nil {
+		t.Error("expected usage data")
+	} else if assistMsg.Usage.InputTokens != 10 {
+		t.Errorf("expected inputTokens=10, got %d", assistMsg.Usage.InputTokens)
+	}
+
+	if len(assistMsg.Content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(assistMsg.Content))
+	}
+	if assistMsg.Content[0].Type != "thinking" {
+		t.Errorf("expected first block type=thinking, got %s", assistMsg.Content[0].Type)
+	}
+	if assistMsg.Content[1].Type != "text" || assistMsg.Content[1].Text != "Hi there!" {
+		t.Errorf("expected second block text='Hi there!', got type=%s text=%q",
+			assistMsg.Content[1].Type, assistMsg.Content[1].Text)
+	}
+
+	// -- Test: prefix matching --
+	prefixOut := run(t, dir, "sessions", "inspect", "2026-04-01T10-00-00-000Z_test-e2e-inspect")
+	var prefixSession manifest.NormalizedSession
+	if err := json.Unmarshal([]byte(prefixOut), &prefixSession); err != nil {
+		t.Fatalf("prefix match inspect should work: %v", err)
+	}
+	if prefixSession.SessionID != sessionID {
+		t.Errorf("prefix match should find full session, got %s", prefixSession.SessionID)
+	}
+
+	// -- Test: --raw output --
+	rawOut := run(t, dir, "sessions", "inspect", sessionID, "--raw")
+	lines := strings.Split(strings.TrimSpace(rawOut), "\n")
+	if len(lines) < 2 {
+		t.Errorf("raw output should have multiple JSONL lines, got %d", len(lines))
+	}
+	for i, line := range lines {
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			t.Errorf("raw line %d is not valid JSON: %v", i, err)
+		}
+	}
+
+	// -- Test: --text output --
+	textOut := run(t, dir, "sessions", "inspect", sessionID, "--text")
+	if !strings.Contains(textOut, "Agent: pi") {
+		t.Errorf("text output should contain agent header:\n%s", textOut)
+	}
+	if !strings.Contains(textOut, "hello world") {
+		t.Errorf("text output should contain user message:\n%s", textOut)
+	}
+	if !strings.Contains(textOut, "Hi there!") {
+		t.Errorf("text output should contain assistant response:\n%s", textOut)
+	}
+
+	// -- Test: nonexistent session --
+	notFoundOut := runExpectFail(t, dir, "sessions", "inspect", "nonexistent-session-id")
+	if !strings.Contains(notFoundOut, "not found") {
+		t.Errorf("expected 'not found' error:\n%s", notFoundOut)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestPiSessionName: session_info entry provides display name
+// ---------------------------------------------------------------------------
+
+func TestPiSessionName(t *testing.T) {
+	dir := makeWorkspace(t)
+	writeFile(t, dir, ".pi/settings.json", `{}`)
+
+	projectDir := makePiProjectDir(t, dir)
+
+	sessionID := "2026-04-01T10-00-00-000Z_test-e2e-named-aaaa-bbbb-cccccccccccc"
+	writePiSessionJSONL(t, filepath.Join(projectDir, sessionID+".jsonl"), []piSessionLine{
+		{Type: "session", Timestamp: "2026-04-01T10:00:00.000Z"},
+		{Type: "message", ID: "n1000001", Role: "user", Timestamp: "2026-04-01T10:00:01.000Z",
+			Content: `"refactor auth"`},
+		{Type: "message", ID: "n1000002", ParentID: "n1000001", Role: "assistant", Timestamp: "2026-04-01T10:00:05.000Z",
+			Content: `[{"type":"text","text":"OK"}]`, Model: "claude-sonnet-4-20250514", Provider: "anthropic", StopReason: "stop"},
+		// session_info entry sets the display name
+		{Type: "session_info", ID: "n1000003", ParentID: "n1000002", Timestamp: "2026-04-01T10:00:06.000Z",
+			SessionName: "Auth Refactor Project"},
+	})
+
+	run(t, dir, "save", "--skip-secret-scan")
+
+	jsonOut := run(t, dir, "sessions", "--json")
+	var sessions []manifest.SessionMeta
+	if err := json.Unmarshal([]byte(jsonOut), &sessions); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].Title != "Auth Refactor Project" {
+		t.Errorf("expected title from session_info, got %q", sessions[0].Title)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -415,6 +686,120 @@ func writeSessionJSONL(t *testing.T, path string, lines []sessionLine) {
 
 		record += "}}"
 		buf.WriteString(record)
+		buf.WriteString("\n")
+	}
+
+	if err := os.WriteFile(path, []byte(buf.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// -- Pi session helpers --
+
+type piSessionLine struct {
+	Type         string
+	ID           string
+	ParentID     string
+	Timestamp    string
+	Role         string // for type: "message"
+	Content      string // raw JSON for message content
+	Model        string
+	Provider     string
+	StopReason   string
+	InputTokens  int
+	OutputTokens int
+	SessionName  string // for type: "session_info"
+	ModelID      string // for type: "model_change"
+}
+
+// makePiProjectDir creates a ~/.pi/agent/sessions/<hash>/ directory
+// matching the given workspace path for testing. Returns the directory path.
+func makePiProjectDir(t *testing.T, workDir string) string {
+	t.Helper()
+	absDir, _ := filepath.Abs(workDir)
+	if resolved, err := filepath.EvalSymlinks(absDir); err == nil {
+		absDir = resolved
+	}
+	// Pi hash: "--" + path-without-leading-sep-with-seps-replaced-by-dashes + "--"
+	safe := strings.TrimLeft(absDir, string(filepath.Separator))
+	safe = strings.ReplaceAll(safe, string(filepath.Separator), "-")
+	hash := "--" + safe + "--"
+	projectDir := filepath.Join(os.Getenv("HOME"), ".pi", "agent", "sessions", hash)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(projectDir) })
+	return projectDir
+}
+
+// writePiSessionJSONL creates a Pi-format JSONL session file.
+func writePiSessionJSONL(t *testing.T, path string, lines []piSessionLine) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf strings.Builder
+	for _, l := range lines {
+		switch l.Type {
+		case "session":
+			// Session header line.
+			buf.WriteString(fmt.Sprintf(
+				`{"type":"session","version":3,"id":"test-session","timestamp":%q,"cwd":"/tmp/test"}`,
+				l.Timestamp))
+
+		case "message":
+			content := l.Content
+			if content == "" {
+				content = `""`
+			}
+
+			// Build message object.
+			msg := fmt.Sprintf(`{"role":%q,"content":%s,"timestamp":%d`,
+				l.Role, content, 0)
+			if l.Model != "" {
+				msg += fmt.Sprintf(`,"model":%q`, l.Model)
+			}
+			if l.Provider != "" {
+				msg += fmt.Sprintf(`,"provider":%q`, l.Provider)
+			}
+			if l.StopReason != "" {
+				msg += fmt.Sprintf(`,"stopReason":%q`, l.StopReason)
+			}
+			if l.InputTokens > 0 || l.OutputTokens > 0 {
+				msg += fmt.Sprintf(`,"usage":{"input":%d,"output":%d,"cacheRead":0,"cacheWrite":0}`,
+					l.InputTokens, l.OutputTokens)
+			}
+			msg += "}"
+
+			// Build entry.
+			parentField := `"parentId":null`
+			if l.ParentID != "" {
+				parentField = fmt.Sprintf(`"parentId":%q`, l.ParentID)
+			}
+			buf.WriteString(fmt.Sprintf(
+				`{"type":"message","id":%q,%s,"timestamp":%q,"message":%s}`,
+				l.ID, parentField, l.Timestamp, msg))
+
+		case "session_info":
+			parentField := `"parentId":null`
+			if l.ParentID != "" {
+				parentField = fmt.Sprintf(`"parentId":%q`, l.ParentID)
+			}
+			buf.WriteString(fmt.Sprintf(
+				`{"type":"session_info","id":%q,%s,"timestamp":%q,"name":%q}`,
+				l.ID, parentField, l.Timestamp, l.SessionName))
+
+		case "model_change":
+			parentField := `"parentId":null`
+			if l.ParentID != "" {
+				parentField = fmt.Sprintf(`"parentId":%q`, l.ParentID)
+			}
+			buf.WriteString(fmt.Sprintf(
+				`{"type":"model_change","id":%q,%s,"timestamp":%q,"provider":%q,"modelId":%q}`,
+				l.ID, parentField, l.Timestamp, l.Provider, l.ModelID))
+		}
+
 		buf.WriteString("\n")
 	}
 

@@ -98,8 +98,9 @@ func (c ClaudeCode) ParseSessions(workDir string) ([]manifest.SessionMeta, error
 		meta.Model = model
 
 		if firstUserText != "" {
-			if len(firstUserText) > 80 {
-				firstUserText = firstUserText[:77] + "..."
+			runes := []rune(firstUserText)
+			if len(runes) > 80 {
+				firstUserText = string(runes[:77]) + "..."
 			}
 			meta.Title = firstUserText
 		}

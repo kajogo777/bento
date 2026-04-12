@@ -333,6 +333,88 @@ func extractAgentLayerDigest(inspectOutput string) string {
 }
 
 // ---------------------------------------------------------------------------
+// TestPiExtension: .pi/ files land in the agent layer
+// ---------------------------------------------------------------------------
+
+func TestPiExtension(t *testing.T) {
+	dir := makeWorkspace(t)
+
+	// Seed Pi marker files.
+	writeFile(t, dir, ".pi/settings.json", `{"defaultProvider":"anthropic"}`)
+	writeFile(t, dir, ".pi/extensions/my-ext.ts", `export default function(pi) {}`)
+	writeFile(t, dir, ".pi/skills/my-skill/SKILL.md", "---\nname: my-skill\ndescription: A test skill.\n---\n# My Skill\n")
+	writeFile(t, dir, ".pi/prompts/review.md", "---\ndescription: Review code\n---\nReview the code.\n")
+	writeFile(t, dir, ".pi/themes/custom.json", `{"name":"custom"}`)
+
+	out := run(t, dir, "save", "--skip-secret-scan", "-m", "pi test")
+
+	if !strings.Contains(out, "pi") {
+		t.Logf("save output: %s", out)
+	}
+
+	// Inspect with --files to verify agent layer contents.
+	inspectOut := run(t, dir, "inspect", "--files")
+
+	for _, expected := range []string{
+		".pi/settings.json",
+		".pi/extensions/my-ext.ts",
+		".pi/skills/my-skill/SKILL.md",
+		".pi/prompts/review.md",
+		".pi/themes/custom.json",
+	} {
+		if !strings.Contains(inspectOut, expected) {
+			t.Errorf("inspect should list %q in agent layer, got:\n%s", expected, inspectOut)
+		}
+	}
+
+	// Verify round-trip: open into fresh dir and check files.
+	dst := t.TempDir()
+	run(t, dir, "open", "cp-1", dst)
+
+	for _, rel := range []string{
+		".pi/settings.json",
+		".pi/extensions/my-ext.ts",
+		".pi/skills/my-skill/SKILL.md",
+		".pi/prompts/review.md",
+		".pi/themes/custom.json",
+	} {
+		srcData, err := os.ReadFile(filepath.Join(dir, rel))
+		if err != nil {
+			t.Fatalf("reading src %s: %v", rel, err)
+		}
+		dstData, err := os.ReadFile(filepath.Join(dst, rel))
+		if err != nil {
+			t.Fatalf("reading dst %s: %v", rel, err)
+		}
+		if string(srcData) != string(dstData) {
+			t.Errorf("file %s mismatch after restore:\nsrc: %q\ndst: %q", rel, srcData, dstData)
+		}
+	}
+
+	// Verify unchanged agent layer reuses digest across saves.
+	// Modify a project file between saves so the checkpoint changes.
+	writeFile(t, dir, "README.md", "# Updated\n")
+	run(t, dir, "save", "--skip-secret-scan", "-m", "pi test 2")
+
+	// Modify only a project file — agent files unchanged.
+	writeFile(t, dir, "main.go", "package main\n\nfunc main() { println(\"changed\") }\n")
+	run(t, dir, "save", "--skip-secret-scan", "-m", "pi test 3")
+
+	inspect2 := run(t, dir, "inspect", "cp-2")
+	inspect3 := run(t, dir, "inspect", "cp-3")
+
+	digest2 := extractAgentLayerDigest(inspect2)
+	digest3 := extractAgentLayerDigest(inspect3)
+
+	if digest2 == "" {
+		t.Fatal("could not extract agent layer digest from cp-2")
+	}
+	if digest2 != digest3 {
+		t.Errorf("agent layer digest should be reused when pi files unchanged\ncp-2: %s\ncp-3: %s", digest2, digest3)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestStakpakExtension: .stakpak/ files land in the agent layer
 // ---------------------------------------------------------------------------
 

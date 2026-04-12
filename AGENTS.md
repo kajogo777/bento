@@ -70,6 +70,7 @@ On every `save`/`diff`/`watch`, all extensions are auto-detected, their contribu
 | `openclaw` | `SOUL.md` or `IDENTITY.md` | `SOUL.md`, `MEMORY.md`, `memory/**`, `skills/**`, `canvas/**`, `~/.openclaw/openclaw.json`, `~/.openclaw/agents/<id>/sessions/`, `~/.openclaw/workspace/skills/` |
 | `cursor` | `.cursor/` or `.cursorrules` | `.cursor/rules/**`, `.cursor/mcp.json`, `.cursorrules`, `.cursorignore`, `~/.cursor/mcp.json`, `~/Library/.../Cursor/User/workspaceStorage/<hash>/` |
 | `stakpak` | `.stakpak/` | `.stakpak/config.toml`, `.stakpak/session/**`, `~/.stakpak/data/local.db`, `~/.stakpak/checks/`, `~/.stakpak/triggers/`, `~/.stakpak/sessions/` |
+| `pi` | `.pi/` | `.pi/**`, `~/.pi/agent/{settings.json, auth.json}`, `~/.pi/agent/{extensions/, skills/, prompts/, themes/}`, `~/.pi/agent/sessions/<hash>/`, `~/.agents/skills/` |
 | `agents-md` | `AGENTS.md` | `AGENTS.md` |
 
 **Deps extensions** (contribute to `deps` layer):
