@@ -379,3 +379,111 @@ func TestCleanStaleFiles_PreservesBentoConfig(t *testing.T) {
 		t.Error("stale.txt should be removed (not in keepFiles)")
 	}
 }
+
+// TestPackUnpackSymlinks verifies that symlinks (including symlinks to
+// directories, as created by pnpm) are preserved through pack/unpack.
+// This is a regression test for a bug where os.Stat followed symlinks,
+// causing directory symlinks to be treated as regular files, which failed
+// with "read ...: is a directory".
+func TestPackUnpackSymlinks(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Create a regular file.
+	createFile(t, workDir, "src/main.go", "package main\n")
+
+	// Create a target directory with a file inside (simulates pnpm's layout).
+	targetDir := filepath.Join(workDir, "node_modules", ".pnpm", "pkg@1.0", "index.js")
+	createFile(t, workDir, "node_modules/.pnpm/pkg@1.0/index.js", "module.exports = {}")
+
+	// Create a directory symlink (like pnpm does).
+	symlinkDir := filepath.Join(workDir, "node_modules", "pkg")
+	if err := os.MkdirAll(filepath.Dir(symlinkDir), 0755); err != nil {
+		t.Fatal(err)
+	}
+	_ = targetDir // used via createFile
+	if err := os.Symlink("../.pnpm/pkg@1.0", symlinkDir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a file symlink.
+	fileSymlink := filepath.Join(workDir, "link.go")
+	if err := os.Symlink("src/main.go", fileSymlink); err != nil {
+		t.Fatal(err)
+	}
+
+	fileList := []string{
+		"src/main.go",
+		"node_modules/.pnpm/pkg@1.0/index.js",
+		"node_modules/pkg",  // directory symlink
+		"link.go",           // file symlink
+	}
+
+	// Pack should succeed (previously failed with "is a directory").
+	data, err := PackLayer(workDir, fileList)
+	if err != nil {
+		t.Fatalf("PackLayer with symlinks returned error: %v", err)
+	}
+
+	// Verify the tar contains symlink entries.
+	gr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(gr)
+	symlinksFound := map[string]string{}
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			break
+		}
+		if hdr.Typeflag == tar.TypeSymlink {
+			symlinksFound[hdr.Name] = hdr.Linkname
+		}
+	}
+	gr.Close()
+
+	if link, ok := symlinksFound["node_modules/pkg"]; !ok {
+		t.Error("expected directory symlink node_modules/pkg in archive")
+	} else if link != "../.pnpm/pkg@1.0" {
+		t.Errorf("directory symlink target = %q, want %q", link, "../.pnpm/pkg@1.0")
+	}
+
+	if link, ok := symlinksFound["link.go"]; !ok {
+		t.Error("expected file symlink link.go in archive")
+	} else if link != "src/main.go" {
+		t.Errorf("file symlink target = %q, want %q", link, "src/main.go")
+	}
+
+	// Unpack and verify symlinks are restored.
+	unpackDir := t.TempDir()
+	if err := UnpackLayer(data, unpackDir); err != nil {
+		t.Fatalf("UnpackLayer with symlinks returned error: %v", err)
+	}
+
+	// Verify directory symlink.
+	linkTarget, err := os.Readlink(filepath.Join(unpackDir, "node_modules", "pkg"))
+	if err != nil {
+		t.Fatalf("directory symlink not restored: %v", err)
+	}
+	if linkTarget != "../.pnpm/pkg@1.0" {
+		t.Errorf("restored directory symlink target = %q, want %q", linkTarget, "../.pnpm/pkg@1.0")
+	}
+
+	// Verify file symlink.
+	linkTarget, err = os.Readlink(filepath.Join(unpackDir, "link.go"))
+	if err != nil {
+		t.Fatalf("file symlink not restored: %v", err)
+	}
+	if linkTarget != "src/main.go" {
+		t.Errorf("restored file symlink target = %q, want %q", linkTarget, "src/main.go")
+	}
+
+	// Verify regular file content is intact.
+	content, err := os.ReadFile(filepath.Join(unpackDir, "src", "main.go"))
+	if err != nil {
+		t.Fatalf("could not read regular file: %v", err)
+	}
+	if string(content) != "package main\n" {
+		t.Errorf("regular file content = %q, want %q", content, "package main\n")
+	}
+}

@@ -195,10 +195,16 @@ func (s *Scanner) findingsToResults(findings []report.Finding, path string) []Sc
 // shouldSkipFile returns true (with a reason) if the file should not be scanned.
 // Skips binary files and files larger than maxScanFileSize.
 func shouldSkipFile(path string) (skip bool, reason string) {
-	info, err := os.Stat(path)
+	// Use Lstat first to detect symlinks without following them.
+	linfo, err := os.Lstat(path)
 	if err != nil {
 		return true, "stat error"
 	}
+	// Skip symlinks — they may point to directories or non-regular files.
+	if linfo.Mode()&os.ModeSymlink != 0 {
+		return true, "symlink"
+	}
+	info := linfo
 	if info.Size() > maxScanFileSize {
 		return true, fmt.Sprintf("too large (%d bytes > %d limit)", info.Size(), maxScanFileSize)
 	}

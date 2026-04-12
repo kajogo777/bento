@@ -88,11 +88,31 @@ func PackLayerWithExternalToTemp(workDir string, files []string, extFiles []Exte
 			normalized := NormalizePath(file)
 			absPath := filepath.Join(workDir, filepath.FromSlash(normalized))
 
-			info, err := os.Stat(absPath)
+			// Use Lstat to detect symlinks without following them.
+			linfo, err := os.Lstat(absPath)
 			if err != nil {
 				return fmt.Errorf("stat %s: %w", normalized, err)
 			}
 
+			// Handle symlinks: store as tar symlink entries.
+			if linfo.Mode()&os.ModeSymlink != 0 {
+				linkTarget, err := os.Readlink(absPath)
+				if err != nil {
+					return fmt.Errorf("readlink %s: %w", normalized, err)
+				}
+				header := &tar.Header{
+					Typeflag: tar.TypeSymlink,
+					Name:     normalized,
+					Linkname: linkTarget,
+					ModTime:  time.Time{},
+				}
+				if err := tw.WriteHeader(header); err != nil {
+					return fmt.Errorf("write symlink header %s: %w", normalized, err)
+				}
+				continue
+			}
+
+			info := linfo
 			header, err := tar.FileInfoHeader(info, "")
 			if err != nil {
 				return fmt.Errorf("header %s: %w", normalized, err)
@@ -101,6 +121,14 @@ func PackLayerWithExternalToTemp(workDir string, files []string, extFiles []Exte
 			header.ModTime = time.Time{}
 			header.AccessTime = time.Time{}
 			header.ChangeTime = time.Time{}
+
+			// Skip directories (they're created implicitly by file entries).
+			if info.IsDir() {
+				if err := tw.WriteHeader(header); err != nil {
+					return fmt.Errorf("write header %s: %w", normalized, err)
+				}
+				continue
+			}
 
 			// Determine the actual file to read content from.
 			// If there's a scrub override, use the override path and
@@ -133,8 +161,9 @@ func PackLayerWithExternalToTemp(workDir string, files []string, extFiles []Exte
 
 		// Pack external files (stream directly, no full-file reads into memory)
 		for _, ef := range extFiles {
-			info, err := os.Stat(ef.AbsPath)
-			if err != nil || info.IsDir() {
+			// Use Lstat to detect symlinks.
+			linfo, err := os.Lstat(ef.AbsPath)
+			if err != nil {
 				if allowMissingExternal {
 					fmt.Printf("Warning: external file not found, skipping: %s\n", ef.AbsPath)
 					continue
@@ -142,9 +171,38 @@ func PackLayerWithExternalToTemp(workDir string, files []string, extFiles []Exte
 				return fmt.Errorf("external file inaccessible: %s (use --allow-missing-external to skip)", ef.AbsPath)
 			}
 
+			// Handle symlinks.
+			if linfo.Mode()&os.ModeSymlink != 0 {
+				linkTarget, err := os.Readlink(ef.AbsPath)
+				if err != nil {
+					if allowMissingExternal {
+						continue
+					}
+					return fmt.Errorf("readlink external %s: %w", ef.AbsPath, err)
+				}
+				header := &tar.Header{
+					Typeflag: tar.TypeSymlink,
+					Name:     ef.ArchivePath,
+					Linkname: linkTarget,
+					ModTime:  time.Time{},
+				}
+				if err := tw.WriteHeader(header); err != nil {
+					return fmt.Errorf("writing symlink header for %s: %w", ef.ArchivePath, err)
+				}
+				continue
+			}
+
+			if linfo.IsDir() {
+				if allowMissingExternal {
+					fmt.Printf("Warning: external path is a directory, skipping: %s\n", ef.AbsPath)
+					continue
+				}
+				return fmt.Errorf("external file is a directory: %s", ef.AbsPath)
+			}
+
 			hdr := &tar.Header{
 				Name:    ef.ArchivePath,
-				Size:    info.Size(),
+				Size:    linfo.Size(),
 				Mode:    int64(DefaultFileMode(ef.ArchivePath)),
 				ModTime: time.Time{},
 			}
@@ -511,6 +569,10 @@ func UnpackLayerWithExternalFromReader(r io.Reader, targetDir string, resolvePat
 			switch header.Typeflag {
 			case tar.TypeDir:
 				_ = os.MkdirAll(targetPath, 0o755)
+			case tar.TypeSymlink:
+				_ = os.MkdirAll(filepath.Dir(targetPath), 0o755)
+				_ = os.Remove(targetPath) // remove existing before creating symlink
+				_ = os.Symlink(header.Linkname, targetPath)
 			case tar.TypeReg:
 				_ = os.MkdirAll(filepath.Dir(targetPath), 0o755)
 				mode := os.FileMode(header.Mode)
@@ -546,6 +608,15 @@ func UnpackLayerWithExternalFromReader(r io.Reader, targetDir string, resolvePat
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, DefaultFileMode(name)); err != nil {
 				return fmt.Errorf("mkdir %s: %w", name, err)
+			}
+		case tar.TypeSymlink:
+			dir := filepath.Dir(target)
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return fmt.Errorf("mkdir parent %s: %w", name, err)
+			}
+			_ = os.Remove(target) // remove existing before creating symlink
+			if err := os.Symlink(header.Linkname, target); err != nil {
+				return fmt.Errorf("symlink %s: %w", name, err)
 			}
 		case tar.TypeReg:
 			dir := filepath.Dir(target)
