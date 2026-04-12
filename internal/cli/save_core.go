@@ -221,8 +221,21 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		// Use relative paths in fingerprints.
 		secretScanner.SetBaseDir(opts.Dir)
 
+		// Build set of layers that should skip secret scanning.
+		skipScanLayers := make(map[string]bool)
+		for _, layer := range layers {
+			if layer.SkipSecretScan {
+				skipScanLayers[layer.Name] = true
+			}
+		}
+
 		var allFiles []string
-		for _, sr := range scanResults {
+		var skippedFiles int
+		for layerName, sr := range scanResults {
+			if skipScanLayers[layerName] {
+				skippedFiles += len(sr.WorkspaceFiles)
+				continue
+			}
 			for _, f := range sr.WorkspaceFiles {
 				allFiles = append(allFiles, filepath.Join(opts.Dir, f))
 			}
@@ -234,8 +247,12 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		}
 		scanHits, err := secretScanner.ScanFiles(allFiles)
 		if !opts.Quiet {
+			skippedMsg := ""
+			if skippedFiles > 0 {
+				skippedMsg = fmt.Sprintf(" (%d skipped)", skippedFiles)
+			}
 			if err == nil && len(scanHits) == 0 {
-				fmt.Printf("\rSecret scan: %d files clean    \n", len(allFiles))
+				fmt.Printf("\rSecret scan: %d files clean%s    \n", len(allFiles), skippedMsg)
 			} else {
 				fmt.Println() // newline after progress
 			}
@@ -598,9 +615,10 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		cfgObj.Layers = make([]manifest.LayerDef, len(cfg.Layers))
 		for i, l := range cfg.Layers {
 			cfgObj.Layers[i] = manifest.LayerDef{
-				Name:     l.Name,
-				Patterns: l.Patterns,
-				CatchAll: l.CatchAll,
+				Name:           l.Name,
+				Patterns:       l.Patterns,
+				CatchAll:       l.CatchAll,
+				SkipSecretScan: l.SkipSecretScan,
 			}
 		}
 	}
