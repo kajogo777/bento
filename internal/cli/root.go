@@ -71,10 +71,11 @@ func configToLayerDefs(layers []config.LayerConfig) []extension.LayerDef {
 			}
 		}
 		defs = append(defs, extension.LayerDef{
-			Name:        l.Name,
-			Patterns:    l.Patterns,
-			CatchAll:    catchAll,
-			WatchMethod: watchMethod,
+			Name:            l.Name,
+			Patterns:        l.Patterns,
+			CatchAll:        catchAll,
+			WatchMethod:     watchMethod,
+			SkipSecretScan:  l.SkipSecretScan,
 		})
 	}
 	return defs

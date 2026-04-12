@@ -39,10 +39,11 @@ type BentoConfig struct {
 // Watch controls how this layer is monitored during `bento watch`:
 // "realtime" (instant detection), "periodic" (check every ~30s), or "off" (not watched).
 type LayerConfig struct {
-	Name     string   `yaml:"name"`
-	Patterns []string `yaml:"patterns"`
-	CatchAll bool     `yaml:"catch_all,omitempty"`
-	Watch    string   `yaml:"watch,omitempty"`
+	Name           string   `yaml:"name"`
+	Patterns       []string `yaml:"patterns"`
+	CatchAll       bool     `yaml:"catch_all,omitempty"`
+	Watch          string   `yaml:"watch,omitempty"`
+	SkipSecretScan bool     `yaml:"skip_secret_scan,omitempty"` // exclude this layer from secret scanning
 }
 
 // EnvEntry represents a single environment variable in bento.yaml.

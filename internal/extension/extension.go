@@ -24,11 +24,12 @@ var ValidWatchMethods = map[string]bool{
 
 // LayerDef defines a layer for file assignment.
 type LayerDef struct {
-	Name        string
-	Patterns    []string // workspace-relative globs; ~/... or /... = external paths
-	MediaType   string
-	CatchAll    bool   // if true, unmatched files fall into this layer
-	WatchMethod string // "realtime", "periodic", or "off"; defaults to "realtime"
+	Name            string
+	Patterns        []string // workspace-relative globs; ~/... or /... = external paths
+	MediaType       string
+	CatchAll        bool   // if true, unmatched files fall into this layer
+	WatchMethod     string // "realtime", "periodic", or "off"; defaults to "realtime"
+	SkipSecretScan  bool   // if true, files in this layer are excluded from secret scanning
 }
 
 // Extension is a composable unit that contributes patterns to bento's layer model.
@@ -82,8 +83,9 @@ type MergeResult struct {
 func Merge(contributions []Contribution) MergeResult {
 	// layerMap collects deduplicated patterns per layer name.
 	type layerState struct {
-		patterns []string
-		seen     map[string]bool
+		patterns       []string
+		seen           map[string]bool
+		skipSecretScan bool
 	}
 	layerMap := make(map[string]*layerState)
 	var layerOrder []string // tracks first-seen order
@@ -99,7 +101,8 @@ func Merge(contributions []Contribution) MergeResult {
 	}
 
 	// Seed the three core layers so they always exist and appear first.
-	ensureLayer("deps")
+	depsLayer := ensureLayer("deps")
+	depsLayer.skipSecretScan = true // deps contain third-party code, not real secrets
 	ensureLayer("agent")
 
 	ignoreSet := make(map[string]bool)
@@ -125,6 +128,9 @@ func Merge(contributions []Contribution) MergeResult {
 					ls.patterns = append(ls.patterns, p)
 				}
 			}
+			if el.SkipSecretScan {
+				ls.skipSecretScan = true
+			}
 		}
 
 		for _, p := range c.Ignore {
@@ -146,10 +152,11 @@ func Merge(contributions []Contribution) MergeResult {
 	for _, name := range layerOrder {
 		ls := layerMap[name]
 		layers = append(layers, LayerDef{
-			Name:        name,
-			Patterns:    ls.patterns,
-			MediaType:   manifest.LayerMediaType,
-			WatchMethod: defaultWatchForLayer(name),
+			Name:            name,
+			Patterns:        ls.patterns,
+			MediaType:       manifest.LayerMediaType,
+			WatchMethod:     defaultWatchForLayer(name),
+			SkipSecretScan:  ls.skipSecretScan,
 		})
 	}
 

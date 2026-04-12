@@ -538,9 +538,10 @@ func configFromArtifact(obj *manifest.BentoConfigObj, storeRoot string) *config.
 		cfg.Layers = make([]config.LayerConfig, len(obj.Layers))
 		for i, l := range obj.Layers {
 			cfg.Layers[i] = config.LayerConfig{
-				Name:     l.Name,
-				Patterns: l.Patterns,
-				CatchAll: l.CatchAll,
+				Name:           l.Name,
+				Patterns:       l.Patterns,
+				CatchAll:       l.CatchAll,
+				SkipSecretScan: l.SkipSecretScan,
 			}
 		}
 	}

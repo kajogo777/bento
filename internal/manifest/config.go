@@ -67,9 +67,10 @@ type ScrubReplacement struct {
 
 // LayerDef describes a custom layer definition for embedding in the OCI config.
 type LayerDef struct {
-	Name     string   `json:"name"`
-	Patterns []string `json:"patterns,omitempty"`
-	CatchAll bool     `json:"catchAll,omitempty"`
+	Name           string   `json:"name"`
+	Patterns       []string `json:"patterns,omitempty"`
+	CatchAll       bool     `json:"catchAll,omitempty"`
+	SkipSecretScan bool     `json:"skipSecretScan,omitempty"`
 }
 
 // HooksDef describes lifecycle hooks for embedding in the OCI config.

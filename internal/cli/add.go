@@ -102,9 +102,10 @@ func layerDefsToConfig(defs []extension.LayerDef) []config.LayerConfig {
 			}
 		}
 		layers = append(layers, config.LayerConfig{
-			Name:     ld.Name,
-			Patterns: patterns,
-			CatchAll: ld.CatchAll,
+			Name:           ld.Name,
+			Patterns:       patterns,
+			CatchAll:       ld.CatchAll,
+			SkipSecretScan: ld.SkipSecretScan,
 		})
 	}
 	return layers
