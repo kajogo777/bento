@@ -1,11 +1,13 @@
 id: ws-63a472d4d6539ca7
-head: sha256:8bce2142b5101169ee8394586e06aa2226c1d784dbaa69b0f1098eb93caf9fc5
+head: sha256:6be364bdda36a871e3f8bd4a9c11039dbf136c0f55bb0f4a2fed23c55f37a71b
 store: /Users/georgefahmy/.bento/store
 secrets:
     mode: scrub
 recipients:
     - name: myrna
       key: bento-pk-RdrCDR3J4mIcuKeyTDSXH_TAxbUS5791Pa6UpyQJiRk
+    - name: charlie
+      key: bento-pk-Ib2SGoMk9bcYMFaFPm2pzACWZCyWEpeWUj0h_kLFwTk
 retention:
     keep_last: 10
     tiers:
