@@ -230,6 +230,7 @@ func NewRootCmd(version string) *cobra.Command {
 		newRecipientsCmd(),
 		newExploreCmd(),
 		newSessionsCmd(),
+		newSkillCmd(),
 	)
 
 	return rootCmd
