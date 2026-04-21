@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // runWithEnv executes the bento binary with extra environment variables.
@@ -1096,12 +1097,17 @@ func TestScrub_SubstringSecretE2E(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScrub_PushPullWithSecrets(t *testing.T) {
+	registryAddr, cleanup := startRegistry(t)
+	defer cleanup()
+
 	dir := makeWorkspaceWithSecret(t)
 	run(t, dir, "save", "-m", "push-pull test")
 
 	// Configure remote in bento.yaml.
+	repoName := fmt.Sprintf("bento-scrub-test-%d", time.Now().UnixNano()%100000)
+	remote := registryAddr + "/" + repoName
 	bentoYAML, _ := os.ReadFile(filepath.Join(dir, "bento.yaml"))
-	bentoYAML = append(bentoYAML, []byte("remote: localhost:5000/bento-scrub-test\n")...)
+	bentoYAML = append(bentoYAML, []byte("remote: "+remote+"\n")...)
 	os.WriteFile(filepath.Join(dir, "bento.yaml"), bentoYAML, 0644)
 
 	// Push with --include-secrets (self-wrapped, no re-wrap needed since
@@ -1117,10 +1123,10 @@ func TestScrub_PushPullWithSecrets(t *testing.T) {
 
 	// Pull and open — should decrypt via the same keypair (same machine).
 	dst := t.TempDir()
-	dstBentoYAML := fmt.Sprintf("store: %s\nremote: localhost:5000/bento-scrub-test\n", t.TempDir())
+	dstBentoYAML := fmt.Sprintf("store: %s\nremote: %s\n", t.TempDir(), remote)
 	os.WriteFile(filepath.Join(dst, "bento.yaml"), []byte(dstBentoYAML), 0644)
 
-	run(t, dst, "open", "localhost:5000/bento-scrub-test:cp-1", dst)
+	run(t, dst, "open", remote+":cp-1", dst)
 
 	// Verify the file has no placeholders.
 	content, err := os.ReadFile(filepath.Join(dst, ".mcp.json"))

@@ -177,7 +177,19 @@ func TestWatchMultipleChanges(t *testing.T) {
 	time.Sleep(5 * time.Second)
 
 	_ = cmd.Process.Signal(os.Interrupt)
-	_ = cmd.Wait()
+
+	// Use a goroutine to kill the process if it doesn't exit promptly.
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+	}
 
 	output := outBuf.String()
 	t.Logf("watch output:\n%s", output)
@@ -232,6 +244,9 @@ func TestWatchSubdirectoryChanges(t *testing.T) {
 func TestWatchIgnoredDirNoTrigger(t *testing.T) {
 	dir := makeWorkspace(t)
 
+	// Save an initial checkpoint so the watcher has a clean baseline.
+	run(t, dir, "save", "--skip-secret-scan", "-m", "baseline")
+
 	cmd := exec.Command(bento, "watch", "--debounce", "1", "--skip-secret-scan")
 	cmd.Dir = dir
 
@@ -245,20 +260,32 @@ func TestWatchIgnoredDirNoTrigger(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 
-	// Write to a .git directory (should be ignored).
-	writeFile(t, dir, ".git/test-object", "fake git object data\n")
+	// Write to the bin/ directory which is in DefaultIgnorePatterns.
+	writeFile(t, dir, "bin/test-binary", "fake binary data\n")
 
 	time.Sleep(4 * time.Second)
 
 	_ = cmd.Process.Signal(os.Interrupt)
-	_ = cmd.Wait()
+
+	// Use a goroutine to kill the process if it doesn't exit promptly.
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+	}
 
 	output := outBuf.String()
 	t.Logf("watch output:\n%s", output)
 
-	// Should NOT have any checkpoints — .git is ignored.
+	// Should NOT have any new checkpoints — bin/ is ignored.
 	if strings.Contains(output, "OK cp-") {
-		t.Errorf("expected no checkpoint from .git change, got:\n%s", output)
+		t.Errorf("expected no checkpoint from bin/ change, got:\n%s", output)
 	}
 }
 

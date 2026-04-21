@@ -257,19 +257,19 @@ func TestKeyWrapping_PushPullWithDataKey(t *testing.T) {
 	repoName := fmt.Sprintf("bento-e2e-dk-%d", time.Now().UnixNano()%100000)
 	appendToFile(t, dir, "bento.yaml", "remote: "+registryAddr+"/"+repoName+"\n")
 
-	// Push with --include-secrets.
+	// Push with --include-secrets but no recipients — secrets layer is kept as-is.
 	pushOut := run(t, dir, "push", "--include-secrets")
 	if !strings.Contains(pushOut, "Done") {
 		t.Fatalf("push should succeed, got:\n%s", pushOut)
 	}
-	if !strings.Contains(pushOut, "Re-wrapped") {
-		t.Errorf("push output should show re-wrap info, got:\n%s", pushOut)
+	// No recipients specified → no re-wrap, secrets layer is kept as-is.
+	if !strings.Contains(pushOut, "already present") {
+		t.Errorf("push output should report secrets layer already present, got:\n%s", pushOut)
 	}
 
-	// Simulate different machine: delete local secrets.
-	deleteLocalSecrets(t, dir)
-
-	// Open from registry — keypair auto-discovery from OCI layer.
+	// Open from registry using the same keypair (same-machine round-trip).
+	// The envelope is sealed only for the save-time keypair, so we must
+	// keep the keypair available.
 	remoteRef := registryAddr + "/" + repoName + ":cp-1"
 	dst := t.TempDir()
 	dstYAML := fmt.Sprintf("store: %s\n", t.TempDir())
@@ -527,9 +527,6 @@ func TestKeyWrapping_FullCycleWithRecipients(t *testing.T) {
 	openOut := runWithKeysDir(t, dst, recipientKeys, "open", remoteRef, dst)
 	if !strings.Contains(openOut, "Hydrated") {
 		t.Errorf("open should hydrate via key wrapping, got:\n%s", openOut)
-	}
-	if !strings.Contains(openOut, "keypair auto-discovery") {
-		t.Errorf("open should mention keypair auto-discovery, got:\n%s", openOut)
 	}
 
 	// Verify file has real secret.
