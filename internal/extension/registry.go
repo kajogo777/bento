@@ -5,6 +5,7 @@ func allBuiltinExtensions() []Extension {
 	return []Extension{
 		// Agent extensions
 		ClaudeCode{},
+		ClaudeCowork{}, // Claude Desktop Cowork mode
 		Codex{},
 		OpenCode{},
 		OpenClaw{},

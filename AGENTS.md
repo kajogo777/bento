@@ -65,6 +65,7 @@ On every `save`/`diff`/`watch`, all extensions are auto-detected, their contribu
 | Extension | Detects | Patterns |
 |-----------|---------|----------|
 | `claude-code` | `.claude/` or `CLAUDE.md` | `CLAUDE.md`, `CLAUDE.local.md`, `.claude/**`, `.mcp.json`, `.worktreeinclude`, `~/.claude/projects/<path-with-dashes>/`, `~/.claude/{CLAUDE.md, settings.json, keybindings.json, rules/, skills/, commands/, agents/, agent-memory/, output-styles/}`, `~/.claude.json` |
+| `claude-cowork` | Cowork sessions referencing workspace | Session metadata JSON, session workspace dirs (`.claude/`, `audit.jsonl`, `outputs/`, `uploads/`), `cowork_settings.json`, `spaces.json`, `cowork_plugins/` under `~/Library/Application Support/Claude/local-agent-mode-sessions/<user>/<org>/` |
 | `codex` | `.codex/` | `.codex/**`, `~/.codex/sessions/` (workspace-scoped), `~/.codex/state_N.sqlite` (global), `~/.codex/memories/`, `~/.codex/{AGENTS.md, config.yaml, config.json}` |
 | `opencode` | `.opencode/` or `opencode.json` | `.opencode/**`, `opencode.json`, `~/.local/share/opencode/opencode.db` (global), `~/.local/share/opencode/storage/` (legacy), `~/.config/opencode/commands/`, `~/.opencode/commands/` |
 | `openclaw` | `SOUL.md` or `IDENTITY.md` | `SOUL.md`, `MEMORY.md`, `memory/**`, `skills/**`, `canvas/**`, `~/.openclaw/openclaw.json`, `~/.openclaw/agents/<id>/sessions/`, `~/.openclaw/workspace/skills/` |
