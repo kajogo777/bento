@@ -266,12 +266,13 @@ Works with both local refs and remote registry refs:
 					if len(sid) > 8 {
 						sid = sid[:8]
 					}
-					title := s.Title
-					if title != "" {
-						title = fmt.Sprintf("  %q", title)
-						if len(title) > 52 {
-							title = title[:49] + "...\""
-						}
+					// Sanitize defensively for older manifests, then truncate
+					// on rune boundaries before %q-quoting so the table layout
+					// stays intact regardless of title content.
+					cleanTitle := manifest.TruncateRunes(manifest.SanitizeTitle(s.Title), 50)
+					title := ""
+					if cleanTitle != "" {
+						title = fmt.Sprintf("  %q", cleanTitle)
 					}
 					fmt.Printf("  %-14s %s  %3d msgs  %s%s\n", s.Agent, sid, s.MessageCount, formatLocalTime(s.Updated), title)
 				}

@@ -401,6 +401,15 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 			}
 			continue
 		}
+		// Normalize titles at the save boundary so the manifest always
+		// stores single-line, safe-to-display strings. Agent-authored
+		// titles commonly contain embedded newlines (first user message
+		// pasted from a multi-line prompt), tabs, ANSI escapes, etc.
+		// Truncation is a display concern and is handled by the CLI
+		// commands that render titles.
+		for i := range parsed {
+			parsed[i].Title = manifest.SanitizeTitle(parsed[i].Title)
+		}
 		sessions = append(sessions, parsed...)
 	}
 

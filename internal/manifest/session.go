@@ -1,6 +1,10 @@
 package manifest
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+	"unicode"
+)
 
 // SessionMeta holds lightweight metadata about an agent session.
 // Extracted at save-time and stored in BentoConfigObj for fast listing
@@ -85,3 +89,77 @@ type TokenUsage struct {
 	CacheRead    int `json:"cacheRead,omitempty"`
 	CacheCreate  int `json:"cacheCreate,omitempty"`
 }
+
+// SanitizeTitle normalizes a free-form session title into a single line of
+// safe-to-display text. It is called at save time so that the manifest stored
+// in the OCI config object always contains single-line titles, regardless of
+// what the agent's extension extracted (most often the first user message,
+// which frequently contains newlines, tabs, ANSI escapes, etc.).
+//
+// This function does NOT truncate. Truncation is a display concern and is
+// handled separately by callers that know their column budget — see
+// TruncateRunes.
+//
+// Rules:
+//   - All whitespace runs (CR, LF, TAB, NBSP, and everything unicode.IsSpace
+//     reports) collapse to a single ASCII space.
+//   - Non-space control characters (ANSI escapes, BEL, NUL, …) are dropped.
+//   - Leading and trailing whitespace is trimmed.
+//
+// The function never panics. On invalid UTF-8, invalid byte sequences are
+// passed through byte-for-byte by range-over-string's replacement behavior.
+func SanitizeTitle(s string) string {
+	if s == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.Grow(len(s))
+	prevWasSpace := true // so leading whitespace is dropped
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t' || unicode.IsSpace(r):
+			if !prevWasSpace {
+				b.WriteByte(' ')
+				prevWasSpace = true
+			}
+		case unicode.IsControl(r), !unicode.IsPrint(r):
+			// Drop non-printable, non-space control chars entirely.
+			continue
+		default:
+			b.WriteRune(r)
+			prevWasSpace = false
+		}
+	}
+
+	return strings.TrimRight(b.String(), " ")
+}
+
+// TruncateRunes returns s unchanged if its rune count is <= maxRunes; otherwise
+// it trims s to maxRunes runes and appends a single-rune ellipsis (…). If the
+// cut falls right after a space, the trailing space is stripped first so we
+// don't produce "foo …". maxRunes <= 0 disables truncation (returns s as-is).
+//
+// Callers are expected to have already sanitized s via SanitizeTitle for
+// single-line safety — TruncateRunes is purely about column budget.
+func TruncateRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 || s == "" {
+		return s
+	}
+	count := 0
+	cutByte := -1
+	for byteIdx := range s {
+		if count == maxRunes {
+			cutByte = byteIdx
+			break
+		}
+		count++
+	}
+	if cutByte < 0 {
+		return s
+	}
+	return strings.TrimRight(s[:cutByte], " ") + "\u2026"
+}
+
+// (the byte index produced by range-over-string is always on a rune boundary,
+// so slicing at it is UTF-8 safe.)

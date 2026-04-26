@@ -92,10 +92,10 @@ func runSessionsList(cmd *cobra.Command, args []string) error {
 	fmt.Printf("%-14s %-38s %5s  %-20s  %s\n", "AGENT", "SESSION", "MSGS", "UPDATED", "TITLE")
 	for _, s := range sessions {
 		updated := formatLocalTime(s.Updated)
-		title := s.Title
-		if len(title) > 50 {
-			title = title[:47] + "..."
-		}
+		// Sanitize defensively in case the manifest was authored by an
+		// older bento version that didn't normalize titles at save time.
+		// Then truncate to the table's column budget on rune boundaries.
+		title := manifest.TruncateRunes(manifest.SanitizeTitle(s.Title), 50)
 		fmt.Printf("%-14s %-38s %5d  %-20s  %s\n", s.Agent, s.SessionID, s.MessageCount, updated, title)
 	}
 
