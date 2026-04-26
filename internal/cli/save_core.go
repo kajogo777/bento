@@ -167,7 +167,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 
 	var scrubSecrets map[string]string // placeholder → value, stored after seq is known
 	// fileOverrides maps normalized relative path → temp file with scrubbed content.
-	// Passed to PackLayerWithExternalToTemp so scrubbed content is packed
+	// Passed to PackLayerToTemp so scrubbed content is packed
 	// instead of the real files on disk.
 	fileOverrides := make(map[string]string)
 
@@ -454,6 +454,16 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		fmt.Println("Scanning workspace...")
 	}
 
+	// Progress renderer: prints a rolling "Packing: <layer> <bytes>, …" line
+	// while pack goroutines run. Disabled in quiet mode or when stdout is not
+	// a terminal (CI logs, piped output) so byte counts don't spam the log.
+	progress := newPackProgress(os.Stdout, !opts.Quiet && term.IsTerminal(int(os.Stdout.Fd())))
+	for _, ld := range layers {
+		progress.Register(ld.Name)
+	}
+	progress.Start()
+	defer progress.Stop()
+
 	type packResult struct {
 		packed     *workspace.PackResult
 		mediaType  string
@@ -475,10 +485,15 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 			wsFiles := sr.WorkspaceFiles
 			extFiles := sr.ExternalFiles
 
-			packed, err := workspace.PackLayerWithExternalToTemp(opts.Dir, wsFiles, extFiles, opts.AllowMissingExternal, fileOverrides)
+			packed, err := workspace.PackLayerToTemp(opts.Dir, wsFiles, extFiles, workspace.PackOptions{
+				AllowMissingExternal: opts.AllowMissingExternal,
+				FileOverrides:        fileOverrides,
+				Progress:             progress.Progress(ld.Name),
+			})
 			if err != nil {
 				return fmt.Errorf("packing layer %s: %w", ld.Name, err)
 			}
+			progress.MarkDone(ld.Name)
 
 			mediaType := ld.MediaType
 			if mediaType == "" {
@@ -508,6 +523,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 	}
 
 	if err := g.Wait(); err != nil {
+		progress.Stop()
 		for _, r := range results {
 			if r.packed != nil && r.packed.Path != "" {
 				_ = os.Remove(r.packed.Path)
@@ -515,6 +531,7 @@ func ExecuteSave(opts SaveOptions) (*SaveResult, error) {
 		}
 		return nil, err
 	}
+	progress.Stop()
 
 	// Check skip-if-unchanged: if all layers match the parent, skip the save.
 	if parentDigest != "" && !opts.ForceSave {

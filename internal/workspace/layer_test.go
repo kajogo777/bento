@@ -34,12 +34,9 @@ func TestPackUnpackRoundtrip(t *testing.T) {
 		fileList = append(fileList, f)
 	}
 
-	data, err := PackLayer(workDir, fileList)
-	if err != nil {
-		t.Fatalf("PackLayer returned error: %v", err)
-	}
+	data := packToBytes(t, workDir, fileList, nil)
 	if len(data) == 0 {
-		t.Fatal("PackLayer returned empty data")
+		t.Fatal("PackLayerToTemp returned empty data")
 	}
 
 	// Unpack to a new directory.
@@ -80,12 +77,9 @@ func TestUnpackLayerRejectsPathTraversal(t *testing.T) {
 func TestPackLayerEmptyFileList(t *testing.T) {
 	workDir := t.TempDir()
 
-	data, err := PackLayer(workDir, nil)
-	if err != nil {
-		t.Fatalf("PackLayer with empty file list returned error: %v", err)
-	}
+	data := packToBytes(t, workDir, nil, nil)
 	if len(data) == 0 {
-		t.Fatal("PackLayer should return non-empty data even for empty file list")
+		t.Fatal("packing an empty file list should still produce a valid (non-empty) gzip stream")
 	}
 
 	// Unpack should succeed with no files extracted.
@@ -187,6 +181,60 @@ func TestPackBytesToTempLayer_EmptyContent(t *testing.T) {
 	}
 }
 
+// TestPackLayerToTemp_Progress verifies that the Progress callback is invoked
+// with monotonically increasing uncompressed byte totals, and that the final
+// reported total is at least the total uncompressed file size.
+func TestPackLayerToTemp_Progress(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Create a file large enough to cross the progress-report threshold
+	// several times.
+	const fileSize = 20 << 20 // 20 MiB — crosses the 4 MiB threshold ~5 times
+	payload := make([]byte, fileSize)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "big.bin"), payload, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var reports []int64
+	result, err := PackLayerToTemp(workDir, []string{"big.bin"}, nil, PackOptions{
+		Progress: func(b int64) { reports = append(reports, b) },
+	})
+	if err != nil {
+		t.Fatalf("PackLayerToTemp: %v", err)
+	}
+	defer func() { _ = os.Remove(result.Path) }()
+
+	if len(reports) == 0 {
+		t.Fatal("expected at least one progress report for 20 MiB file")
+	}
+	for i := 1; i < len(reports); i++ {
+		if reports[i] < reports[i-1] {
+			t.Fatalf("progress went backwards: %d → %d", reports[i-1], reports[i])
+		}
+	}
+	final := reports[len(reports)-1]
+	if final < int64(fileSize) {
+		t.Errorf("final progress %d < file size %d", final, fileSize)
+	}
+}
+
+// TestPackLayerToTemp_NilProgress ensures a nil Progress callback is safely
+// handled (no nil-deref, normal packing).
+func TestPackLayerToTemp_NilProgress(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := PackLayerToTemp(workDir, []string{"a.txt"}, nil, PackOptions{})
+	if err != nil {
+		t.Fatalf("PackLayerToTemp with nil Progress: %v", err)
+	}
+	defer func() { _ = os.Remove(result.Path) }()
+}
+
 func TestPackLayerWithFileOverrides(t *testing.T) {
 	workDir := t.TempDir()
 
@@ -213,9 +261,11 @@ func TestPackLayerWithFileOverrides(t *testing.T) {
 		"config.json": tmpFile.Name(),
 	}
 
-	result, err := PackLayerWithExternalToTemp(workDir, []string{"config.json"}, nil, false, overrides)
+	result, err := PackLayerToTemp(workDir, []string{"config.json"}, nil, PackOptions{
+		FileOverrides: overrides,
+	})
 	if err != nil {
-		t.Fatalf("PackLayerWithExternalToTemp failed: %v", err)
+		t.Fatalf("PackLayerToTemp failed: %v", err)
 	}
 	defer func() { _ = os.Remove(result.Path) }()
 
@@ -419,10 +469,7 @@ func TestPackUnpackSymlinks(t *testing.T) {
 	}
 
 	// Pack should succeed (previously failed with "is a directory").
-	data, err := PackLayer(workDir, fileList)
-	if err != nil {
-		t.Fatalf("PackLayer with symlinks returned error: %v", err)
-	}
+	data := packToBytes(t, workDir, fileList, nil)
 
 	// Verify the tar contains symlink entries.
 	gr, err := gzip.NewReader(bytes.NewReader(data))

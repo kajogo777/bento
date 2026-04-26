@@ -14,10 +14,7 @@ func TestExtractFileContentFromLayer(t *testing.T) {
 	_ = os.WriteFile(dir+"/other.txt", []byte("other\n"), 0644)
 
 	// Pack into a layer
-	data, err := PackLayer(dir, []string{"hello.txt", "other.txt"})
-	if err != nil {
-		t.Fatalf("PackLayer: %v", err)
-	}
+	data := packToBytes(t, dir, []string{"hello.txt", "other.txt"}, nil)
 
 	// Extract specific file
 	content, err := ExtractFileContentFromLayer(bytes.NewReader(data), "hello.txt", 1<<20)

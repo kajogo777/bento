@@ -170,10 +170,7 @@ func TestPackUnpackExternal_AbsolutePath(t *testing.T) {
 		t.Errorf("display path for absolute external should start with /, got %q", wantDisplay)
 	}
 
-	data, err := PackLayerWithExternal("", nil, extFiles, false)
-	if err != nil {
-		t.Fatalf("PackLayerWithExternal: %v", err)
-	}
+	data := packToBytes(t, "", nil, extFiles)
 
 	// Verify the archive contains the correct entry name.
 	hashes, err := ListLayerFilesWithHashesFromReader(newReader(t, data))
@@ -233,10 +230,7 @@ func TestPackUnpackExternal_HomeRelativePath(t *testing.T) {
 		t.Errorf("display path = %q, want ~/ prefix", wantDisplay)
 	}
 
-	data, err := PackLayerWithExternal("", nil, extFiles, false)
-	if err != nil {
-		t.Fatalf("PackLayerWithExternal: %v", err)
-	}
+	data := packToBytes(t, "", nil, extFiles)
 
 	// Archive must contain the display path as key.
 	hashes, err := ListLayerFilesWithHashesFromReader(newReader(t, data))
@@ -281,10 +275,7 @@ func TestDiffKeyConsistency_RelativePath(t *testing.T) {
 	s := NewScanner(workDir, layers, nil, nil)
 	result, _ := s.Scan()
 
-	data, err := PackLayerWithExternal(workDir, result["project"].WorkspaceFiles, nil, false)
-	if err != nil {
-		t.Fatalf("pack: %v", err)
-	}
+	data := packToBytes(t, workDir, result["project"].WorkspaceFiles, nil)
 	hashes, err := ListLayerFilesWithHashesFromReader(newReader(t, data))
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -317,10 +308,7 @@ func TestDiffKeyConsistency_AbsolutePath(t *testing.T) {
 	wsKey := DisplayPath(ef.ArchivePath)
 
 	// Pack and read back — key used by diff for checkpoint side.
-	data, err := PackLayerWithExternal(workDir, nil, result["agent"].ExternalFiles, false)
-	if err != nil {
-		t.Fatalf("pack: %v", err)
-	}
+	data := packToBytes(t, workDir, nil, result["agent"].ExternalFiles)
 	hashes, err := ListLayerFilesWithHashesFromReader(newReader(t, data))
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -367,10 +355,7 @@ func TestDiffKeyConsistency_HomeRelativePath(t *testing.T) {
 		t.Errorf("display key %q does not start with ~/", wsKey)
 	}
 
-	data, err := PackLayerWithExternal(workDir, nil, result["agent"].ExternalFiles, false)
-	if err != nil {
-		t.Fatalf("pack: %v", err)
-	}
+	data := packToBytes(t, workDir, nil, result["agent"].ExternalFiles)
 	hashes, err := ListLayerFilesWithHashesFromReader(newReader(t, data))
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -390,10 +375,7 @@ func TestDiffKeyConsistency_HomeRelativePath(t *testing.T) {
 // (keyed by display path, as diff uses it).
 func buildExternalHashes(t *testing.T, workDir string, extFiles []ExternalFile) map[string]string {
 	t.Helper()
-	data, err := PackLayerWithExternal(workDir, nil, extFiles, false)
-	if err != nil {
-		t.Fatalf("pack: %v", err)
-	}
+	data := packToBytes(t, workDir, nil, extFiles)
 	h, err := ListLayerFilesWithHashesFromReader(newReader(t, data))
 	if err != nil {
 		t.Fatalf("list hashes: %v", err)
@@ -407,10 +389,7 @@ func TestDiffChangeTypes_Relative(t *testing.T) {
 	createFile(t, workDir, "modified.go", "old")
 	createFile(t, workDir, "removed.go", "gone")
 
-	oldData, err := PackLayerWithExternal(workDir, []string{"unchanged.go", "modified.go", "removed.go"}, nil, false)
-	if err != nil {
-		t.Fatalf("pack old: %v", err)
-	}
+	oldData := packToBytes(t, workDir, []string{"unchanged.go", "modified.go", "removed.go"}, nil)
 	oldHashes, _ := ListLayerFilesWithHashesFromReader(newReader(t, oldData))
 
 	// Update workspace: modify one, remove one, add one.
